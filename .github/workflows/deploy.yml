@@ -1,0 +1,22 @@
+name: Deploy Discord Bot
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python virtual environment & Install dependencies
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install -r requirements.txt
+
+      - name: Restart Systemd Service
+        run: sudo systemctl restart natsbot.service
