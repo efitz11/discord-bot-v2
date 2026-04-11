@@ -257,18 +257,8 @@ class Game:
             
             output = f"{away_line}\n{home_line}"
             
-            if self.last_play_desc:
-                output += f"\n\nLast Play: With **{self.last_play_pitcher}** pitching, {self.last_play_desc}\n"
-                pitch_info = []
-                if self.last_pitch_type:
-                    pitch_info.append(f"Pitch: {self.last_pitch_type}, {self.last_pitch_speed:.2f} mph")
-                if self.statcast_dist > 0 or self.statcast_speed > 0:
-                    pitch_info.append(f"Statcast: {self.statcast_dist:.2f} ft, {self.statcast_speed:.2f} mph, {self.statcast_angle:.2f} degrees")
-                if pitch_info:
-                    output += "\n" + "\n".join(pitch_info)
             if self.no_hitter or self.perfect_game:
                 alert = "P*RFECT GAME" if self.perfect_game else "NO H*TTER"
-                side = self.home.abbreviation if self.away.hits == 0 else self.away.abbreviation
                 side_name = self.home.name.upper() if self.away.hits == 0 else self.away.name.upper()
                 output += f"\n\n##############################\n{side_name} THROWING A {alert}\n"
                 if self.no_hitter_pitchers:
@@ -318,6 +308,17 @@ class Game:
             home_prob_str = f" | {home_prob}" if home_prob else ""
             
             return f"{self.away.abbreviation.ljust(3)} {self.away.record.center(7)} | {time_str.ljust(11)}{away_prob_str}\n{self.home.abbreviation.ljust(3)} {self.home.record.center(7)} | {' ' * 11}{home_prob_str}"
+
+    def format_last_play(self) -> str:
+        """Format the last play description and statcast info as markdown (outside code block)."""
+        if not self.last_play_desc or self.abstract_state != "Live":
+            return ""
+        output = f"**Last Play:** With **{self.last_play_pitcher}** pitching, {self.last_play_desc}\n\n"
+        if self.last_pitch_type:
+            output += f"**Pitch:** {self.last_pitch_type}, {self.last_pitch_speed:.2f} mph\n"
+        if self.statcast_dist > 0 or self.statcast_speed > 0:
+            output += f"**Statcast:** {self.statcast_dist:.0f} ft, {self.statcast_speed:.1f} mph, {self.statcast_angle:.0f}°\n"
+        return output.rstrip()
 
     def _format_pitcher_table(self) -> str:
         """Format no-hitter pitcher details into a table matching the old bot's display."""
