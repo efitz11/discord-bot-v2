@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=your_debian_user
-WorkingDirectory=/home/your_debian_user/actions-runner/_work/discord-bot-v2/discord-bot-v2
-ExecStart=/home/your_debian_user/actions-runner/_work/discord-bot-v2/discord-bot-v2/venv/bin/python main.py
+User=eric
+WorkingDirectory=/home/eric/actions-runner/_work/discord-bot-v2/discord-bot-v2
+ExecStart=/home/eric/actions-runner/_work/discord-bot-v2/discord-bot-v2/venv/bin/python main.py
 Restart=always
 RestartSec=5
 
