@@ -932,6 +932,108 @@ class MLBClient:
 
         return results
 
+    async def get_player_last_games(self, player_id_or_name: str, num_games: int = 10, stat_type: str = None) -> List[PlayerSeasonStats]:
+        """Fetch a player's aggregated stats over their last N games using the lastXGames stat type."""
+        session = await self.get_session()
+        player_id = None
+        player_name = player_id_or_name
+
+        if player_id_or_name.isdigit():
+            player_id = player_id_or_name
+        else:
+            players = await self.search_players(player_id_or_name)
+            if not players:
+                return []
+            player_id = str(players[0]['id'])
+            player_name = players[0]['name']
+
+        headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
+
+        person_url = (
+            f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam,team,"
+            f"stats(type=[lastXGames](team(league)),leagueListId=mlb_hist,limit={num_games},group=[hitting,pitching])"
+        )
+        async with session.get(person_url) as resp:
+            person_data = await resp.json()
+
+        if not person_data.get('people'):
+            return []
+
+        person = person_data['people'][0]
+        player_name = person.get('fullName', player_name)
+        pos = person.get('primaryPosition', {}).get('abbreviation', '')
+        team_abbrev = person.get('currentTeam', {}).get('abbreviation', 'FA')
+
+        birthdate = person.get('birthDate', '1900-01-01')[:10]
+        try:
+            b_dt = datetime.strptime(birthdate, "%Y-%m-%d")
+            now = datetime.now()
+            age = now.year - b_dt.year - ((now.month, now.day) < (b_dt.month, b_dt.day))
+            age_str = f"Age: {age}"
+        except:
+            age_str = ""
+
+        info_line = f"{pos}  |  B/T: {person.get('batSide', {}).get('code', '')}/{person.get('pitchHand', {}).get('code', '')}  |  {person.get('height', '')}  |  {person.get('weight', '')} lbs  |  {age_str}"
+        if person.get('nickName'):
+            info_line += f"  |  \"{person['nickName']}\""
+
+        if not stat_type:
+            if pos == "TWP":
+                stat_types_to_fetch = ["hitting", "pitching"]
+            else:
+                stat_types_to_fetch = ["pitching"] if pos == "P" else ["hitting"]
+        else:
+            stat_types_to_fetch = [stat_type]
+
+        all_stats = person.get('stats', [])
+        results = []
+
+        for st in stat_types_to_fetch:
+            found_stats = []
+
+            for stat_group in all_stats:
+                if stat_group.get('group', {}).get('displayName') == st and stat_group.get('type', {}).get('displayName') == 'lastXGames':
+                    splits = stat_group.get('splits', [])
+                    if not splits:
+                        continue
+
+                    # lastXGames returns per-team splits plus a total; pick the total (no team) or fallback to last
+                    agg_split = splits[-1]
+                    for sp in splits:
+                        if 'team' not in sp:
+                            agg_split = sp
+                            break
+
+                    s = agg_split.get('stat', {})
+                    s['team'] = agg_split.get('team', {}).get('abbreviation', team_abbrev)
+                    found_stats.append(s)
+
+            if found_stats:
+                results.append(PlayerSeasonStats(
+                    player_name=player_name,
+                    team_abbrev=team_abbrev,
+                    stat_type=st,
+                    years=f"Last {num_games} Games",
+                    is_career=False,
+                    info_line=info_line,
+                    stats=found_stats,
+                    headshot_url=headshot_url,
+                ))
+            elif stat_type or len(stat_types_to_fetch) == 1:
+                results.append(PlayerSeasonStats(
+                    player_name=player_name,
+                    team_abbrev=team_abbrev,
+                    stat_type=st,
+                    years=f"Last {num_games} Games",
+                    is_career=False,
+                    info_line=info_line,
+                    stats=[],
+                    info_message=f"No {st} stats found for this player's last {num_games} games.",
+                    headshot_url=headshot_url,
+                ))
+
+        return results
+
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:
         session = await self.get_session()
         # Request all the expanded data your old bot was using
