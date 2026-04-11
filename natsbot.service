@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=eric
 WorkingDirectory=/home/eric/actions-runner/_work/discord-bot-v2/discord-bot-v2
+EnvironmentFile=/home/eric/.natsbot.env
 ExecStart=/home/eric/actions-runner/_work/discord-bot-v2/discord-bot-v2/venv/bin/python main.py
 Restart=always
 RestartSec=5
