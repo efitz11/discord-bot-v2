@@ -651,6 +651,65 @@ class BoxScoreData:
                 output += f"**{label}**\n"
         return output.strip()
 
+@dataclass
+class BullpenData:
+    team_name: str
+    past_dates: List[str]
+    bullpen: List[dict]
+    starters: List[dict]
+
+    def format_table(self) -> str:
+        labels = ['name', 't', 'era'] + self.past_dates
+        repl = {'name': 'NAME', 't': 'T', 'era': 'ERA'}
+        for pd in self.past_dates:
+            repl[pd] = pd
+            
+        left_cols = {'name'}
+        widths = {}
+        all_rows = self.bullpen + self.starters
+        for label in labels:
+            widths[label] = len(repl.get(label, str(label)))
+            for row in all_rows:
+                val = str(row.get(label, ''))
+                widths[label] = max(widths[label], len(val))
+                
+        header = ''
+        for label in labels:
+            display = repl.get(label, str(label))
+            if label in left_cols:
+                header += display.ljust(widths[label]) + ' '
+            else:
+                header += display.rjust(widths[label]) + ' '
+                
+        output = [header.rstrip()]
+        
+        for row in self.bullpen:
+            line = ''
+            for label in labels:
+                val = str(row.get(label, ''))
+                if label in left_cols:
+                    line += val.ljust(widths[label]) + ' '
+                else:
+                    line += val.rjust(widths[label]) + ' '
+            output.append(line.rstrip())
+            
+        if self.starters:
+            output.append("")
+            for row in self.starters:
+                line = ''
+                for label in labels:
+                    val = str(row.get(label, ''))
+                    if label in left_cols:
+                        line += val.ljust(widths[label]) + ' '
+                    else:
+                        line += val.rjust(widths[label]) + ' '
+                output.append(line.rstrip())
+
+        if not self.bullpen and not self.starters:
+            return "No bullpen data found."
+            
+        return "\n".join(output)
+
 class MLBClient:
     BASE_URL = "https://statsapi.mlb.com/api/v1"
 
@@ -1521,6 +1580,130 @@ class MLBClient:
             abs_info=abs_info,
             game_status=game.status,
             game_abstract_state=game.abstract_state,
+        )
+
+    async def get_bullpen(self, team_query: str) -> Optional["BullpenData"]:
+        """Fetch the bullpen availability and last 4 days of pitch counts."""
+        session = await self.get_session()
+        team_id = await self.get_team_id(team_query)
+        if not team_id:
+            return None
+
+        now = datetime.utcnow() - timedelta(hours=5)
+        end_date = now.strftime("%Y-%m-%d")
+        start_date = (now - timedelta(days=5)).strftime("%Y-%m-%d")
+
+        url = f"{self.BASE_URL}/schedule?sportId=1&teamId={team_id}&startDate={start_date}&endDate={end_date}"
+        async with session.get(url) as resp:
+            data = await resp.json()
+
+        if not data.get('dates'):
+            return None
+
+        recent_games = []
+        for date_obj in data['dates']:
+            for game_data in date_obj['games']:
+                recent_games.append({
+                    'pk': game_data['gamePk'],
+                    'date': date_obj['date'],
+                })
+        
+        if not recent_games:
+            return None
+            
+        recent_games.sort(key=lambda x: x['date'], reverse=True)
+        latest_game_pk = recent_games[0]['pk']
+        latest_date_obj = datetime.strptime(recent_games[0]['date'], "%Y-%m-%d")
+        
+        # We look at the 4 days *prior* to the latest game
+        past_dates = [(latest_date_obj - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 5)]
+        past_dates.reverse() # Oldest first, so 4/7 4/8 4/9 4/10
+
+        box_url = f"{self.BASE_URL}/game/{latest_game_pk}/boxscore"
+        async with session.get(box_url) as resp:
+            box_data = await resp.json()
+
+        side = 'away'
+        if box_data.get('teams', {}).get('home', {}).get('team', {}).get('id') == team_id:
+            side = 'home'
+
+        team_info = box_data['teams'][side]
+        bullpen_ids = team_info.get('bullpen', [])
+        players_db = team_info.get('players', {})
+
+        if not bullpen_ids:
+            return None
+
+        oldboxes = {}
+        async def fetch_oldbox(pk, dt):
+            b_url = f"{self.BASE_URL}/game/{pk}/boxscore"
+            try:
+                async with session.get(b_url) as b_resp:
+                    b_data = await b_resp.json()
+                    bside = 'away'
+                    if b_data.get('teams', {}).get('home', {}).get('team', {}).get('id') == team_id:
+                        bside = 'home'
+                    
+                    if dt not in oldboxes:
+                        oldboxes[dt] = []
+                    oldboxes[dt].append(b_data['teams'][bside])
+            except Exception:
+                pass
+
+        tasks = []
+        for g in recent_games:
+            dt = g['date']
+            if dt in past_dates:
+                tasks.append(fetch_oldbox(g['pk'], dt))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+        bullpen_data = []
+        starters = []
+        short_dates = [f"{int(pd[5:7])}/{int(pd[8:10])}" for pd in past_dates]
+
+        for pid in bullpen_ids:
+            p_key = f"ID{pid}"
+            player_info = players_db.get(p_key, {})
+            name = player_info.get('person', {}).get('boxscoreName', 'Unknown')
+            t_hand = player_info.get('person', {}).get('pitchHand', {}).get('code', 'R')
+            era = player_info.get('seasonStats', {}).get('pitching', {}).get('era', '-.--')
+            
+            row = {
+                'name': name,
+                't': t_hand,
+                'era': era,
+            }
+            
+            is_starter = False
+            for i, pd in enumerate(past_dates):
+                short_pd = short_dates[i]
+                total_pitches = 0
+                
+                if pd in oldboxes:
+                    for old_team in oldboxes[pd]:
+                        old_player = old_team.get('players', {}).get(p_key, {})
+                        if old_player:
+                            p_stats = old_player.get('stats', {}).get('pitching', {})
+                            if p_stats and p_stats.get('pitchesThrown', 0) > 0:
+                                total_pitches += p_stats['pitchesThrown']
+                        
+                        old_pitchers = old_team.get('pitchers', [])
+                        if old_pitchers and old_pitchers[0] == pid:
+                            is_starter = True
+                            
+                row[short_pd] = str(total_pitches) if total_pitches > 0 else ""
+
+            if is_starter:
+                starters.append(row)
+            else:
+                bullpen_data.append(row)
+
+        return BullpenData(
+            team_name=team_info.get('team', {}).get('name', 'Unknown Team'),
+            past_dates=short_dates,
+            bullpen=bullpen_data,
+            starters=starters
         )
 
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:

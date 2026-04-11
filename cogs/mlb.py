@@ -589,6 +589,23 @@ class MLBSlash(commands.Cog):
         await interaction.followup.send(embed=embed)
 
 
+    @mlb.command(name="bullpen", description="Get a team's bullpen availability and recent pitch counts")
+    @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
+    async def bullpen(self, interaction: discord.Interaction, team: str):
+        await interaction.response.defer()
+        
+        bullpen_data = await self.bot.mlb_client.get_bullpen(team_query=team)
+        if not bullpen_data:
+            await interaction.followup.send("Could not find bullpen data for that team. Make sure they have a game around today.")
+            return
+
+        embed = discord.Embed(title=f"{bullpen_data.team_name} Bullpen Availability", color=discord.Color.blue())
+        embed.description = f"```python\n{bullpen_data.format_table()}\n```"
+        
+        await interaction.followup.send(embed=embed)
+
+
+
     @mlb.command(name="next", description="Get the upcoming games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
     @app_commands.describe(games="Number of games to show (default 3, max 10)")
