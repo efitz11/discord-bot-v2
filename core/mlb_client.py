@@ -75,6 +75,9 @@ class Game:
     game_time_str: str = ""
     game_date_str: str = ""
     scoring_plays: List["ScoringPlay"] = None
+    no_hitter: bool = False
+    perfect_game: bool = False
+    no_hitter_pitchers: List[dict] = None
 
     @classmethod
     def from_api_json(cls, data: dict):
@@ -226,6 +229,10 @@ class Game:
             except ValueError:
                 pass
 
+        flags = data.get('flags', {})
+        game.no_hitter = flags.get('noHitter', False)
+        game.perfect_game = flags.get('perfectGame', False)
+
         return game
 
     def format_score_line(self) -> str:
@@ -259,6 +266,14 @@ class Game:
                     pitch_info.append(f"Statcast: {self.statcast_dist:.2f} ft, {self.statcast_speed:.2f} mph, {self.statcast_angle:.2f} degrees")
                 if pitch_info:
                     output += "\n" + "\n".join(pitch_info)
+            if self.no_hitter or self.perfect_game:
+                alert = "P*RFECT GAME" if self.perfect_game else "NO H*TTER"
+                side = self.home.abbreviation if self.away.hits == 0 else self.away.abbreviation
+                side_name = self.home.name.upper() if self.away.hits == 0 else self.away.name.upper()
+                output += f"\n\n##############################\n{side_name} THROWING A {alert}\n"
+                if self.no_hitter_pitchers:
+                    output += self._format_pitcher_table()
+                output += "##############################"
             return output
         elif self.abstract_state == "Final":
             final_str = f"F/{self.inning}" if self.inning != 9 and self.inning > 0 else "F"
@@ -284,7 +299,14 @@ class Game:
             if sv_p:
                 spacer = " " * len(f"{home_base}  {self.home.record.center(7)}")
                 result += f"\n{spacer} | {' ' * 4} | {sv_p}"
-                
+
+            if self.no_hitter or self.perfect_game:
+                alert = "PERFECT GAME" if self.perfect_game else "NO HITTER"
+                side_name = self.home.name.upper() if self.away.hits == 0 else self.away.name.upper()
+                result += f"\n\n##############################\n{side_name} THREW A {alert}!\n"
+                if self.no_hitter_pitchers:
+                    result += self._format_pitcher_table()
+                result += "##############################"
             return result
         else:
             time_str = self.game_time_str if self.status in ["Scheduled", "Pre-Game", "Warmup"] and self.game_time_str else self.status
@@ -296,6 +318,41 @@ class Game:
             home_prob_str = f" | {home_prob}" if home_prob else ""
             
             return f"{self.away.abbreviation.ljust(3)} {self.away.record.center(7)} | {time_str.ljust(11)}{away_prob_str}\n{self.home.abbreviation.ljust(3)} {self.home.record.center(7)} | {' ' * 11}{home_prob_str}"
+
+    def _format_pitcher_table(self) -> str:
+        """Format no-hitter pitcher details into a table matching the old bot's display."""
+        if not self.no_hitter_pitchers:
+            return ""
+        labels = ['pitcher', 'ip', 'bb', 'so', 'np']
+        header_map = {'pitcher': 'PITCHER', 'ip': 'IP', 'bb': 'BB', 'so': 'SO', 'np': 'NP'}
+        left_cols = {'pitcher'}
+
+        widths = {}
+        for label in labels:
+            widths[label] = len(header_map[label])
+            for row in self.no_hitter_pitchers:
+                widths[label] = max(widths[label], len(str(row.get(label, ''))))
+
+        header = ''
+        for label in labels:
+            display = header_map[label]
+            if label in left_cols:
+                header += display.ljust(widths[label]) + ' '
+            else:
+                header += display.rjust(widths[label]) + ' '
+
+        lines = ['\n' + header.rstrip()]
+        for row in self.no_hitter_pitchers:
+            line = ''
+            for label in labels:
+                val = str(row.get(label, ''))
+                if label in left_cols:
+                    line += val.ljust(widths[label]) + ' '
+                else:
+                    line += val.rjust(widths[label]) + ' '
+            lines.append(line.rstrip())
+
+        return '\n'.join(lines) + '\n'
 
     def format_modern_score_line(self) -> str:
         """A modern Discord markdown formatter for the game score."""
@@ -600,7 +657,7 @@ class MLBClient:
             end_date = (now + timedelta(days=45)).strftime("%Y-%m-%d")
 
         session = await self.get_session()
-        url = f"{self.BASE_URL}/schedule?sportId=1&teamId={team_id}&startDate={start_date}&endDate={end_date}&hydrate=team,linescore(matchup,runners),previousPlay,person,stats,lineups,probablePitcher,decisions"
+        url = f"{self.BASE_URL}/schedule?sportId=1&teamId={team_id}&startDate={start_date}&endDate={end_date}&hydrate=team,linescore(matchup,runners),previousPlay,person,stats,lineups,probablePitcher,decisions,flags"
         
         async with session.get(url) as resp:
             data = await resp.json()
@@ -1205,7 +1262,7 @@ class MLBClient:
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:
         session = await self.get_session()
         # Request all the expanded data your old bot was using
-        url = f"{self.BASE_URL}/schedule?sportId=1&hydrate=team,linescore(matchup,runners),previousPlay,person,stats,lineups,probablePitcher,decisions"
+        url = f"{self.BASE_URL}/schedule?sportId=1&hydrate=team,linescore(matchup,runners),previousPlay,person,stats,lineups,probablePitcher,decisions,flags"
         if date:
             url += f"&date={date}"
         print(url)  # Debug: Print the URL being requested
@@ -1274,7 +1331,34 @@ class MLBClient:
                 except Exception as e:
                     print(f"Error fetching PBP for game {g.game_pk}: {e}")
 
+        # Fetch boxscore for no-hitter/perfect game flagged games to get pitcher details
+        async def fetch_nohit_pitchers(g: Game):
+            if g.no_hitter or g.perfect_game:
+                box_url = f"{self.BASE_URL}/game/{g.game_pk}/boxscore"
+                try:
+                    async with session.get(box_url) as box_resp:
+                        if box_resp.status == 200:
+                            box_data = await box_resp.json()
+                            side = "home" if g.away.hits == 0 else "away"
+                            pitcher_ids = box_data.get('teams', {}).get(side, {}).get('pitchers', [])
+                            players = box_data.get('teams', {}).get(side, {}).get('players', {})
+                            pitchers = []
+                            for pid in pitcher_ids:
+                                p_data = players.get(f'ID{pid}', {})
+                                p_stats = p_data.get('stats', {}).get('pitching', {})
+                                if p_stats:
+                                    pitchers.append({
+                                        'pitcher': p_data.get('person', {}).get('fullName', 'Unknown'),
+                                        'ip': p_stats.get('inningsPitched', '0'),
+                                        'bb': str(p_stats.get('baseOnBalls', 0)),
+                                        'so': str(p_stats.get('strikeOuts', 0)),
+                                        'np': str(p_stats.get('pitchesThrown', 0)),
+                                    })
+                            g.no_hitter_pitchers = pitchers
+                except Exception as e:
+                    print(f"Error fetching boxscore for no-hitter game {g.game_pk}: {e}")
+
         if games:
-            await asyncio.gather(*(fetch_pbp(g) for g in games))
+            await asyncio.gather(*(fetch_pbp(g) for g in games), *(fetch_nohit_pitchers(g) for g in games))
 
         return games
