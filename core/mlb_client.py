@@ -445,6 +445,57 @@ class PlayerSeasonStats:
 
         return "\n\n".join(blocks)
 
+@dataclass
+class CompareStats:
+    title: str
+    stat_type: str
+    rows: List[dict]
+    errors: List[str] = None
+
+    def format_discord_code_block(self) -> str:
+        if not self.rows:
+            return "No stats to compare."
+
+        if self.stat_type == "hitting":
+            labels_list = [
+                ['name', 'team', 'gamesPlayed', 'atBats', 'hits', 'doubles', 'triples', 'homeRuns', 'runs', 'rbi', 'baseOnBalls', 'strikeOuts'],
+                ['name', 'team', 'stolenBases', 'caughtStealing', 'avg', 'obp', 'slg', 'ops']
+            ]
+            repl = {'name':'NAME', 'team':'TM', 'gamesPlayed':'G', 'atBats':'AB', 'hits':'H', 'doubles':'2B', 'triples':'3B', 'homeRuns':'HR', 'runs':'R', 'rbi':'RBI', 'baseOnBalls':'BB', 'strikeOuts':'SO', 'stolenBases':'SB', 'caughtStealing':'CS', 'avg':'AVG', 'obp':'OBP', 'slg':'SLG', 'ops':'OPS'}
+            left_justify = {'name', 'team'}
+        else:
+            labels_list = [
+                ['name', 'team', 'wins', 'losses', 'gamesPlayed', 'gamesStarted', 'completeGames', 'shutouts', 'saveOpportunities', 'saves', 'holds'],
+                ['name', 'team', 'inningsPitched', 'hits', 'runs', 'earnedRuns', 'homeRuns', 'baseOnBalls', 'strikeOuts', 'era', 'whip'],
+                ['name', 'team', 'strikeoutsPer9Inn', 'walksPer9Inn', 'strikeoutWalkRatio', 'avg']
+            ]
+            repl = {'name':'NAME', 'team':'TM', 'wins':'W', 'losses':'L', 'gamesPlayed':'G', 'gamesStarted':'GS', 'completeGames':'CG', 'shutouts':'SHO', 'saveOpportunities':'SVO', 'saves':'SV', 'holds':'HLD',
+                    'inningsPitched':'IP', 'strikeOuts':'SO', 'baseOnBalls':'BB', 'homeRuns':'HR', 'era':'ERA', 'whip':'WHIP', 'hits':'H', 'runs':'R', 'earnedRuns':'ER',
+                    'strikeoutsPer9Inn':'K/9', 'walksPer9Inn':'BB/9', 'strikeoutWalkRatio':'K/BB', 'avg':'AVG'}
+            left_justify = {'name', 'team'}
+
+        blocks = []
+        for labels in labels_list:
+            lines = [''] * (len(self.rows) + 1)
+            for label in labels:
+                display_label = repl.get(label, label.upper())
+                width = len(display_label)
+                for row in self.rows:
+                    width = max(width, len(str(row.get(label, ""))))
+
+                if label in left_justify:
+                    lines[0] += display_label.ljust(width) + " "
+                    for i, row in enumerate(self.rows):
+                        lines[i+1] += str(row.get(label, "")).ljust(width) + " "
+                else:
+                    lines[0] += display_label.rjust(width) + " "
+                    for i, row in enumerate(self.rows):
+                        lines[i+1] += str(row.get(label, "")).rjust(width) + " "
+
+            blocks.append("\n".join([line.rstrip() for line in lines]).strip('\n'))
+
+        return "\n\n".join(blocks)
+
 class MLBClient:
     BASE_URL = "https://statsapi.mlb.com/api/v1"
 
@@ -483,6 +534,40 @@ class MLBClient:
                     return await resp.json()
             except Exception:
                 return []
+
+    async def resolve_player(self, name_or_id: str, milb: bool = False) -> Optional[dict]:
+        """Resolve a player name or ID to {'id': str, 'name': str}.
+        Prioritizes Nationals > active MLB > any result, matching the old bot's behavior."""
+        if name_or_id.isdigit():
+            return {'id': name_or_id, 'name': name_or_id}
+
+        players = await self.search_players(name_or_id, milb=milb)
+        if not players:
+            return None
+
+        if milb:
+            # For MiLB, prioritize Nats org affiliates
+            nats_affiliates = ['nationals', 'senators', 'red wings', 'blue rocks', 'frednats', 'rochester', 'harrisburg', 'wilmington', 'fredericksburg']
+            for p in players:
+                team = p.get('name_display_club', '').lower()
+                if any(aff in team for aff in nats_affiliates):
+                    return {'id': str(p['id']), 'name': p['name']}
+            return {'id': str(players[0]['id']), 'name': players[0]['name']}
+        else:
+            # For MLB: Nationals first, then active MLB, then anyone
+            nats_match = None
+            mlb_match = None
+            for p in players:
+                team = p.get('name_display_club', '')
+                if not team:
+                    continue
+                if 'nationals' in team.lower() and nats_match is None:
+                    nats_match = p
+                elif p.get('mlb') == 1 and mlb_match is None:
+                    mlb_match = p
+
+            best = nats_match or mlb_match or players[0]
+            return {'id': str(best['id']), 'name': best['name']}
 
     async def get_team_id(self, team_query: str) -> Optional[int]:
         if not team_query: return None
@@ -615,19 +700,12 @@ class MLBClient:
 
     async def get_player_game_stats(self, player_id_or_name: str, date: str = None, milb: bool = False, include_abs: bool = False) -> List[PlayerGameStats]:
         session = await self.get_session()
-        player_id = None
-        player_name = player_id_or_name
 
-        # If autocomplete was used, this will be the player's ID digits. 
-        # If the user typed it manually and hit enter, we look them up first!
-        if player_id_or_name.isdigit():
-            player_id = player_id_or_name
-        else:
-            players = await self.search_players(player_id_or_name, milb=milb)
-            if not players:
-                return []
-            player_id = str(players[0]['id'])
-            player_name = players[0]['name']
+        resolved = await self.resolve_player(player_id_or_name, milb=milb)
+        if not resolved:
+            return []
+        player_id = resolved['id']
+        player_name = resolved['name']
         
         headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
 
@@ -772,14 +850,11 @@ class MLBClient:
         player_id = None
         player_name = player_id_or_name
 
-        if player_id_or_name.isdigit():
-            player_id = player_id_or_name
-        else:
-            players = await self.search_players(player_id_or_name, milb=milb)
-            if not players:
-                return []
-            player_id = str(players[0]['id'])
-            player_name = players[0]['name']
+        resolved = await self.resolve_player(player_id_or_name, milb=milb)
+        if not resolved:
+            return []
+        player_id = resolved['id']
+        player_name = resolved['name']
 
         headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
 
@@ -935,17 +1010,12 @@ class MLBClient:
     async def get_player_last_games(self, player_id_or_name: str, num_games: int = 10, stat_type: str = None) -> List[PlayerSeasonStats]:
         """Fetch a player's aggregated stats over their last N games using the lastXGames stat type."""
         session = await self.get_session()
-        player_id = None
-        player_name = player_id_or_name
 
-        if player_id_or_name.isdigit():
-            player_id = player_id_or_name
-        else:
-            players = await self.search_players(player_id_or_name)
-            if not players:
-                return []
-            player_id = str(players[0]['id'])
-            player_name = players[0]['name']
+        resolved = await self.resolve_player(player_id_or_name)
+        if not resolved:
+            return []
+        player_id = resolved['id']
+        player_name = resolved['name']
 
         headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
 
@@ -1033,6 +1103,104 @@ class MLBClient:
                 ))
 
         return results
+
+    async def get_compare_stats(self, player_names: List[str], stat_type: str = None, year: str = None, career: bool = False) -> Optional["CompareStats"]:
+        """Fetch and compare multiple players' season or career stats side-by-side."""
+        session = await self.get_session()
+
+        # Resolve all player IDs concurrently
+        async def _resolve(name: str):
+            resolved = await self.resolve_player(name.strip())
+            return resolved['id'] if resolved else None
+
+        player_ids = await asyncio.gather(*(_resolve(n) for n in player_names))
+        player_ids = [pid for pid in player_ids if pid is not None]
+        if not player_ids:
+            return None
+
+        # Fetch all player data concurrently
+        league_list_id = "mlb_hist"
+        api_stat_types = "careerRegularSeason,career" if career else "yearByYear"
+
+        async def fetch_person(pid: str):
+            url = f"{self.BASE_URL}/people/{pid}?hydrate=currentTeam,team,stats(type=[{api_stat_types}](team(league,sport)),leagueListId={league_list_id},group=[hitting,pitching])"
+            async with session.get(url) as resp:
+                data = await resp.json()
+            return data.get('people', [None])[0]
+
+        persons = await asyncio.gather(*(fetch_person(pid) for pid in player_ids))
+        persons = [p for p in persons if p is not None]
+        if not persons:
+            return None
+
+        # Auto-detect stat type from first player's position
+        first_pos = persons[0].get('primaryPosition', {}).get('abbreviation', '')
+        if not stat_type:
+            stat_type = "pitching" if first_pos == "P" else "hitting"
+
+        now = datetime.now()
+        target_year = str(year) if year else str(now.year)
+
+        rows = []
+        errors = []
+        for person in persons:
+            full_name = person.get('fullName', 'Unknown')
+            last_name = person.get('lastName', full_name)[:5]
+            team_abbrev = person.get('currentTeam', {}).get('abbreviation', 'FA')
+            all_stats = person.get('stats', [])
+
+            player_stat = None
+            for stat_group in all_stats:
+                group_name = stat_group.get('group', {}).get('displayName')
+                type_name = stat_group.get('type', {}).get('displayName')
+
+                if group_name != stat_type:
+                    continue
+
+                if career and type_name in ['careerRegularSeason', 'career']:
+                    splits = stat_group.get('splits', [])
+                    if splits:
+                        # Prefer the total (no team) split
+                        for sp in splits:
+                            if 'team' not in sp:
+                                player_stat = sp.get('stat', {})
+                                break
+                        if player_stat is None:
+                            player_stat = splits[-1].get('stat', {})
+                    break
+                elif not career and type_name == 'yearByYear':
+                    for split in stat_group.get('splits', []):
+                        if split.get('season') == target_year:
+                            player_stat = split.get('stat', {})
+                    # If no stats for the target year, try the most recent
+                    if player_stat is None:
+                        splits = stat_group.get('splits', [])
+                        if splits:
+                            player_stat = splits[-1].get('stat', {})
+
+            if player_stat:
+                player_stat['name'] = last_name
+                player_stat['team'] = team_abbrev
+                rows.append(player_stat)
+            else:
+                errors.append(f"No {stat_type} stats found for {full_name}.")
+
+        if not rows:
+            return None
+
+        display_names = [p.get('fullName', '?') for p in persons]
+        title = " vs ".join(display_names)
+        if career:
+            title += " (Career)"
+        else:
+            title += f" ({target_year})"
+
+        return CompareStats(
+            title=title,
+            stat_type=stat_type,
+            rows=rows,
+            errors=errors,
+        )
 
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:
         session = await self.get_session()

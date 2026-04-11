@@ -251,6 +251,40 @@ class MLBSlash(commands.Cog):
     async def last_games_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
+    @mlb.command(name="compare", description="Compare multiple players' stats side-by-side")
+    @app_commands.describe(players="Player names separated by / (e.g. soto/abrams/wood)")
+    @app_commands.describe(year="A specific year (e.g. 2023). Leave blank for current.")
+    @app_commands.describe(stat_type="Hitting or Pitching. Leave blank to auto-detect.")
+    @app_commands.describe(career="Compare career totals instead of a single season")
+    @app_commands.choices(stat_type=[
+        app_commands.Choice(name="Hitting", value="hitting"),
+        app_commands.Choice(name="Pitching", value="pitching")
+    ])
+    async def compare(self, interaction: discord.Interaction, players: str, year: str = None, stat_type: app_commands.Choice[str] = None, career: bool = False):
+        await interaction.response.defer()
+
+        player_names = [p.strip() for p in players.split('/') if p.strip()]
+        if len(player_names) < 2:
+            await interaction.followup.send("Please provide at least 2 players separated by `/` (e.g. `soto/abrams`).")
+            return
+
+        s_type = stat_type.value if stat_type else None
+        result = await self.bot.mlb_client.get_compare_stats(player_names, stat_type=s_type, year=year, career=career)
+
+        if not result:
+            await interaction.followup.send("Could not find stats for those players.")
+            return
+
+        embed = discord.Embed(color=discord.Color.blue())
+        embed.title = result.title
+
+        desc = f"```python\n{result.format_discord_code_block()}\n```"
+        if result.errors:
+            desc += "\n" + "\n".join(f"⚠️ {e}" for e in result.errors)
+
+        embed.description = desc
+        await interaction.followup.send(embed=embed)
+
     @milb.command(name="stats", description="Get a minor league player's season or career stats")
     @app_commands.describe(player="The minor league player to search for")
     @app_commands.describe(year="A specific year (e.g. 2023). Leave blank for most recent.")
