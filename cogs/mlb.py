@@ -437,11 +437,33 @@ class MLBSlash(commands.Cog):
             
         await interaction.followup.send(embeds=embeds)
 
+    DIVISION_TEAMS = {
+        'nle': {'WSH', 'NYM', 'ATL', 'PHI', 'MIA'},
+        'nlc': {'CHC', 'MIL', 'STL', 'CIN', 'PIT'},
+        'nlw': {'LAD', 'SD', 'SF', 'ARI', 'COL'},
+        'ale': {'NYY', 'BOS', 'BAL', 'TB', 'TOR'},
+        'alc': {'CLE', 'MIN', 'DET', 'CWS', 'KC'},
+        'alw': {'HOU', 'SEA', 'TEX', 'LAA', 'OAK'},
+    }
+    DIVISION_TEAMS['nl'] = DIVISION_TEAMS['nle'] | DIVISION_TEAMS['nlc'] | DIVISION_TEAMS['nlw']
+    DIVISION_TEAMS['al'] = DIVISION_TEAMS['ale'] | DIVISION_TEAMS['alc'] | DIVISION_TEAMS['alw']
+
     @mlb.command(name="score", description="Get today's MLB games or a specific team's game")
     @app_commands.describe(team="The team abbreviation or name to search for (e.g. wsh, nationals, lad). Leave blank for all.")
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
     @app_commands.describe(live="Only show games currently in progress")
-    async def score(self, interaction: discord.Interaction, team: str = None, date: str = None, live: bool = False):
+    @app_commands.describe(division="Filter by division or league")
+    @app_commands.choices(division=[
+        app_commands.Choice(name="NL East", value="nle"),
+        app_commands.Choice(name="NL Central", value="nlc"),
+        app_commands.Choice(name="NL West", value="nlw"),
+        app_commands.Choice(name="AL East", value="ale"),
+        app_commands.Choice(name="AL Central", value="alc"),
+        app_commands.Choice(name="AL West", value="alw"),
+        app_commands.Choice(name="National League", value="nl"),
+        app_commands.Choice(name="American League", value="al"),
+    ])
+    async def score(self, interaction: discord.Interaction, team: str = None, date: str = None, live: bool = False, division: app_commands.Choice[str] = None):
         # Defer the response immediately. The MLB API might take longer than 3 seconds to respond.
         await interaction.response.defer()
 
@@ -454,9 +476,15 @@ class MLBSlash(commands.Cog):
         if live:
             games = [g for g in games if g.abstract_state == "Live"]
 
+        if division:
+            div_teams = self.DIVISION_TEAMS.get(division.value, set())
+            games = [g for g in games if g.away.abbreviation in div_teams or g.home.abbreviation in div_teams]
+
         if games:
             embeds = []
             title = f"MLB Scores ({parsed_date})" if parsed_date else "MLB Scores"
+            if division:
+                title += f" - {division.name}"
             if live:
                 title += " - Live"
             current_embed = discord.Embed(title=title, color=discord.Color.blue())
@@ -483,7 +511,14 @@ class MLBSlash(commands.Cog):
             embeds.append(current_embed)
             await interaction.followup.send(embeds=embeds)
         else:
-            msg = "No live games right now." if live else "No games found."
+            if division and live:
+                msg = f"No live {division.name} games right now."
+            elif division:
+                msg = f"No {division.name} games found."
+            elif live:
+                msg = "No live games right now."
+            else:
+                msg = "No games found."
             await interaction.followup.send(msg)
 
     @mlb.command(name="next", description="Get the upcoming games for a team")
