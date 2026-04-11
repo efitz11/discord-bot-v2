@@ -440,7 +440,8 @@ class MLBSlash(commands.Cog):
     @mlb.command(name="score", description="Get today's MLB games or a specific team's game")
     @app_commands.describe(team="The team abbreviation or name to search for (e.g. wsh, nationals, lad). Leave blank for all.")
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
-    async def score(self, interaction: discord.Interaction, team: str = None, date: str = None):
+    @app_commands.describe(live="Only show games currently in progress")
+    async def score(self, interaction: discord.Interaction, team: str = None, date: str = None, live: bool = False):
         # Defer the response immediately. The MLB API might take longer than 3 seconds to respond.
         await interaction.response.defer()
 
@@ -450,9 +451,14 @@ class MLBSlash(commands.Cog):
         # Fetch the games using our new async API client
         games = await self.bot.mlb_client.get_todays_games(team_query=team, date=parsed_date)
 
+        if live:
+            games = [g for g in games if g.abstract_state == "Live"]
+
         if games:
             embeds = []
             title = f"MLB Scores ({parsed_date})" if parsed_date else "MLB Scores"
+            if live:
+                title += " - Live"
             current_embed = discord.Embed(title=title, color=discord.Color.blue())
             
             for game in games:
@@ -477,7 +483,8 @@ class MLBSlash(commands.Cog):
             embeds.append(current_embed)
             await interaction.followup.send(embeds=embeds)
         else:
-            await interaction.followup.send("No games found.")
+            msg = "No live games right now." if live else "No games found."
+            await interaction.followup.send(msg)
 
     @mlb.command(name="next", description="Get the upcoming games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
