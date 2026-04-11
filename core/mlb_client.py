@@ -554,6 +554,103 @@ class CompareStats:
 
         return "\n\n".join(blocks)
 
+@dataclass
+class BoxScoreData:
+    title: str
+    team_name: str
+    team_abbrev: str
+    batting_rows: List[dict]
+    pitching_rows: List[dict]
+    pitching_notes: List[str] = None
+    team_notes: List[dict] = None
+    game_info: List[dict] = None
+    abs_info: List[dict] = None
+    game_status: str = ""
+    game_abstract_state: str = ""
+
+    def _format_table(self, labels: List[str], rows: List[dict], repl: dict, left_cols: set) -> str:
+        """Generic fixed-width table formatter."""
+        if not rows:
+            return "No data available."
+
+        widths = {}
+        for label in labels:
+            widths[label] = len(repl.get(label, label.upper()))
+            for row in rows:
+                widths[label] = max(widths[label], len(str(row.get(label, ''))))
+
+        header = ''
+        for label in labels:
+            display = repl.get(label, label.upper())
+            if label in left_cols:
+                header += display.ljust(widths[label]) + ' '
+            else:
+                header += display.rjust(widths[label]) + ' '
+
+        lines = [header.rstrip()]
+        for row in rows:
+            line = ''
+            for label in labels:
+                val = str(row.get(label, ''))
+                if label in left_cols:
+                    line += val.ljust(widths[label]) + ' '
+                else:
+                    line += val.rjust(widths[label]) + ' '
+            lines.append(line.rstrip())
+
+        return '\n'.join(lines)
+
+    def format_batting(self) -> str:
+        labels = ['name', 'pos', 'ab', 'r', 'h', 'rbi', 'bb', 'so', 'lob', 'avg', 'obp', 'slg']
+        repl = {'name': '', 'pos': '', 'ab': 'AB', 'r': 'R', 'h': 'H', 'rbi': 'RBI', 'bb': 'BB', 'so': 'SO', 'lob': 'LOB', 'avg': 'AVG', 'obp': 'OBP', 'slg': 'SLG'}
+        left_cols = {'name', 'pos'}
+        return self._format_table(labels, self.batting_rows, repl, left_cols)
+
+    def format_pitching(self) -> str:
+        labels = ['name', 'ip', 'h', 'r', 'er', 'bb', 'so', 'hr', 'era', 'p', 's', 'dec']
+        repl = {'name': '', 'ip': 'IP', 'h': 'H', 'r': 'R', 'er': 'ER', 'bb': 'BB', 'so': 'SO', 'hr': 'HR', 'era': 'ERA', 'p': 'P', 's': 'S', 'dec': 'DEC'}
+        left_cols = {'name', 'dec'}
+        return self._format_table(labels, self.pitching_rows, repl, left_cols)
+
+    def format_notes(self) -> str:
+        """Format team batting/fielding/baserunning notes."""
+        if not self.team_notes:
+            return ""
+        output = ""
+        for section in self.team_notes:
+            output += f"\n**{section.get('title', '')}:**\n"
+            for field in section.get('fieldList', []):
+                output += f"**{field.get('label', '')}:** {field.get('value', '')}\n"
+        return output.strip()
+
+    def format_game_info(self) -> str:
+        """Format game info (venue, umpires, weather, etc.)."""
+        if not self.game_info:
+            return ""
+        output = "\n**Game Info:**\n"
+        for info in self.game_info:
+            label = info.get('label', '')
+            value = info.get('value', '')
+            if value:
+                output += f"**{label}:** {value}\n"
+            else:
+                output += f"**{label}**\n"
+        return output.strip()
+
+    def format_abs_info(self) -> str:
+        """Format ABS Challenges info."""
+        if not self.abs_info:
+            return ""
+        output = ""
+        for info in self.abs_info:
+            label = info.get('label', '')
+            value = info.get('value', '')
+            if value:
+                output += f"**{label}:** {value}\n"
+            else:
+                output += f"**{label}**\n"
+        return output.strip()
+
 class MLBClient:
     BASE_URL = "https://statsapi.mlb.com/api/v1"
 
@@ -1258,6 +1355,172 @@ class MLBClient:
             stat_type=stat_type,
             rows=rows,
             errors=errors,
+        )
+
+    async def get_box_score(self, team_query: str, date: str = None) -> Optional["BoxScoreData"]:
+        """Fetch the box score for a team's game on a given date."""
+        session = await self.get_session()
+
+        # First find the game
+        games = await self.get_todays_games(team_query=team_query, date=date)
+        if not games:
+            return None
+
+        game = games[0]
+        # Determine which side the team is on
+        query = team_query.lower()
+        aliases = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals", "dbacks": "diamondbacks", "barves": "braves"}
+        query = aliases.get(query, query)
+        if query in game.home.abbreviation.lower() or query in game.home.name.lower():
+            side = "home"
+        else:
+            side = "away"
+
+        # Fetch boxscore
+        box_url = f"{self.BASE_URL}/game/{game.game_pk}/boxscore"
+        async with session.get(box_url) as resp:
+            box_data = await resp.json()
+
+        team_data = box_data.get('teams', {}).get(side, {})
+        players = box_data.get('teams', {}).get(side, {}).get('players', {})
+        team_name = team_data.get('team', {}).get('name', '')
+        team_abbrev = team_data.get('team', {}).get('abbreviation', '')
+
+        # Parse batters
+        batting_order = team_data.get('battingOrder', [])
+        all_batters = team_data.get('batters', [])
+        batting_rows = []
+        order_pos = 0  # tracks position in the lineup (1-9)
+
+        for batter_id in all_batters:
+            p_data = players.get(f'ID{batter_id}', {})
+            b_stats = p_data.get('stats', {}).get('batting', {})
+            if not b_stats and 'atBats' not in b_stats:
+                continue
+            season_stats = p_data.get('seasonStats', {}).get('batting', {})
+
+            name = p_data.get('person', {}).get('boxscoreName', 'Unknown')
+            # Build position string from allPositions
+            positions = p_data.get('allPositions', [])
+            pos = "-".join(p.get('abbreviation', '') for p in positions) if positions else p_data.get('position', {}).get('abbreviation', '')
+
+            is_starter = batter_id in batting_order
+            if is_starter:
+                order_pos += 1
+                display_name = name
+            else:
+                display_name = " " + name  # indent substitutes
+
+            batting_rows.append({
+                'name': display_name,
+                'pos': pos,
+                'ab': str(b_stats.get('atBats', 0)),
+                'r': str(b_stats.get('runs', 0)),
+                'h': str(b_stats.get('hits', 0)),
+                'rbi': str(b_stats.get('rbi', 0)),
+                'bb': str(b_stats.get('baseOnBalls', 0)),
+                'so': str(b_stats.get('strikeOuts', 0)),
+                'lob': str(b_stats.get('leftOnBase', 0)),
+                'avg': season_stats.get('avg', '.000'),
+                'obp': season_stats.get('obp', '.000'),
+                'slg': season_stats.get('slg', '.000'),
+                'is_starter': is_starter,
+            })
+            # Stop after 9 starters have been listed (remaining are subs already handled)
+            if is_starter and order_pos >= 9:
+                # Include remaining non-starters that follow
+                remaining_idx = all_batters.index(batter_id) + 1
+                for rem_id in all_batters[remaining_idx:]:
+                    if rem_id in batting_order:
+                        break  # shouldn't happen, but safety
+                    rem_data = players.get(f'ID{rem_id}', {})
+                    rem_stats = rem_data.get('stats', {}).get('batting', {})
+                    if not rem_stats:
+                        continue
+                    rem_season = rem_data.get('seasonStats', {}).get('batting', {})
+                    rem_name = rem_data.get('person', {}).get('boxscoreName', 'Unknown')
+                    rem_positions = rem_data.get('allPositions', [])
+                    rem_pos = "-".join(p.get('abbreviation', '') for p in rem_positions) if rem_positions else ''
+                    batting_rows.append({
+                        'name': " " + rem_name,
+                        'pos': rem_pos,
+                        'ab': str(rem_stats.get('atBats', 0)),
+                        'r': str(rem_stats.get('runs', 0)),
+                        'h': str(rem_stats.get('hits', 0)),
+                        'rbi': str(rem_stats.get('rbi', 0)),
+                        'bb': str(rem_stats.get('baseOnBalls', 0)),
+                        'so': str(rem_stats.get('strikeOuts', 0)),
+                        'lob': str(rem_stats.get('leftOnBase', 0)),
+                        'avg': rem_season.get('avg', '.000'),
+                        'obp': rem_season.get('obp', '.000'),
+                        'slg': rem_season.get('slg', '.000'),
+                        'is_starter': False,
+                    })
+                break
+
+        # Parse pitchers
+        pitching_rows = []
+        for pitcher_id in team_data.get('pitchers', []):
+            p_data = players.get(f'ID{pitcher_id}', {})
+            p_stats = p_data.get('stats', {}).get('pitching', {})
+            if not p_stats:
+                continue
+            season_stats = p_data.get('seasonStats', {}).get('pitching', {})
+            name = p_data.get('person', {}).get('boxscoreName', 'Unknown')
+            dec = p_stats.get('note', '')
+
+            pitching_rows.append({
+                'name': name,
+                'ip': str(p_stats.get('inningsPitched', '0')),
+                'h': str(p_stats.get('hits', 0)),
+                'r': str(p_stats.get('runs', 0)),
+                'er': str(p_stats.get('earnedRuns', 0)),
+                'bb': str(p_stats.get('baseOnBalls', 0)),
+                'so': str(p_stats.get('strikeOuts', 0)),
+                'hr': str(p_stats.get('homeRuns', 0)),
+                'era': season_stats.get('era', '-.--'),
+                'p': str(p_stats.get('pitchesThrown', 0)),
+                's': str(p_stats.get('strikes', 0)),
+                'dec': dec,
+            })
+
+        # Parse pitching notes
+        pitching_notes = box_data.get('pitchingNotes', [])
+
+        # Parse team notes (batting/fielding/baserunning)
+        team_notes = team_data.get('info', [])
+
+        # Parse game info (weather, umpires, etc.)
+        game_info_raw = box_data.get('info', [])
+        game_info = []
+        abs_info = []
+        for info in game_info_raw:
+            label = info.get('label', '').upper()
+            if 'ABS' in label or 'CHALLENGE' in label:
+                abs_info.append(info)
+            else:
+                game_info.append(info)
+
+        # Build title
+        opp_side = "away" if side == "home" else "home"
+        opp_abbrev = box_data.get('teams', {}).get(opp_side, {}).get('team', {}).get('abbreviation', '??')
+        if side == "home":
+            title = f"{opp_abbrev} @ {team_abbrev}"
+        else:
+            title = f"{team_abbrev} @ {box_data.get('teams', {}).get('home', {}).get('team', {}).get('abbreviation', '??')}"
+
+        return BoxScoreData(
+            title=title,
+            team_name=team_name,
+            team_abbrev=team_abbrev,
+            batting_rows=batting_rows,
+            pitching_rows=pitching_rows,
+            pitching_notes=pitching_notes,
+            team_notes=team_notes,
+            game_info=game_info,
+            abs_info=abs_info,
+            game_status=game.status,
+            game_abstract_state=game.abstract_state,
         )
 
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:

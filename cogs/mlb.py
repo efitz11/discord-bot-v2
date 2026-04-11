@@ -524,6 +524,71 @@ class MLBSlash(commands.Cog):
                 msg = "No games found."
             await interaction.followup.send(msg)
 
+    @mlb.command(name="box", description="Get the box score for a team's game today")
+    @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
+    @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday). Leave blank for today.")
+    @app_commands.describe(part="Which part of the box score to show")
+    @app_commands.choices(part=[
+        app_commands.Choice(name="All", value="all"),
+        app_commands.Choice(name="Batting", value="batting"),
+        app_commands.Choice(name="Pitching", value="pitching"),
+        app_commands.Choice(name="Notes and Info", value="notes_info"),
+        app_commands.Choice(name="ABS Challenges", value="abs")
+    ])
+    async def box_score(self, interaction: discord.Interaction, team: str, date: str = None, part: app_commands.Choice[str] = None):
+        await interaction.response.defer()
+
+        parsed_date = parse_date(date)
+        box = await self.bot.mlb_client.get_box_score(team_query=team, date=parsed_date)
+
+        if not box:
+            await interaction.followup.send("Could not find a game for that team/date.")
+            return
+
+        embed = discord.Embed(title=box.title, color=discord.Color.blue())
+        show_part = part.value if part else "batting"
+
+        desc = ""
+        if show_part in ["all", "batting"]:
+            desc += f"**{box.team_name} Batting**\n```python\n{box.format_batting()}\n```\n"
+
+        if show_part in ["all", "pitching"]:
+            desc += f"**{box.team_name} Pitching**\n```python\n{box.format_pitching()}\n```\n"
+
+        if show_part == "abs":
+            desc += box.format_abs_info()
+            if not desc:
+                desc = "No ABS Challenges found for this game."
+
+        if show_part == "notes_info":
+            desc += "No batting/pitching stats requested."
+
+        if len(desc) > 4096:
+            # If all are somehow too long for one embed description, split by block
+            # This is extremely rare, but just in case
+            embed.description = desc[:4093] + "..."
+        else:
+            embed.description = desc.strip()
+
+        # Add notes and info as fields if they exist and fit, only if "all" or "notes_info" is selected
+        if show_part in ["all", "notes_info"]:
+            notes = ""
+            if box.team_notes:
+                notes += box.format_notes() + "\n"
+            if box.game_info:
+                notes += box.format_game_info()
+            
+            notes = notes.strip()
+            if notes and len(embed) + len(notes) < 6000:
+                if len(notes) > 1024:
+                    notes = notes[:1021] + "..."
+                embed.add_field(name="Notes & Info", value=notes, inline=False)
+            elif not notes and show_part == "notes_info":
+                embed.description = "No Notes or Game Info available."
+
+        await interaction.followup.send(embed=embed)
+
+
     @mlb.command(name="next", description="Get the upcoming games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
     @app_commands.describe(games="Number of games to show (default 3, max 10)")
