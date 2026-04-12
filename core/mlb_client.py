@@ -627,6 +627,7 @@ class PlayerSeasonStats:
     info_message: str = ""
     headshot_url: str = ""
     parent_org_abbrev: str = ""
+    level_abbrev: str = ""
 
     def format_discord_code_block(self) -> str:
         if self.info_message:
@@ -1398,6 +1399,7 @@ class MLBClient:
 
         for st in stat_types_to_fetch:
             found_stats = []
+            level_abbrev = ""
             current_target_year = target_year
 
             for stat_group in all_stats:
@@ -1429,7 +1431,8 @@ class MLBClient:
                                 s = split.get('stat', {})
                                 s['season'] = season
                                 if milb:
-                                    s['team'] = split.get('sport', {}).get('abbreviation', 'MiLB')
+                                    s['team'] = split.get('team', {}).get('abbreviation') or split.get('sport', {}).get('abbreviation', 'MiLB')
+                                    level_abbrev = split.get('sport', {}).get('abbreviation', '')
                                 else:
                                     s['team'] = split.get('team', {}).get('abbreviation', 'MLB')
                                 found_stats.append(s)
@@ -1448,7 +1451,8 @@ class MLBClient:
                     info_line=info_line,
                     stats=found_stats,
                     headshot_url=headshot_url,
-                    parent_org_abbrev=parent_org_abbrev
+                    parent_org_abbrev=parent_org_abbrev,
+                    level_abbrev=level_abbrev
                 ))
             elif stat_type or len(stat_types_to_fetch) == 1:
                 results.append(PlayerSeasonStats(
@@ -1461,7 +1465,8 @@ class MLBClient:
                     stats=[],
                     info_message=f"No {st} stats found for this player.",
                     headshot_url=headshot_url,
-                    parent_org_abbrev=parent_org_abbrev
+                    parent_org_abbrev=parent_org_abbrev,
+                    level_abbrev=level_abbrev
                 ))
 
         return results

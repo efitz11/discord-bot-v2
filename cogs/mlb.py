@@ -587,10 +587,13 @@ class MLBSlash(commands.Cog):
         if not first_stats.is_career and first_stats.stats:
             teams = [s.get('team') for s in first_stats.stats if s.get('team') and s.get('team') not in ['MLB', 'MiLB']]
             if teams:
-                display_team = "/".join(dict.fromkeys(teams)) # Removes duplicates while preserving order
+                display_team = "/".join(dict.fromkeys(teams))
                 
         if first_stats.parent_org_abbrev:
-            display_team = f"{display_team}-{first_stats.parent_org_abbrev}"
+            level_str = f" {first_stats.level_abbrev}" if first_stats.level_abbrev else ""
+            display_team = f"{display_team} - {first_stats.parent_org_abbrev}{level_str}"
+        elif first_stats.level_abbrev:
+            display_team = f"{display_team} ({first_stats.level_abbrev})"
 
         years_str = f" ({first_stats.years})" if first_stats.years and first_stats.years != "Career" else ""
         embed.title = f"{'Career' if first_stats.is_career else first_stats.years} Stats for {first_stats.player_name}{years_str if first_stats.is_career else ' (' + display_team + ')'}"
