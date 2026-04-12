@@ -211,15 +211,14 @@ class MLBSlash(commands.Cog):
 
         await interaction.followup.send(embeds=embeds)
 
-
-
     @mlb.command(name="percentiles", description="Get a player's Baseball Savant percentiles")
     @app_commands.describe(player="Player name to search for", year="Target year (e.g., 2024)")
-    @app_commands.autocomplete(player=player_autocomplete)
     async def percentiles(self, interaction: discord.Interaction, player: str, year: str = None):
+
         await interaction.response.defer()
         try:
             stats_raw = await self.bot.mlb_client.get_player_percentiles(player, year=year)
+
             if not stats_raw:
                 await interaction.followup.send(f"No savant data found for **{player}**.")
                 return
@@ -232,6 +231,12 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send(embed=embed)
         except Exception as e:
             await interaction.followup.send(f"Error fetching percentiles: {e}")
+
+    @percentiles.autocomplete('player')
+    async def percentiles_player_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
+
 
     @mlb.command(name="highlights", description="Get video highlights for a player or team")
     @app_commands.describe(query="Player or team name", date="Date (YYYY-MM-DD)")
@@ -311,8 +316,8 @@ class MLBSlash(commands.Cog):
 
     @mlb.command(name="matchup", description="Get career stats for a team's roster against a pitcher")
     @app_commands.describe(team="Team abbreviation or name", pitcher="Pitcher name")
-    @app_commands.autocomplete(pitcher=player_autocomplete)
     async def matchup(self, interaction: discord.Interaction, team: str, pitcher: str):
+
         await interaction.response.defer()
         try:
             data = await self.bot.mlb_client.get_matchup(team, pitcher)
@@ -368,10 +373,19 @@ class MLBSlash(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Error fetching matchup: {e}")
 
+    @matchup.autocomplete('pitcher')
+    async def matchup_pitcher_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
+    @matchup.autocomplete('team')
+    async def matchup_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
+
     @mlb.command(name="arsenal", description="Get a pitcher's pitch arsenal breakdown from Savant")
     @app_commands.describe(player="Pitcher name", year="Year (e.g. 2025)")
-    @app_commands.autocomplete(player=player_autocomplete)
     async def arsenal(self, interaction: discord.Interaction, player: str, year: str = None):
+
         await interaction.response.defer()
         try:
             data = await self.bot.mlb_client.get_pitch_arsenal(player, year=year)
@@ -387,6 +401,11 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send(embed=embed)
         except Exception as e:
             await interaction.followup.send(f"Error fetching arsenal: {e}")
+
+    @arsenal.autocomplete('player')
+    async def arsenal_player_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
 
     @mlb.command(name="savant_leaders", description="Get Statcast leaderboards from Baseball Savant")
     @app_commands.describe(
@@ -445,8 +464,8 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="Hitting", value="hitting"),
         app_commands.Choice(name="Pitching", value="pitching")
     ])
-    @app_commands.autocomplete(player=player_autocomplete)
     async def stats(self, interaction: discord.Interaction, player: str, year: str = None, stat_type: app_commands.Choice[str] = None, career: bool = False):
+
         await interaction.response.defer()
 
         s_type = stat_type.value if stat_type else None
@@ -499,6 +518,7 @@ class MLBSlash(commands.Cog):
     async def stats_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
+
     @mlb.command(name="last", description="Get a player's stats over their last N games")
     @app_commands.describe(player="The player to search for")
     @app_commands.describe(games="Number of recent games to aggregate (default 10, max 50)")
@@ -508,6 +528,7 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="Pitching", value="pitching")
     ])
     async def last_games(self, interaction: discord.Interaction, player: str, games: int = 10, stat_type: app_commands.Choice[str] = None):
+
         await interaction.response.defer()
         num_games = max(1, min(50, games))
         s_type = stat_type.value if stat_type else None
@@ -541,6 +562,7 @@ class MLBSlash(commands.Cog):
     @last_games.autocomplete('player')
     async def last_games_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
+
 
     @mlb.command(name="compare", description="Compare multiple players' stats side-by-side")
     @app_commands.describe(players="Player names separated by / (e.g. soto/abrams/wood)")
@@ -765,7 +787,7 @@ class MLBSlash(commands.Cog):
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
     @app_commands.describe(live="Only show games currently in progress")
     @app_commands.describe(division="Filter by division or league")
-    @app_commands.autocomplete(team=team_autocomplete)
+
     @app_commands.choices(division=[
         app_commands.Choice(name="NL East", value="nle"),
         app_commands.Choice(name="NL Central", value="nlc"),
@@ -843,6 +865,11 @@ class MLBSlash(commands.Cog):
             else:
                 msg = "No games found."
             await interaction.followup.send(msg)
+
+    @score.autocomplete('team')
+    async def score_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
 
     @mlb.command(name="box", description="Get the box score for a team's game today")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
@@ -972,8 +999,8 @@ class MLBSlash(commands.Cog):
 
     @mlb.command(name="leaders", description="View MLB player stat leaderboards")
     @app_commands.describe(stat="The statistic to view leaders for")
-    @app_commands.autocomplete(stat=stat_autocomplete)
     @app_commands.describe(league="The league to filter by (AL/NL/All)")
+
     @app_commands.choices(league=[
         app_commands.Choice(name="All", value="all"),
         app_commands.Choice(name="AL", value="al"),
@@ -1072,10 +1099,20 @@ class MLBSlash(commands.Cog):
         embed = discord.Embed(title=title_str, description=desc, color=discord.Color.blue())
         await interaction.followup.send(embed=embed)
 
+
+    @leaders.autocomplete('stat')
+    async def leaders_stat_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.stat_autocomplete(interaction, current)
+
+    @leaders.autocomplete('team')
+    async def leaders_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
+
     @mlb.command(name="team_leaders", description="View MLB team stat leaderboards")
     @app_commands.describe(stat="The statistic to view leaders for")
-    @app_commands.autocomplete(stat=stat_autocomplete)
     @app_commands.describe(league="The league to filter by (AL/NL/All)")
+
     @app_commands.choices(league=[
         app_commands.Choice(name="All", value="all"),
         app_commands.Choice(name="AL", value="103"),
@@ -1142,6 +1179,11 @@ class MLBSlash(commands.Cog):
 
         embed = discord.Embed(title=title_str, description=desc, color=discord.Color.blue())
         await interaction.followup.send(embed=embed)
+
+    @team_leaders.autocomplete('stat')
+    async def team_leaders_stat_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.stat_autocomplete(interaction, current)
+
 
 
     @mlb.command(name="next", description="Get the upcoming games for a team")
