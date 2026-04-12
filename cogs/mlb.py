@@ -96,9 +96,10 @@ class MLBSlash(commands.Cog):
 
 
     @line.autocomplete('player')
-    async def player_autocomplete(self, interaction: discord.Interaction, current: str):
-        if len(current) < 3:
+    async def player_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        if not current or len(current) < 2:
             return []
+
         players = await self.bot.mlb_client.search_players(current)
         
         nats_choices = []
@@ -210,17 +211,7 @@ class MLBSlash(commands.Cog):
 
         await interaction.followup.send(embeds=embeds)
 
-    async def player_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        if not current or len(current) < 2:
-            return []
-        players = await self.bot.mlb_client.search_players(current)
-        choices = []
-        for p in players[:25]:
-            name = p.get('name', 'Unknown')
-            team = p.get('name_display_club', '')
-            label = f"{name} ({team})" if team else name
-            choices.append(app_commands.Choice(name=label[:100], value=str(p['id'])))
-        return choices
+
 
     @mlb.command(name="percentiles", description="Get a player's Baseball Savant percentiles")
     @app_commands.describe(player="Player name to search for", year="Target year (e.g., 2024)")
