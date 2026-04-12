@@ -575,7 +575,7 @@ class SavantLeaderboard:
         for i, r in enumerate(self.rows, 1):
             rank = str(i).rjust(2)
             name = r['name'][:14].ljust(14)
-            team = r['team'].rjust(4)
+            team = r.get('team', '').rjust(4)
             val = str(r['value']).rjust(6)
             lines.append(f"{rank}  {name} {team} {val}")
         return "\n".join(lines)
