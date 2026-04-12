@@ -830,20 +830,52 @@ class BullpenData:
     bullpen: List[dict]
     starters: List[dict]
 
+    def _get_status(self, row: dict) -> str:
+        """Determines freshness status based on recent usage."""
+        # past_dates are ordered oldest to newest: e.g. [4/8, 4/9, 4/10, 4/11]
+        counts = []
+        for pd in self.past_dates:
+            val = row.get(pd, '')
+            counts.append(int(val) if val and val.isdigit() else 0)
+            
+        # Analyze last 3 days (indices -1, -2, -3)
+        yest = counts[-1]
+        day_before = counts[-2]
+        day_3 = counts[-3]
+        total_3 = yest + day_before + day_3
+        
+        # 3 in a row
+        if yest > 0 and day_before > 0 and day_3 > 0:
+            return "💀"
+        # Back to back OR Heavy yesterday
+        if (yest > 0 and day_before > 0) or yest > 28:
+            return "🔴"
+        # Moderate usage
+        if yest > 15 or total_3 > 40:
+            return "🟡"
+        # Fresh
+        return "🟢"
+
     def format_table(self) -> str:
-        labels = ['name', 't', 'era'] + self.past_dates
-        repl = {'name': 'NAME', 't': 'T', 'era': 'ERA'}
+        labels = ['status', 'name', 't', 'era'] + self.past_dates
+        repl = {'status': 'S', 'name': 'NAME', 't': 'T', 'era': 'ERA'}
         for pd in self.past_dates:
             repl[pd] = pd
             
+        all_rows = self.bullpen + self.starters
+        # Attach status to data
+        for r in all_rows:
+            r['status'] = self._get_status(r)
+
         left_cols = {'name'}
         widths = {}
-        all_rows = self.bullpen + self.starters
         for label in labels:
             widths[label] = len(repl.get(label, str(label)))
             for row in all_rows:
                 val = str(row.get(label, ''))
-                widths[label] = max(widths[label], len(val))
+                # Handle emoji width manually - they are usually wide
+                actual_len = 2 if label == 'status' else len(val)
+                widths[label] = max(widths[label], actual_len)
                 
         header = ''
         for label in labels:
@@ -855,27 +887,32 @@ class BullpenData:
                 
         output = [header.rstrip()]
         
-        for row in self.bullpen:
+        # Helper to format a row
+        def format_row(r):
             line = ''
             for label in labels:
-                val = str(row.get(label, ''))
+                val = str(r.get(label, ''))
                 if label in left_cols:
                     line += val.ljust(widths[label]) + ' '
+                elif label == 'status':
+                    # Status is special due to emoji
+                    line += val + ' ' 
                 else:
                     line += val.rjust(widths[label]) + ' '
-            output.append(line.rstrip())
+            return line.rstrip()
+
+        output.append("-" * len(header))
+        for row in self.bullpen:
+            output.append(format_row(row))
             
         if self.starters:
-            output.append("")
+            output.append("\nPROBABLE / RECENT STARTERS")
+            output.append("-" * len(header))
             for row in self.starters:
-                line = ''
-                for label in labels:
-                    val = str(row.get(label, ''))
-                    if label in left_cols:
-                        line += val.ljust(widths[label]) + ' '
-                    else:
-                        line += val.rjust(widths[label]) + ' '
-                output.append(line.rstrip())
+                output.append(format_row(row))
+
+        legend = "\nLegend: 🟢 Fresh | 🟡 Used | 🔴 Tired | 💀 Gassed"
+        output.append(legend)
 
         if not self.bullpen and not self.starters:
             return "No bullpen data found."

@@ -836,7 +836,7 @@ class MLBSlash(commands.Cog):
             return
 
         embed = discord.Embed(title=f"{bullpen_data.team_name} Bullpen Availability", color=discord.Color.blue())
-        embed.description = f"```python\n{bullpen_data.format_table()}\n```"
+        embed.description = f"```\n{bullpen_data.format_table()}\n```"
         
         await interaction.followup.send(embed=embed)
 
