@@ -703,7 +703,8 @@ class MLBSlash(commands.Cog):
             group_val = parts[0]
             stat_val = parts[1]
         else:
-            group_val = stat_group.value if stat_group else "hitting"
+            default_pitching_stats = {"earnedRunAverage", "wins", "saves", "walksAndHitsPerInningPitched", "strikeoutsPer9Inn", "hitsPer9Inn", "walksPer9Inn", "homeRunsPer9", "strikeoutWalkRatio", "inningsPitched", "shutouts", "completeGames", "blownSaves", "holds", "balk", "wildPitch", "hitBatsman", "saveOpportunities", "runsScoredPer9"}
+            group_val = stat_group.value if stat_group else ("pitching" if stat in default_pitching_stats else "hitting")
             stat_val = stat
         
         leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id)
@@ -775,7 +776,8 @@ class MLBSlash(commands.Cog):
             group_val = parts[0]
             stat_val = parts[1]
         else:
-            group_val = "hitting"
+            default_pitching_stats = {"earnedRunAverage", "wins", "saves", "walksAndHitsPerInningPitched", "strikeoutsPer9Inn", "hitsPer9Inn", "walksPer9Inn", "homeRunsPer9", "strikeoutWalkRatio", "inningsPitched", "shutouts", "completeGames", "blownSaves", "holds", "balk", "wildPitch", "hitBatsman", "saveOpportunities", "runsScoredPer9"}
+            group_val = "pitching" if stat in default_pitching_stats else "hitting"
             stat_val = stat
             
         leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val)
