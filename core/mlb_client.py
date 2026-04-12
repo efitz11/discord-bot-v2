@@ -1108,7 +1108,7 @@ class MLBClient:
         except:
             age_str = ""
 
-        info_line = f"{pos}  |  B/T: {person.get('batSide', {}).get('code', '')}/{person.get('pitchHand', {}).get('code', '')}  |  {person.get('height', '')}  |  {person.get('weight', '')} lbs  |  {age_str}"
+        info_line = f"{pos}  |  {person.get('batSide', {}).get('code', '')}/{person.get('pitchHand', {}).get('code', '')}  |  {person.get('height', '')}  |  {person.get('weight', '')} lbs  |  {age_str}"
         
         if person.get('nickName'):
             info_line += f"  |  \"{person['nickName']}\""
