@@ -148,7 +148,7 @@ class MLBSlash(commands.Cog):
 
     @mlb.command(name="stats", description="Get a player's season or career stats")
     @app_commands.describe(player="The player to search for")
-    @app_commands.describe(year="A specific year (e.g. 2023). Leave blank for most recent.")
+    @app_commands.describe(year="A specific year or range (e.g. 2020-2023). Blank for most recent.")
     @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
     @app_commands.describe(career="Get career totals instead of a single season")
     @app_commands.choices(stat_type=[

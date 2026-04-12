@@ -483,8 +483,10 @@ class PlayerSeasonStats:
                 if 'season' in labels: labels.remove('season')
                 if 'team' in labels: labels.remove('team')
         elif len(self.stats) > 1:
+            all_seasons_same = all(s.get('season') == self.stats[0].get('season') for s in self.stats)
             for labels in labels_list:
-                if 'season' in labels: labels.remove('season')
+                if all_seasons_same and 'season' in labels: 
+                    labels.remove('season')
 
         blocks = []
         for labels in labels_list:
@@ -1139,7 +1141,18 @@ class MLBClient:
             stat_types_to_fetch = [stat_type]
 
         api_stat_types = ["careerRegularSeason", "career"] if career else ["yearByYear"]
+        
         target_year = str(year) if year else None
+        target_years = []
+        if year:
+            year_clean = str(year).strip(' "\'')
+            parts = year_clean.split('-')
+            if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                start = int(parts[0].strip())
+                end = int(parts[1].strip())
+                target_years = [str(y) for y in range(start, end + 1)]
+            else:
+                target_years = [year_clean]
         
         all_stats = person.get('stats', [])
         results = []
@@ -1192,12 +1205,12 @@ class MLBClient:
                         current_target_year = career_years_str or "Career"
                         break
                     else:
-                        if not current_target_year:
-                            current_target_year = splits[-1].get('season', str(datetime.now().year))
+                        if not target_years:
+                            target_years = [splits[-1].get('season', str(datetime.now().year))]
                             
                         for split in splits:
                             season = split.get('season', '')
-                            if season == current_target_year:
+                            if season in target_years:
                                 s = split.get('stat', {})
                                 s['season'] = season
                                 if milb:
@@ -1206,12 +1219,16 @@ class MLBClient:
                                     s['team'] = split.get('team', {}).get('abbreviation', 'MLB')
                                 found_stats.append(s)
 
+            display_years = current_target_year
+            if not career and target_years:
+                display_years = f"{target_years[0]}-{target_years[-1]}" if len(target_years) > 1 else target_years[0]
+
             if found_stats:
                 results.append(PlayerSeasonStats(
                     player_name=player_name,
                     team_abbrev=team_abbrev,
                     stat_type=st,
-                    years=current_target_year or str(year),
+                    years=display_years,
                     is_career=career,
                     info_line=info_line,
                     stats=found_stats,
@@ -1223,7 +1240,7 @@ class MLBClient:
                     player_name=player_name,
                     team_abbrev=team_abbrev,
                     stat_type=st,
-                    years=current_target_year or str(year),
+                    years=display_years,
                     is_career=career,
                     info_line=info_line,
                     stats=[],
