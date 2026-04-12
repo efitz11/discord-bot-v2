@@ -1932,7 +1932,6 @@ class MLBClient:
         for r in all_rows[:count]:
             rows.append({
                 'name': r.get('last_name, first_name', '?'),
-                'team': '',  # CSV doesn't always include team
                 'value': r.get(stat, '0'),
             })
         
