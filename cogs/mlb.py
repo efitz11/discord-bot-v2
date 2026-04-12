@@ -107,6 +107,48 @@ class MLBSlash(commands.Cog):
     async def abs_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
+    async def team_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        teams = [
+            ("All Teams", "all"),
+            ("Washington Nationals", "wsh"),
+            ("Atlanta Braves", "atl"),
+            ("Miami Marlins", "mia"),
+            ("New York Mets", "nym"),
+            ("Philadelphia Phillies", "phi"),
+            ("Chicago Cubs", "chc"),
+            ("Cincinnati Reds", "cin"),
+            ("Milwaukee Brewers", "mil"),
+            ("Pittsburgh Pirates", "pit"),
+            ("St. Louis Cardinals", "stl"),
+            ("Arizona Diamondbacks", "ari"),
+            ("Colorado Rockies", "col"),
+            ("Los Angeles Dodgers", "lad"),
+            ("San Diego Padres", "sd"),
+            ("San Francisco Giants", "sf"),
+            ("Baltimore Orioles", "bal"),
+            ("Boston Red Sox", "bos"),
+            ("New York Yankees", "nyy"),
+            ("Tampa Bay Rays", "tb"),
+            ("Toronto Blue Jays", "tor"),
+            ("Chicago White Sox", "cws"),
+            ("Cleveland Guardians", "cle"),
+            ("Detroit Tigers", "det"),
+            ("Kansas City Royals", "kc"),
+            ("Minnesota Twins", "min"),
+            ("Houston Astros", "hou"),
+            ("Los Angeles Angels", "laa"),
+            ("Athletics", "ath"),
+            ("Seattle Mariners", "sea"),
+            ("Texas Rangers", "tex"),
+        ]
+        
+        choices = []
+        q = current.lower()
+        for name, value in teams:
+            if q in name.lower() or q in value.lower():
+                choices.append(app_commands.Choice(name=name, value=value))
+        return choices[:25]
+
     @mlb.command(name="sp", description="Get all scoring plays for a team in a given game.")
     @app_commands.describe(team="The team to get scoring plays for (e.g. wsh, nationals)")
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
@@ -679,16 +721,17 @@ class MLBSlash(commands.Cog):
         'nlw': {'LAD', 'SD', 'SF', 'ARI', 'COL'},
         'ale': {'NYY', 'BOS', 'BAL', 'TB', 'TOR'},
         'alc': {'CLE', 'MIN', 'DET', 'CWS', 'KC'},
-        'alw': {'HOU', 'SEA', 'TEX', 'LAA', 'OAK'},
+        'alw': {'HOU', 'SEA', 'TEX', 'LAA', 'ATH'},
     }
     DIVISION_TEAMS['nl'] = DIVISION_TEAMS['nle'] | DIVISION_TEAMS['nlc'] | DIVISION_TEAMS['nlw']
     DIVISION_TEAMS['al'] = DIVISION_TEAMS['ale'] | DIVISION_TEAMS['alc'] | DIVISION_TEAMS['alw']
 
     @mlb.command(name="score", description="Get today's MLB games or a specific team's game")
-    @app_commands.describe(team="The team abbreviation or name to search for (e.g. wsh, nationals, lad). Leave blank for all.")
+    @app_commands.describe(team="The team abbreviation or name (e.g. wsh, lad). Default is Nats. Use 'all' for everyone.")
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
     @app_commands.describe(live="Only show games currently in progress")
     @app_commands.describe(division="Filter by division or league")
+    @app_commands.autocomplete(team=team_autocomplete)
     @app_commands.choices(division=[
         app_commands.Choice(name="NL East", value="nle"),
         app_commands.Choice(name="NL Central", value="nlc"),
@@ -703,11 +746,18 @@ class MLBSlash(commands.Cog):
         # Defer the response immediately. The MLB API might take longer than 3 seconds to respond.
         await interaction.response.defer()
 
+        # Handle defaults: None -> WSH, "all" -> None
+        team_query = team
+        if team_query is None:
+            team_query = "wsh"
+        elif team_query.lower() == "all":
+            team_query = None
+
         # Parse the date if provided
         parsed_date = parse_date(date)
 
         # Fetch the games using our new async API client
-        games = await self.bot.mlb_client.get_todays_games(team_query=team, date=parsed_date)
+        games = await self.bot.mlb_client.get_todays_games(team_query=team_query, date=parsed_date)
 
         if live:
             games = [g for g in games if g.abstract_state == "Live"]
