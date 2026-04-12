@@ -146,6 +146,43 @@ class MLBSlash(commands.Cog):
 
         await interaction.followup.send(embeds=embeds)
 
+    @mlb.command(name="percentiles", description="Get a player's Baseball Savant percentiles")
+    @app_commands.describe(player="Player name to search for", year="Target year (e.g., 2024)")
+    async def percentiles(self, interaction: discord.Interaction, player: str, year: str = None):
+        await interaction.response.defer()
+        try:
+            stats_raw = await self.bot.mlb_client.get_player_percentiles(player, year=year)
+            if not stats_raw:
+                await interaction.followup.send(f"No savant data found for **{player}**.")
+                return
+
+            embed = discord.Embed(
+                title=f"{stats_raw.year} {stats_raw.stat_type} Percentiles — {stats_raw.player_name}",
+                color=discord.Color.red()
+            )
+            stats_raw.apply_to_embed(embed)
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching percentiles: {e}")
+
+    @mlb.command(name="highlights", description="Get video highlights for a player or team")
+    @app_commands.describe(query="Player or team name", is_team="True if querying a Team", date="Date (YYYY-MM-DD)")
+    async def highlights(self, interaction: discord.Interaction, query: str, is_team: bool = False, date: str = None):
+        await interaction.response.defer()
+        try:
+            hl_list = await self.bot.mlb_client.get_highlights(query, is_team=is_team, date=date)
+            if not hl_list:
+                await interaction.followup.send(f"No highlights found for **{query}**.")
+                return
+
+            response = f"### Highlights for {query.title()}\n\n"
+            for hi in hl_list[:3]:
+                response += f"**{hi.title}** ({hi.duration})\n{hi.url}\n\n"
+                
+            await interaction.followup.send(response)
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching highlights: {e}")
+
     @mlb.command(name="stats", description="Get a player's season or career stats")
     @app_commands.describe(player="The player to search for")
     @app_commands.describe(year="A specific year or range (e.g. 2020-2023). Blank for most recent.")

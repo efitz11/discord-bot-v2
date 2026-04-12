@@ -446,6 +446,74 @@ class PlayerGameStats:
         return output.strip()
 
 @dataclass
+class PlayerPercentiles:
+    player_name: str
+    year: str
+    stat_type: str
+    percentiles: List[dict]
+    def apply_to_embed(self, embed) -> None:
+        if not self.percentiles:
+            embed.description = "No percentiles found for this year."
+            return
+
+        def get_circle(val):
+            if val >= 90: return "🔥"
+            if val >= 70: return "🔴"
+            if val >= 30: return "⚪"
+            if val >= 10: return "🔵"
+            return "🧊"
+            
+        categories = {
+            "Batted Ball Profile": ["exit_velocity_avg", "barrel_batted_rate", "hard_hit_percent", "xwoba", "xba", "xslg", "sweet_spot_percent"],
+            "Plate Discipline": ["k_percent", "bb_percent", "whiff_percent", "chase_percent"],
+            "Athleticism & Value": ["sprint_speed", "oaa", "framing", "runner_run_value", "fielding_run_value", "batting_run_value"],
+            "Run Values (Pitcher)": ["pitch_run_value_fastball", "pitch_run_value_breaking", "pitch_run_value_offspeed"],
+            "Quality of Contact (Pitcher)": ["barrel_batted_rate", "exit_velocity_avg", "launch_angle_avg", "groundballs_percent", "xwoba", "xera", "k_percent", "bb_percent", "whiff_percent", "chase_percent"]
+        }
+        
+        display_dict = {
+            "Batted Ball Profile": [],
+            "Plate Discipline": [],
+            "Athleticism & Value": [],
+            "Run Values (Pitcher)": [],
+            "Quality of Contact (Pitcher)": [],
+            "Other Metrics": []
+        }
+        
+        for row in self.percentiles:
+            stat_name = row['stat']
+            display_name = stat_name.replace("_", " ").title().replace("Xwoba", "xwOBA").replace("Xba", "xBA").replace("Xera", "xERA").replace("Oaa", "OAA").replace("Bb", "BB").replace("K ", "K ")
+            val = row['value']
+            raw = row['raw']
+            
+            circle = get_circle(val)
+            line = f"{circle} **{display_name}:** {val} *({raw})*"
+            
+            assigned = False
+            for cat, targets in categories.items():
+                if stat_name in targets:
+                    if self.stat_type == "Pitcher" and cat in ["Batted Ball Profile", "Plate Discipline"]: continue
+                    if self.stat_type == "Batter" and cat in ["Quality of Contact (Pitcher)", "Run Values (Pitcher)"]: continue
+                    display_dict[cat].append(line)
+                    assigned = True
+                    break
+                    
+            if not assigned:
+                display_dict["Other Metrics"].append(line)
+                
+        for cat_name, lines in display_dict.items():
+            if lines:
+                embed.add_field(name=cat_name, value="\n".join(lines), inline=False)
+
+@dataclass
+class HighlightItem:
+    title: str
+    description: str
+    url: str
+    duration: str
+    date: str
+
+@dataclass
 class PlayerSeasonStats:
     player_name: str
     team_abbrev: str
@@ -1445,6 +1513,182 @@ class MLBClient:
             rows=rows,
             errors=errors,
         )
+
+    async def get_player_percentiles(self, player_id_or_name: str, year: str = None) -> Optional[PlayerPercentiles]:
+        session = await self.get_session()
+        resolved = await self.resolve_player(player_id_or_name)
+        if not resolved:
+            return None
+            
+        pid = resolved['id']
+        url = f"https://baseballsavant.mlb.com/savant-player/{pid}"
+        
+        async with session.get(url) as resp:
+            text = await resp.text()
+            
+        import re, json
+        match = re.search(r"statcast:\s*(\[.*?\]),\s*\n", text, re.DOTALL)
+        if not match:
+            return None
+            
+        try:
+            statcast_data = json.loads(match.group(1))
+        except:
+            return None
+            
+        if not statcast_data: return None
+        
+        target_year = str(year) if year else str(datetime.utcnow().year)
+        
+        year_stats = None
+        for sm_dict in statcast_data:
+            if sm_dict.get('aggregate') == "0" and str(sm_dict.get('year')) == target_year:
+                year_stats = sm_dict
+                break
+                
+        if not year_stats:
+            for sm_dict in reversed(statcast_data):
+                if sm_dict.get('aggregate') == "0":
+                    year_stats = sm_dict
+                    break
+        
+        if not year_stats: return None
+        
+        stat_type = year_stats.get('grouping_cat', 'Unknown')
+        
+        if stat_type == "Pitcher":
+            stats_list = [
+                "percent_rank_exit_velocity_avg", "percent_rank_launch_angle_avg",
+                "percent_rank_barrel_batted_rate", "percent_rank_xwoba", "percent_rank_xera",
+                "percent_rank_k_percent", "percent_rank_bb_percent", "percent_rank_chase_percent",
+                "percent_rank_groundballs_percent", "percent_rank_whiff_percent",
+                "percent_rank_pitch_run_value_fastball", "percent_rank_pitch_run_value_breaking",
+                "percent_rank_pitch_run_value_offspeed"
+            ]
+        elif stat_type == "Batter":
+            stats_list = [
+                "percent_rank_exit_velocity_avg", "percent_rank_barrel_batted_rate",
+                "percent_rank_xwoba", "percent_rank_xba", "percent_rank_k_percent",
+                "percent_rank_bb_percent", "percent_rank_chase_percent", "percent_rank_whiff_percent",
+                "percent_rank_sprint_speed", "percent_speed_order", "percent_rank_oaa",
+                "percent_rank_fielding_run_value", "percent_rank_swing_take_run_value",
+                "percent_rank_runner_run_value", "percent_rank_framing"
+            ]
+        else:
+            stats_list = []
+            
+        raw_replace = {'oaa':'outs_above_average', 'chase_percent':'oz_swing_percent'}
+        table_rows = []
+        for prop in stats_list:
+            if prop in year_stats and year_stats[prop] is not None:
+                d = {}
+                d['stat'] = prop.replace("percent_rank_", "").replace("percent_speed_order","sprint_speed").replace("swing_take","batting")
+                try:
+                    d['value'] = int(year_stats[prop])
+                except ValueError:
+                    d['value'] = 0
+                    
+                raw_prop = prop.replace('percent_rank_', '')
+                raw_prop = raw_replace.get(raw_prop, raw_prop)
+                d['raw'] = year_stats.get(raw_prop, "")
+                
+                if isinstance(d['raw'], float):
+                    fmt = f"{d['raw']:.3f}"
+                    if fmt.startswith("0.") and "avg" not in prop and "woba" not in prop and "ba" not in prop:
+                        d['raw'] = fmt
+                    elif fmt.startswith("0."):
+                        d['raw'] = fmt.lstrip("0")
+                    else:
+                        d['raw'] = f"{d['raw']:.1f}"
+                        
+                table_rows.append(d)
+                
+        table_rows = sorted(table_rows, key=lambda i: i["value"], reverse=True)
+        return PlayerPercentiles(resolved['name'], str(year_stats.get('year')), stat_type, table_rows)
+
+    async def get_highlights(self, query: str, is_team: bool = False, date: str = None) -> List[HighlightItem]:
+        session = await self.get_session()
+        game_pk = None
+        target_name = None
+
+        if is_team:
+            games = await self.get_todays_games(team_query=query, date=date)
+            if not games: return []
+            game_pk = games[0].game_pk
+        else:
+            resolved = await self.resolve_player(query)
+            if not resolved: return []
+            pid = resolved['id']
+            target_name = resolved['name']
+            
+            log_url = f"{self.BASE_URL}/people/{pid}/stats?stats=gameLog&group=hitting,pitching"
+            
+            async with session.get(log_url) as resp:
+                data = await resp.json()
+                
+            splits = []
+            for sg in data.get('stats', []):
+                splits.extend(sg.get('splits', []))
+                
+            if not splits: return []
+            
+            # Sort chronologically just in case, though API usually is
+            splits = sorted(splits, key=lambda s: s.get('date', ''))
+            
+            if date:
+                # Find the exact game for the given date if requested
+                match = None
+                for sp in splits:
+                    if sp.get('date') == date: match = sp
+                if not match: return []
+                game_pk = match.get('game', {}).get('gamePk')
+            else:
+                last_game = splits[-1]
+                game_pk = last_game.get('game', {}).get('gamePk')
+
+        if not game_pk: return []
+
+        content_url = f"{self.BASE_URL}/game/{game_pk}/content"
+        async with session.get(content_url) as resp:
+            content_data = await resp.json()
+
+        items = content_data.get('highlights', {}).get('highlights', {}).get('items', [])
+        results = []
+        for item in items:
+            blurb = item.get('blurb', '')
+            desc = item.get('description', '')
+            title = item.get('title', '')
+            
+            if not is_team and target_name:
+                last_name = target_name.split()[-1]
+                if last_name.lower() not in blurb.lower() and last_name.lower() not in desc.lower() and last_name.lower() not in title.lower():
+                    continue
+
+            url = ""
+            # Favor direct high quality mp4
+            for pb in item.get('playbacks', []):
+                if pb.get('name') == 'mp4Avc':
+                    url = pb.get('url')
+                    break
+            
+            if not url:
+                for pb in item.get('playbacks', []):
+                    if '.mp4' in pb.get('url', ''):
+                        url = pb.get('url')
+                        break
+                        
+            if not url: continue
+            
+            hi = HighlightItem(
+                title=title or blurb,
+                description=desc,
+                url=url,
+                duration=item.get('duration', ''),
+                date=item.get('date', '')
+            )
+            results.append(hi)
+
+        return results[:5]
 
     async def get_box_score(self, team_query: str, date: str = None) -> Optional["BoxScoreData"]:
         """Fetch the box score for a team's game on a given date."""
