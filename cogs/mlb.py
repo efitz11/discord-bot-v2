@@ -211,6 +211,49 @@ class MLBSlash(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Error fetching highlights: {e}")
 
+    @mlb.command(name="standings", description="Get MLB standings by league, division, or wildcard")
+    @app_commands.describe(query="Standings to display. Defaults to NL East.")
+    @app_commands.choices(query=[
+        app_commands.Choice(name="NL East", value="NL East"),
+        app_commands.Choice(name="NL Central", value="NL Central"),
+        app_commands.Choice(name="NL West", value="NL West"),
+        app_commands.Choice(name="AL East", value="AL East"),
+        app_commands.Choice(name="AL Central", value="AL Central"),
+        app_commands.Choice(name="AL West", value="AL West"),
+        app_commands.Choice(name="NL Wildcard", value="NL Wildcard"),
+        app_commands.Choice(name="AL Wildcard", value="AL Wildcard"),
+        app_commands.Choice(name="All Wildcards", value="Wildcard"),
+        app_commands.Choice(name="National League (All)", value="NL"),
+        app_commands.Choice(name="American League (All)", value="AL"),
+        app_commands.Choice(name="All MLB Divisions", value="All"),
+    ])
+    async def standings(self, interaction: discord.Interaction, query: app_commands.Choice[str]):
+        await interaction.response.defer()
+        try:
+            target = query.value if query else "NL East"
+            if target == "All":
+                target = None
+
+            groups = await self.bot.mlb_client.get_standings(target)
+            if not groups:
+                await interaction.followup.send("Could not find matching standings.")
+                return
+            
+            embeds = []
+            is_wc = "wc" in (target or "").lower() or "wild" in (target or "").lower()
+            
+            for grp in groups:
+                embed = discord.Embed(
+                    title=grp.title,
+                    color=discord.Color.green(),
+                    description=f"```\n{grp.format_discord_code_block(is_wc=is_wc)}\n```"
+                )
+                embeds.append(embed)
+            
+            await interaction.followup.send(embeds=embeds[:10])
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching standings: {e}")
+
     @mlb.command(name="stats", description="Get a player's season or career stats")
     @app_commands.describe(player="The player to search for")
     @app_commands.describe(year="A specific year or range (e.g. 2020-2023). Blank for most recent.")

@@ -506,6 +506,35 @@ class PlayerPercentiles:
                 embed.add_field(name=cat_name, value="\n".join(lines), inline=False)
 
 @dataclass
+class StandingsGroup:
+    title: str
+    records: List[dict]
+
+    def format_discord_code_block(self, is_wc: bool = False) -> str:
+        lines = []
+        if is_wc:
+            lines.append("TEAM         W   L   PCT   WCGB  STRK  DIFF")
+        else:
+            lines.append("TEAM         W   L   PCT     GB  STRK  DIFF")
+            
+        for r in self.records:
+            team = r['team'][:11].ljust(11)
+            w = str(r['w']).rjust(3)
+            l = str(r['l']).rjust(3)
+            pct = r['pct'].lstrip("0").rjust(5)
+            
+            gb_val = r['wc_gb'] if is_wc else r['gb']
+            gb = "-" if str(gb_val) == "-" else str(gb_val)
+            gb = gb.rjust(5)
+            
+            strk = r['streak'].rjust(4)
+            diff = str(r['diff']).rjust(5)
+            
+            lines.append(f"{team} {w} {l} {pct} {gb}  {strk} {diff}")
+            
+        return "\n".join(lines)
+
+@dataclass
 class HighlightItem:
     title: str
     description: str
@@ -1695,6 +1724,61 @@ class MLBClient:
             results.append(hi)
 
         return results
+
+    async def get_standings(self, query: str = None) -> List[StandingsGroup]:
+        session = await self.get_session()
+        
+        q = query.lower() if query else ""
+        is_wc = "wc" in q or "wildcard" in q or "wild" in q
+        
+        league_id = "103,104"
+        if "al" in q and "nl" not in q: league_id = "103"
+        elif "nl" in q and "al" not in q: league_id = "104"
+            
+        url = f"{self.BASE_URL}/standings?leagueId={league_id}&hydrate=division,league"
+        if is_wc:
+            url += "&standingsTypes=wildCard"
+            
+        async with session.get(url) as resp:
+            data = await resp.json()
+            
+        groups = []
+        for grp in data.get('records', []):
+            if is_wc:
+                group_name = grp.get('league', {}).get('name', 'Wildcard') + " Wildcard"
+            else:
+                group_name = grp.get('division', {}).get('name', 'Division')
+                
+            if not is_wc and query:
+                if "east" in q and "east" not in group_name.lower(): continue
+                if "central" in q and "central" not in group_name.lower(): continue
+                if "west" in q and "west" not in group_name.lower(): continue
+            
+            records = []
+            for tr in grp.get('teamRecords', []):
+                streak_obj = tr.get('streak')
+                if isinstance(streak_obj, dict): streak = streak_obj.get('streakCode', '-')
+                else: streak = str(streak_obj) if streak_obj else '-'
+                if not streak: streak = "-"
+                
+                pct = tr.get('leagueRecord', {}).get('pct', '.000')
+                if pct == ".000" and tr.get('wins', 0) == 0 and tr.get('losses', 0) == 0:
+                    pct = ".---"
+                
+                records.append({
+                    'team': tr.get('team', {}).get('name', 'Unknown'),
+                    'w': tr.get('wins', 0),
+                    'l': tr.get('losses', 0),
+                    'pct': pct,
+                    'gb': tr.get('divisionGamesBack', '-'),
+                    'wc_gb': tr.get('wildCardGamesBack', '-'),
+                    'streak': streak,
+                    'diff': tr.get('runDifferential', 0)
+                })
+            
+            groups.append(StandingsGroup(title=group_name, records=records))
+            
+        return groups
 
     async def get_box_score(self, team_query: str, date: str = None) -> Optional["BoxScoreData"]:
         """Fetch the box score for a team's game on a given date."""
