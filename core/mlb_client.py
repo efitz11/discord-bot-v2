@@ -395,6 +395,18 @@ class Game:
             return f"{away_line} @ {home_line} | **{self.status}**"
 
 @dataclass
+class Pitch:
+    number: int
+    count: str
+    description: str
+    speed: float
+    type: str
+    px: float
+    pz: float
+    sz_top: float
+    sz_bot: float
+
+@dataclass
 class AtBat:
     inning: str
     pitcher_name: str
@@ -405,6 +417,8 @@ class AtBat:
     video_blurb: str
     is_scoring: bool
     is_complete: bool
+    pitches: List[Pitch] = None
+
 
 @dataclass
 class ScoringPlay:
@@ -1262,8 +1276,33 @@ class MLBClient:
                         is_scoring = play.get('about', {}).get('isScoringPlay', False)
 
                         pitch_str, statcast_str, vid_url, vid_blurb = "", "", "", ""
+                        pitches_list = []
 
                         if play.get('playEvents'):
+                            for pe in play['playEvents']:
+                                if pe.get('isPitch'):
+                                    pd = pe.get('pitchData', {})
+                                    coord = pd.get('coordinates', {})
+                                    details = pe.get('details', {})
+                                    cnt = pe.get('count', {})
+                                    
+                                    p_num = pe.get('pitchNumber', len(pitches_list) + 1)
+                                    p_count = f"{cnt.get('balls', 0)}-{cnt.get('strikes', 0)}"
+                                    p_desc = details.get('details', {}).get('description') or details.get('description', '')
+                                    p_speed = pd.get('startSpeed', 0.0)
+                                    p_type = details.get('type', {}).get('description', 'Pitch')
+                                    p_px = coord.get('pX')
+                                    p_pz = coord.get('pZ')
+                                    p_sz_top = pd.get('strikeZoneTop')
+                                    p_sz_bot = pd.get('strikeZoneBottom')
+                                    
+                                    if p_px is not None and p_pz is not None:
+                                        pitches_list.append(Pitch(
+                                            number=p_num, count=p_count, description=p_desc,
+                                            speed=p_speed, type=p_type, px=p_px, pz=p_pz,
+                                            sz_top=p_sz_top, sz_bot=p_sz_bot
+                                        ))
+
                             last_event = play['playEvents'][-1]
                             if 'pitchData' in last_event:
                                 pspeed = last_event['pitchData'].get('startSpeed')
@@ -1285,7 +1324,8 @@ class MLBClient:
                                 vid_url = content_dict[play_id]['url']
                                 vid_blurb = content_dict[play_id]['blurb']
 
-                        at_bats.append(AtBat(inning, pitcher, desc, pitch_str, statcast_str, vid_url, vid_blurb, is_scoring, is_complete))
+                        at_bats.append(AtBat(inning, pitcher, desc, pitch_str, statcast_str, vid_url, vid_blurb, is_scoring, is_complete, pitches_list))
+
 
             results.append(PlayerGameStats(
                 player_id=player_id,

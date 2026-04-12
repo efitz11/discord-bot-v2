@@ -1,7 +1,11 @@
+from core.visualizer import generate_pitch_plot
+import io
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
 from datetime import datetime, timedelta
+
 
 def parse_date(date_str: str) -> str:
     """Parses a user input date string into YYYY-MM-DD format."""
@@ -129,6 +133,66 @@ class MLBSlash(commands.Cog):
     @abs_command.autocomplete('player')
     async def abs_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
+
+    @mlb.command(name="plot", description="Generate a pitch plot for a specific at-bat")
+    @app_commands.describe(player="The player to search for")
+    @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
+    @app_commands.describe(ab_number="The at-bat number to plot (1 for 1st AB, 2 for 2nd, etc.)")
+    @app_commands.autocomplete(player=player_autocomplete)
+    async def plot_command(self, interaction: discord.Interaction, player: str, ab_number: int = 1, date: str = None):
+        await interaction.response.defer()
+        parsed_date = parse_date(date)
+        
+        # stats_list will typically have one GameStats object
+        stats_list = await self.bot.mlb_client.get_player_game_stats(player, date=parsed_date, include_abs=True)
+
+        if not stats_list:
+            await interaction.followup.send("Could not find stats for that player.")
+            return
+
+        # Combine all at-bats from all games today (in case of double-header)
+        all_abs = []
+        for gs in stats_list:
+            if gs.at_bats:
+                all_abs.extend(gs.at_bats)
+        
+        if not all_abs:
+            await interaction.followup.send("No at-bat data found for this player on this date.")
+            return
+            
+        if ab_number < 1 or ab_number > len(all_abs):
+            await interaction.followup.send(f"Invalid at-bat number. Player had {len(all_abs)} at-bats in this game(s).")
+            return
+            
+        target_ab = all_abs[ab_number - 1]
+        if not target_ab.pitches:
+            await interaction.followup.send("No detailed pitch data available for this at-bat.")
+            return
+            
+        # Generate the graphic
+        # Use a background task or run_in_executor if it gets slow, but PIL for simple plots is fast.
+        loop = asyncio.get_event_loop()
+        img_buffer = await loop.run_in_executor(None, generate_pitch_plot, target_ab.pitches)
+        
+        # Prepare file name (sanitize player string for filename just in case)
+        safe_name = player.replace(" ", "_").lower()
+        filename = f"pitch_plot_{safe_name}_{ab_number}.png"
+        file = discord.File(fp=img_buffer, filename=filename)
+        
+        desc = f"**Inning:** {target_ab.inning}\n**Pitcher:** {target_ab.pitcher_name}\n**Result:** {target_ab.description}"
+        if target_ab.statcast_data:
+            desc += f"\n**Statcast:** {target_ab.statcast_data}"
+
+        embed = discord.Embed(
+            title=f"Pitch Plot: {stats_list[0].player_name} - AB #{ab_number}",
+            description=desc,
+            color=discord.Color.blue()
+        )
+
+        embed.set_image(url=f"attachment://{filename}")
+        
+        await interaction.followup.send(embed=embed, file=file)
+
 
     async def team_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         teams = [
