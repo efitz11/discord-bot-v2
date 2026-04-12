@@ -22,113 +22,117 @@ def get_color_for_desc(desc: str):
     return DEFAULT_COLOR
 
 def generate_pitch_plot(pitches) -> io.BytesIO:
-    # canvas size
-    width, height = 800, 600
+    # canvas size - larger for higher resolution
+    width, height = 1200, 900
     # The zone area will be on the left, legend on the right
-    zone_area_width = 450
+    zone_area_width = 700
     
     img = Image.new('RGB', (width, height), color=(18, 25, 33)) # Dark background
     draw = ImageDraw.Draw(img)
     
     if not pitches:
-        # Return an empty image with a message
         buffer = io.BytesIO()
         img.save(buffer, format='PNG')
         buffer.seek(0)
         return buffer
 
-    # Determine strike zone dims (using first pitch as representative)
+    # Determine strike zone dims
     sz_top = pitches[0].sz_top or 3.5
     sz_bot = pitches[0].sz_bot or 1.5
     
-    # Coordinates mapping
-    # MLB coordinates pX is usually [-2, 2] feet
-    # pZ is usually [0, 5] feet
+    # Scale constants
+    # pX scale: pixels per foot
+    x_scale = 220 
+    # pZ scale: pixels per foot
+    z_scale = 180
     
-    # Horizontal: -2 to 2 centered at 0
-    # Map pX to pixels in zone_area_width
     def get_x(px):
-        # Translate -1.5 -> 1.5 feet to 50 -> 400 pixels
-        # 0 is centerX
         center_x = zone_area_width // 2
-        scale = 150 # pixels per foot
-        return center_x + (px * scale)
+        return center_x + (px * x_scale)
 
     def get_y(pz):
-        # Translate 0 -> 5 feet to 550 -> 50 pixels (y is inverted)
-        base_y = 550
-        scale = 120 # pixels per foot
-        return base_y - (pz * scale)
+        # Anchor at 800px from top (ground level roughly)
+        base_y = 800
+        return base_y - (pz * z_scale)
 
-    # Draw Plate (rough estimation)
-    plate_y = 560
-    plate_w = 0.708 * 150 # 8.5 inches in feet * scale
+    # Draw ground line
+    draw.line([50, 800, zone_area_width - 50, 800], fill=(50, 60, 70), width=4)
+
+    # Draw Plate
+    plate_y = 810
+    plate_w_feet = 0.708 # Half width
     draw.polygon([
-        (get_x(0), plate_y + 20),
-        (get_x(-0.708), plate_y),
-        (get_x(-0.708), plate_y - 10),
-        (get_x(0.708), plate_y - 10),
-        (get_x(0.708), plate_y)
-    ], fill=(200, 200, 200))
+        (get_x(0), plate_y + 30),
+        (get_x(-plate_w_feet), plate_y + 10),
+        (get_x(-plate_w_feet), plate_y - 10),
+        (get_x(plate_w_feet), plate_y - 10),
+        (get_x(plate_w_feet), plate_y + 10)
+    ], fill=(180, 180, 185))
 
     # Draw 3x3 strike zone
-    # Plate width is 17 inches = 1.416 feet. Left edge -0.708, Right edge 0.708.
     zx_left = get_x(-0.708)
     zx_right = get_x(0.708)
     zy_top = get_y(sz_top)
     zy_bot = get_y(sz_bot)
     
-    # Outer box (semi-transparent gray/white)
-    draw.rectangle([zx_left, zy_top, zx_right, zy_bot], outline=(150, 150, 150), width=3)
+    # Outer box - Thicker line
+    draw.rectangle([zx_left, zy_top, zx_right, zy_bot], outline=(200, 200, 200), width=6)
     
-    # Internal lines for 3x3
-    # Vertical
+    # Internal lines for 3x3 - Thicker
     v_step = (zx_right - zx_left) / 3
-    draw.line([zx_left + v_step, zy_top, zx_left + v_step, zy_bot], fill=(100, 100, 100), width=1)
-    draw.line([zx_left + 2*v_step, zy_top, zx_left + 2*v_step, zy_bot], fill=(100, 100, 100), width=1)
-    # Horizontal
+    draw.line([zx_left + v_step, zy_top, zx_left + v_step, zy_bot], fill=(120, 120, 120), width=2)
+    draw.line([zx_left + 2*v_step, zy_top, zx_left + 2*v_step, zy_bot], fill=(120, 120, 120), width=2)
     h_step = (zy_bot - zy_top) / 3
-    draw.line([zx_left, zy_top + h_step, zx_right, zy_top + h_step], fill=(100, 100, 100), width=1)
-    draw.line([zx_left, zy_top + 2*h_step, zx_right, zy_top + 2*h_step], fill=(100, 100, 100), width=1)
+    draw.line([zx_left, zy_top + h_step, zx_right, zy_top + h_step], fill=(120, 120, 120), width=2)
+    draw.line([zx_left, zy_top + 2*h_step, zx_right, zy_top + 2*h_step], fill=(120, 120, 120), width=2)
 
-    # Load fonts (fallback to default)
+    # Load fonts - Larger sizes
     try:
-        font_large = ImageFont.truetype("arial.ttf", 20)
-        font_small = ImageFont.truetype("arial.ttf", 16)
-        font_bold = ImageFont.truetype("arialbd.ttf", 18)
+        # Try some common windows font paths, fallback to default
+        font_path = "arial.ttf"
+        font_bold_path = "arialbd.ttf"
+        
+        font_title = ImageFont.truetype(font_bold_path, 36)
+        font_large = ImageFont.truetype(font_path, 28)
+        font_small = ImageFont.truetype(font_path, 22)
+        font_bold = ImageFont.truetype(font_bold_path, 26)
     except:
-        font_large = ImageFont.load_default()
-        font_small = ImageFont.load_default()
-        font_bold = ImageFont.load_default()
+        font_title = font_large = font_small = font_bold = ImageFont.load_default()
 
     # Plot pitches
     for i, p in enumerate(pitches):
         px, py = get_x(p.px), get_y(p.pz)
         color = get_color_for_desc(p.description)
         
-        # Draw circle
-        r = 15
-        draw.ellipse([px-r, py-r, px+r, py+r], fill=color, outline=(255, 255, 255), width=1)
+        # Draw circle - Larger radius
+        r = 25
+        draw.ellipse([px-r, py-r, px+r, py+r], fill=color, outline=(255, 255, 255), width=2)
+        
         # Draw number
         num_str = str(p.number)
         bbox = draw.textbbox((0, 0), num_str, font=font_small)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        draw.text((px - tw/2, py - th/2 - 2), num_str, fill=(255, 255, 255), font=font_small)
+        draw.text((px - tw/2, py - th/2 - 4), num_str, fill=(255, 255, 255), font=font_small)
         
         # Legend (on the right)
-        lx = 480
-        ly = 50 + (i * 65)
+        lx = 750
+        ly = 80 + (i * 90)
+        
+        # In case too many pitches, start a second column
+        if ly > height - 100:
+            lx += 220
+            ly = 80 + ((i - 8) * 90)
         
         # Pitch marker in legend
-        draw.ellipse([lx, ly+10, lx+30, ly+40], fill=color, outline=(255, 255, 255), width=1)
-        draw.text((lx + 10, ly + 15), num_str, fill=(255, 255, 255), font=font_small)
+        draw.ellipse([lx, ly+10, lx+45, ly+55], fill=color, outline=(255, 255, 255), width=2)
+        draw.text((lx + 15, ly + 18), num_str, fill=(255, 255, 255), font=font_small)
         
         # Result and Count
-        draw.text((lx + 45, ly), f"{p.description}", fill=(255, 255, 255), font=font_bold)
+        draw.text((lx + 65, ly), f"{p.description}", fill=(255, 255, 255), font=font_bold)
         draw.text((width - 80, ly), f"{p.count}", fill=(200, 200, 200), font=font_small)
         
         # Speed and Type
-        draw.text((lx + 45, ly + 25), f"{p.speed} mph {p.type}", fill=(180, 180, 180), font=font_small)
+        draw.text((lx + 65, ly + 35), f"{p.speed} mph {p.type}", fill=(180, 180, 180), font=font_small)
 
     buffer = io.BytesIO()
     img.save(buffer, format='PNG')
