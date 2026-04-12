@@ -254,6 +254,74 @@ class MLBSlash(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Error fetching standings: {e}")
 
+    @mlb.command(name="arsenal", description="Get a pitcher's pitch arsenal breakdown from Savant")
+    @app_commands.describe(player="Pitcher name", year="Year (e.g. 2025)")
+    @app_commands.autocomplete(player=player_autocomplete)
+    async def arsenal(self, interaction: discord.Interaction, player: str, year: str = None):
+        await interaction.response.defer()
+        try:
+            data = await self.bot.mlb_client.get_pitch_arsenal(player, year=year)
+            if not data:
+                await interaction.followup.send(f"No pitch arsenal data found for **{player}**. They may not be a pitcher or may not have enough data.")
+                return
+
+            embed = discord.Embed(
+                title=f"⚾ {data.year} Pitch Arsenal — {data.player_name} ({data.team})",
+                color=discord.Color.dark_teal(),
+                description=f"```\n{data.format_discord_code_block()}\n```"
+            )
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching arsenal: {e}")
+
+    @mlb.command(name="savant_leaders", description="Get Statcast leaderboards from Baseball Savant")
+    @app_commands.describe(
+        stat="Statcast metric to rank by",
+        player_type="Batters or Pitchers",
+        year="Year (e.g. 2025)",
+        count="Number of players to show (default 10)"
+    )
+    @app_commands.choices(stat=[
+        app_commands.Choice(name="Exit Velocity", value="exit_velocity_avg"),
+        app_commands.Choice(name="Barrel %", value="barrel_batted_rate"),
+        app_commands.Choice(name="Hard Hit %", value="hard_hit_percent"),
+        app_commands.Choice(name="xBA", value="xba"),
+        app_commands.Choice(name="xSLG", value="xslg"),
+        app_commands.Choice(name="xwOBA", value="xwoba"),
+        app_commands.Choice(name="K %", value="k_percent"),
+        app_commands.Choice(name="BB %", value="bb_percent"),
+        app_commands.Choice(name="Whiff %", value="whiff_percent"),
+        app_commands.Choice(name="Chase Rate", value="chase_percent"),
+        app_commands.Choice(name="Sprint Speed", value="sprint_speed"),
+        app_commands.Choice(name="OAA", value="outs_above_average"),
+        app_commands.Choice(name="Sweet Spot %", value="sweet_spot_percent"),
+        app_commands.Choice(name="xERA", value="xera"),
+        app_commands.Choice(name="Bat Speed", value="bat_speed"),
+        app_commands.Choice(name="Swing Length", value="swing_length"),
+    ])
+    @app_commands.choices(player_type=[
+        app_commands.Choice(name="Batters", value="batter"),
+        app_commands.Choice(name="Pitchers", value="pitcher"),
+    ])
+    async def savant_leaders(self, interaction: discord.Interaction, stat: app_commands.Choice[str], player_type: app_commands.Choice[str] = None, year: str = None, count: int = 10):
+        await interaction.response.defer()
+        try:
+            p_type = player_type.value if player_type else "batter"
+            count = min(max(count, 1), 25)
+            data = await self.bot.mlb_client.get_savant_leaderboard(stat.value, year=year, player_type=p_type, count=count)
+            if not data:
+                await interaction.followup.send(f"No Savant leaderboard data found for **{stat.name}**.")
+                return
+
+            embed = discord.Embed(
+                title=f"📊 {data.title} ({p_type.title()}s)",
+                color=discord.Color.gold(),
+                description=f"```\n{data.format_discord_code_block()}\n```"
+            )
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching leaderboard: {e}")
+
     @mlb.command(name="stats", description="Get a player's season or career stats")
     @app_commands.describe(player="The player to search for")
     @app_commands.describe(year="A specific year or range (e.g. 2020-2023). Blank for most recent.")

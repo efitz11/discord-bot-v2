@@ -535,6 +535,52 @@ class StandingsGroup:
         return "\n".join(lines)
 
 @dataclass
+class PitchArsenal:
+    player_name: str
+    team: str
+    year: str
+    pitches: List[dict]
+
+    def format_discord_code_block(self) -> str:
+        if not self.pitches:
+            return "No pitch arsenal data found."
+
+        lines = []
+        lines.append("PITCH        USE%  WHIFF%  K%    BA    xBA   RV/100")
+        
+        for p in self.pitches:
+            name = p['name'][:12].ljust(12)
+            usage = str(p['usage']).rjust(4) + '%'
+            whiff = str(p['whiff']).rjust(5) + '%'
+            k_pct = str(p['k_pct']).rjust(4) + '%'
+            ba = str(p['ba']).rjust(5)
+            xba = str(p['xba']).rjust(5)
+            rv = str(p['rv100']).rjust(6)
+            lines.append(f"{name} {usage}  {whiff} {k_pct} {ba} {xba} {rv}")
+        
+        return "\n".join(lines)
+
+@dataclass
+class SavantLeaderboard:
+    title: str
+    stat_key: str
+    year: str
+    rows: List[dict]
+
+    def format_discord_code_block(self) -> str:
+        if not self.rows:
+            return "No data found."
+        lines = []
+        lines.append("RK  PLAYER          TEAM  VALUE")
+        for i, r in enumerate(self.rows, 1):
+            rank = str(i).rjust(2)
+            name = r['name'][:14].ljust(14)
+            team = r['team'].rjust(4)
+            val = str(r['value']).rjust(6)
+            lines.append(f"{rank}  {name} {team} {val}")
+        return "\n".join(lines)
+
+@dataclass
 class HighlightItem:
     title: str
     description: str
@@ -1779,6 +1825,118 @@ class MLBClient:
             groups.append(StandingsGroup(title=group_name, records=records))
             
         return groups
+
+    async def get_pitch_arsenal(self, player_name: str, year: str = None) -> Optional[PitchArsenal]:
+        """Fetch pitch arsenal stats for a pitcher from Baseball Savant."""
+        import io, csv
+        session = await self.get_session()
+        resolved = await self.resolve_player(player_name)
+        if not resolved:
+            return None
+        
+        pid = str(resolved['id'])
+        target_year = year or str(datetime.utcnow().year)
+        
+        for try_year in ([target_year] if year else [target_year, str(int(target_year) - 1)]):
+            url = f"https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats?type=pitcher&pitchType=&year={try_year}&team=&min=1&csv=true"
+            
+            async with session.get(url) as resp:
+                raw = await resp.read()
+                text = raw.decode('utf-8-sig')
+            
+            reader = csv.DictReader(io.StringIO(text))
+            player_rows = [r for r in reader if r.get('player_id') == pid]
+            
+            if player_rows:
+                target_year = try_year
+                break
+        
+        if not player_rows:
+            return None
+        
+        player_display = player_rows[0].get('last_name, first_name', resolved['name'])
+        team = player_rows[0].get('team_name_alt', '')
+        
+        # Sort by usage descending
+        player_rows.sort(key=lambda r: float(r.get('pitch_usage', 0) or 0), reverse=True)
+        
+        pitches = []
+        for r in player_rows:
+            pitches.append({
+                'name': r.get('pitch_name', '?'),
+                'type': r.get('pitch_type', '?'),
+                'usage': r.get('pitch_usage', '0'),
+                'whiff': r.get('whiff_percent', '0'),
+                'k_pct': r.get('k_percent', '0'),
+                'ba': r.get('ba', '.000'),
+                'xba': r.get('est_ba', '.000'),
+                'rv100': r.get('run_value_per_100', '0'),
+                'hard_hit': r.get('hard_hit_percent', '0'),
+            })
+        
+        return PitchArsenal(player_display, team, target_year, pitches)
+
+    async def get_savant_leaderboard(self, stat: str, year: str = None, player_type: str = 'batter', count: int = 10) -> Optional[SavantLeaderboard]:
+        """Fetch a Statcast leaderboard from Baseball Savant."""
+        import io, csv
+        session = await self.get_session()
+        target_year = year or str(datetime.utcnow().year)
+        
+        stat_labels = {
+            'exit_velocity_avg': 'Avg Exit Velocity',
+            'barrel_batted_rate': 'Barrel %',
+            'hard_hit_percent': 'Hard Hit %',
+            'xba': 'Expected BA',
+            'xslg': 'Expected SLG',
+            'xwoba': 'Expected wOBA',
+            'xobp': 'Expected OBP',
+            'xera': 'Expected ERA',
+            'k_percent': 'K %',
+            'bb_percent': 'BB %',
+            'whiff_percent': 'Whiff %',
+            'chase_percent': 'Chase Rate',
+            'sprint_speed': 'Sprint Speed',
+            'outs_above_average': 'OAA',
+            'arm_strength': 'Arm Strength',
+            'launch_angle_avg': 'Avg Launch Angle',
+            'sweet_spot_percent': 'Sweet Spot %',
+            'bat_speed': 'Bat Speed',
+            'swing_length': 'Swing Length',
+        }
+        
+        title = stat_labels.get(stat, stat.replace('_', ' ').title())
+        
+        all_rows = []
+        for try_year in ([target_year] if year else [target_year, str(int(target_year) - 1)]):
+            url = f"https://baseballsavant.mlb.com/leaderboard/custom?year={try_year}&type={player_type}&min=50&selections={stat}&chart=false&csv=true"
+            
+            async with session.get(url) as resp:
+                raw = await resp.read()
+                text = raw.decode('utf-8-sig')
+            
+            reader = csv.DictReader(io.StringIO(text))
+            all_rows = list(reader)
+            
+            if all_rows:
+                target_year = try_year
+                break
+        
+        if not all_rows:
+            return None
+        
+        # Sort descending by stat value (higher = better for most stats)
+        reverse = stat not in ['chase_percent', 'swing_length']  # lower is better for these
+        all_rows.sort(key=lambda r: float(r.get(stat, 0) or 0), reverse=reverse)
+        
+        rows = []
+        for r in all_rows[:count]:
+            rows.append({
+                'name': r.get('last_name, first_name', '?'),
+                'team': '',  # CSV doesn't always include team
+                'value': r.get(stat, '0'),
+            })
+        
+        return SavantLeaderboard(f"{target_year} {title} Leaders", stat, target_year, rows)
 
     async def get_box_score(self, team_query: str, date: str = None) -> Optional["BoxScoreData"]:
         """Fetch the box score for a team's game on a given date."""
