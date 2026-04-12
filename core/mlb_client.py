@@ -1606,10 +1606,16 @@ class MLBClient:
         table_rows = sorted(table_rows, key=lambda i: i["value"], reverse=True)
         return PlayerPercentiles(resolved['name'], str(year_stats.get('year')), stat_type, table_rows)
 
-    async def get_highlights(self, query: str, is_team: bool = False, date: str = None) -> List[HighlightItem]:
+    async def get_highlights(self, query: str, date: str = None) -> List[HighlightItem]:
         session = await self.get_session()
         game_pk = None
         target_name = None
+        is_team = False
+
+        # Attempt to match a team first
+        team_id = await self.get_team_id(query)
+        if team_id:
+            is_team = True
 
         if is_team:
             games = await self.get_todays_games(team_query=query, date=date)
@@ -1688,7 +1694,7 @@ class MLBClient:
             )
             results.append(hi)
 
-        return results[:5]
+        return results
 
     async def get_box_score(self, team_query: str, date: str = None) -> Optional["BoxScoreData"]:
         """Fetch the box score for a team's game on a given date."""

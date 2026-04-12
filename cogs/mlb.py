@@ -166,20 +166,35 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send(f"Error fetching percentiles: {e}")
 
     @mlb.command(name="highlights", description="Get video highlights for a player or team")
-    @app_commands.describe(query="Player or team name", is_team="True if querying a Team", date="Date (YYYY-MM-DD)")
-    async def highlights(self, interaction: discord.Interaction, query: str, is_team: bool = False, date: str = None):
+    @app_commands.describe(query="Player or team name", date="Date (YYYY-MM-DD)")
+    async def highlights(self, interaction: discord.Interaction, query: str, date: str = None):
         await interaction.response.defer()
         try:
-            hl_list = await self.bot.mlb_client.get_highlights(query, is_team=is_team, date=date)
+            hl_list = await self.bot.mlb_client.get_highlights(query, date=date)
             if not hl_list:
                 await interaction.followup.send(f"No highlights found for **{query}**.")
                 return
 
-            response = f"### Highlights for {query.title()}\n\n"
-            for hi in hl_list[:3]:
-                response += f"**{hi.title}** ({hi.duration})\n{hi.url}\n\n"
+            embed = discord.Embed(
+                title=f"Highlights: {query.title()}",
+                color=discord.Color.blue()
+            )
+            
+            desc = ""
+            for hi in hl_list:
+                line = f"🎥 **[{hi.title}]({hi.url})** ({hi.duration})\n"
+                if hi.description:
+                    line += f"> *{hi.description}*\n\n"
+                else:
+                    line += "\n"
                 
-            await interaction.followup.send(response)
+                # Discord embeds max out at 4096 characters in the description
+                if len(desc) + len(line) > 4096:
+                    break
+                desc += line
+                    
+            embed.description = desc.strip()
+            await interaction.followup.send(embed=embed)
         except Exception as e:
             await interaction.followup.send(f"Error fetching highlights: {e}")
 
