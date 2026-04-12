@@ -1000,7 +1000,7 @@ class MLBSlash(commands.Cog):
     @mlb.command(name="leaders", description="View MLB player stat leaderboards")
     @app_commands.describe(stat="The statistic to view leaders for")
     @app_commands.describe(league="The league to filter by (AL/NL/All)")
-
+    @app_commands.describe(year="The year to view leaders for (e.g. 2023). Defaults to current year.")
     @app_commands.choices(league=[
         app_commands.Choice(name="All", value="all"),
         app_commands.Choice(name="AL", value="al"),
@@ -1027,10 +1027,12 @@ class MLBSlash(commands.Cog):
         stat: str, 
         stat_group: app_commands.Choice[str] = None,
         league: app_commands.Choice[str] = None, 
+        year: str = None,
         position: str = None, 
         player_pool: app_commands.Choice[str] = None,
         team: str = None
     ):
+
         await interaction.response.defer()
         
         team_id = None
@@ -1054,7 +1056,8 @@ class MLBSlash(commands.Cog):
             group_val = stat_group.value if stat_group else ("pitching" if stat in default_pitching_stats else "hitting")
             stat_val = stat
         
-        leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id)
+        leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id, year=year)
+
         if not leaders_list:
             await interaction.followup.send("Could not find any leaders for those filters.")
             return
@@ -1065,7 +1068,9 @@ class MLBSlash(commands.Cog):
         desc += "```"
 
         title_parts = []
+        if year: title_parts.append(year)
         if team_display: title_parts.append(team_display)
+
         if pool_val == "ROOKIES": title_parts.append("Rookie")
         if lg_val and lg_val != "all": title_parts.append(lg_val.upper())
         if position: title_parts.append(position.upper())
@@ -1112,6 +1117,8 @@ class MLBSlash(commands.Cog):
     @mlb.command(name="team_leaders", description="View MLB team stat leaderboards")
     @app_commands.describe(stat="The statistic to view leaders for")
     @app_commands.describe(league="The league to filter by (AL/NL/All)")
+    @app_commands.describe(year="The year to view leaders for (e.g. 2023). Defaults to current year.")
+
 
     @app_commands.choices(league=[
         app_commands.Choice(name="All", value="all"),
@@ -1122,8 +1129,10 @@ class MLBSlash(commands.Cog):
         self, 
         interaction: discord.Interaction, 
         stat: str, 
-        league: app_commands.Choice[str] = None
+        league: app_commands.Choice[str] = None,
+        year: str = None
     ):
+
         await interaction.response.defer()
         
         lg_val = league.value if league else None
@@ -1137,7 +1146,8 @@ class MLBSlash(commands.Cog):
             group_val = "pitching" if stat in default_pitching_stats else "hitting"
             stat_val = stat
             
-        leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val)
+        leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val, year=year)
+
         if not leaders_list:
             await interaction.followup.send("Could not find any team leaders for those filters.")
             return
@@ -1148,8 +1158,10 @@ class MLBSlash(commands.Cog):
         desc += "```"
 
         title_parts = []
+        if year: title_parts.append(year)
         if lg_val:
             title_parts.append("AL" if lg_val == "103" else "NL")
+
             
         display_stat = stat_val.capitalize()
         stats_map_display = {

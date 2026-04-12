@@ -2284,7 +2284,7 @@ class MLBClient:
             game_abstract_state=game.abstract_state,
         )
 
-    async def get_leaders(self, stat: str, stat_group: str = None, league: str = None, position: str = None, player_pool: str = None, team_id: str = None) -> List["Leader"]:
+    async def get_leaders(self, stat: str, stat_group: str = None, league: str = None, position: str = None, player_pool: str = None, team_id: str = None, year: str = None) -> List["Leader"]:
         session = await self.get_session()
         params = {
             "leaderCategories": stat,
@@ -2296,12 +2296,16 @@ class MLBClient:
             
         if team_id:
             params["teamId"] = team_id
+
+        if year:
+            params["season"] = year
             
         if league and league.lower() in ["al", "nl"]:
             params["leagueId"] = "103" if league.lower() == "al" else "104"
             
         if player_pool and player_pool.upper() != "ALL":
             params["playerPool"] = player_pool.upper()
+
             
         query_string = urllib.parse.urlencode(params)
         
@@ -2338,7 +2342,7 @@ class MLBClient:
             
         return leaders
 
-    async def get_team_leaders(self, stat: str, stat_group: str, league: str = None) -> List["Leader"]:
+    async def get_team_leaders(self, stat: str, stat_group: str, league: str = None, year: str = None) -> List["Leader"]:
         session = await self.get_session()
         
         # Translate player stat key to team stat key
@@ -2356,11 +2360,15 @@ class MLBClient:
         team_stat_key = team_stat_keys.get(stat, stat)
         
         # Fetch data
-        season = datetime.utcnow().year
-        if datetime.utcnow().month < 3:
-            season -= 1
+        if year:
+            season = year
+        else:
+            season = datetime.utcnow().year
+            if datetime.utcnow().month < 3:
+                season -= 1
             
         url = f"{self.BASE_URL}/teams/stats?season={season}&sportId=1&group={stat_group}&stats=season"
+
         
         async with session.get(url) as resp:
             data = await resp.json()
