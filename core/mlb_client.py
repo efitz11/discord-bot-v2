@@ -1896,55 +1896,58 @@ class MLBClient:
                 splits.extend(sg.get('splits', []))
                 
             if not splits:
-                return None
+                return BatterVsPitcher(
+                    batter_name=batter_name, pa=0, ab=0, h=0, hr=0, bb=0, so=0, avg=".000", ops=".000"
+                )
                 
-            # Aggregate totals
-            pa = ab = h = hr = bb = so = 0
+            # Aggregate raw totals for precise career math
+            pa = ab = h = d = t = hr = bb = so = hbp = sf = 0
             for s in splits:
                 st = s.get('stat', {})
                 pa += st.get('plateAppearances', 0)
                 ab += st.get('atBats', 0)
                 h += st.get('hits', 0)
+                d += st.get('doubles', 0)
+                t += st.get('triples', 0)
                 hr += st.get('homeRuns', 0)
                 bb += st.get('baseOnBalls', 0)
                 so += st.get('strikeOuts', 0)
+                hbp += st.get('hitByPitch', 0)
+                sf += st.get('sacFlies', 0)
             
             if pa == 0:
-                return None
+                return BatterVsPitcher(
+                    batter_name=batter_name, pa=0, ab=0, h=0, hr=0, bb=0, so=0, avg=".000", ops=".000"
+                )
                 
-            avg = f"{(h / ab):.3f}".lstrip('0') if ab > 0 else ".---"
-            # Rough OPS calculation
-            # OBP = (H + BB) / PA approx
-            # SLG = (H + ??) / AB - we don't have doubles/triples easily here without more parsing
-            # Use the provided OPS from the splits if we want to be exact, or just parse season averages
-            ops_sum = 0
-            count = 0
-            for s in splits:
-                st = s.get('stat', {})
-                if 'ops' in st:
-                    try:
-                        ops_sum += float(st['ops'])
-                        count += 1
-                    except: pass
+            avg_str = f"{(h / ab):.3f}".lstrip('0') if ab > 0 else ".000"
             
-            avg_ops = f"{(ops_sum / count):.3f}" if count > 0 else ".000"
+            # Precise OBP = (H + BB + HBP) / (AB + BB + HBP + SF)
+            obp_denom = (ab + bb + hbp + sf)
+            obp = (h + bb + hbp) / obp_denom if obp_denom > 0 else 0.0
+            
+            # Precise SLG = (Singles + 2*D + 3*T + 4*HR) / AB
+            singles = h - (d + t + hr)
+            slg = (singles + 2*d + 3*t + 4*hr) / ab if ab > 0 else 0.0
+            
+            ops_str = f"{(obp + slg):.3f}"
             
             return BatterVsPitcher(
                 batter_name=batter_name,
                 pa=pa, ab=ab, h=h, hr=hr, bb=bb, so=so,
-                avg=avg if avg != ".000" else ".000",
-                ops=avg_ops
+                avg=avg_str if avg_str != ".000" else ".000",
+                ops=ops_str
             )
 
         tasks = [fetch_vs(b['id'], b['name']) for b in batters]
         results = await asyncio.gather(*tasks)
         
-        final_list = [r for r in results if r is not None]
-        final_list.sort(key=lambda x: x.pa, reverse=True)
+        # Sort by PA descending
+        results.sort(key=lambda x: x.pa, reverse=True)
         
         return {
             'pitcher': pitcher_display,
-            'matchups': final_list
+            'matchups': results
         }
 
     async def get_pitch_arsenal(self, player_name: str, year: str = None) -> Optional[PitchArsenal]:
