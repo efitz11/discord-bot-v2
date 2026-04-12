@@ -710,6 +710,17 @@ class BullpenData:
             
         return "\n".join(output)
 
+@dataclass
+class Leader:
+    rank: int
+    name: str
+    team_abbrev: str
+    value: str
+    position: str = ""
+
+    def format(self, max_name_len=18) -> str:
+        return f"{self.rank:<2} {self.team_abbrev:<4} {self.position:<3} {self.name:<{max_name_len}} {self.value}"
+
 class MLBClient:
     BASE_URL = "https://statsapi.mlb.com/api/v1"
 
@@ -1581,6 +1592,57 @@ class MLBClient:
             game_status=game.status,
             game_abstract_state=game.abstract_state,
         )
+
+    async def get_leaders(self, stat: str, stat_group: str = None, league: str = None, position: str = None, player_pool: str = None) -> List["Leader"]:
+        session = await self.get_session()
+        params = {
+            "leaderCategories": stat,
+            "hydrate": "team,person",
+            "limit": 10
+        }
+        if stat_group:
+            params["statGroup"] = stat_group
+            
+        if league and league.lower() in ["al", "nl"]:
+            params["leagueId"] = "103" if league.lower() == "al" else "104"
+            
+        if player_pool and player_pool.upper() != "ALL":
+            params["playerPool"] = player_pool.upper()
+            
+        query_string = urllib.parse.urlencode(params)
+        
+        if position:
+            if position.upper() == "OF":
+                query_string += "&position=LF&position=CF&position=RF&position=OF"
+            else:
+                query_string += f"&position={position.upper()}"
+                
+        url = f"{self.BASE_URL}/stats/leaders?{query_string}"
+        
+        async with session.get(url) as resp:
+            data = await resp.json()
+            
+        if not data.get("leagueLeaders"):
+            return []
+            
+        leaders = []
+        for l in data["leagueLeaders"][0].get("leaders", []):
+            rank = l.get("rank")
+            value = l.get("value")
+            first = l.get("person", {}).get("firstName", "")
+            last = l.get("person", {}).get("lastName", "")
+            box_name = l.get("person", {}).get("boxscoreName", "")
+            if box_name:
+                name = box_name
+            elif first and last:
+                name = f"{last}, {first[0]}"
+            else:
+                name = l.get("person", {}).get("fullName", "Unknown")
+            team_abbrev = l.get("team", {}).get("abbreviation", "FA")
+            pos_abbrev = l.get("person", {}).get("primaryPosition", {}).get("abbreviation", "")
+            leaders.append(Leader(rank, name, team_abbrev, value, pos_abbrev))
+            
+        return leaders
 
     async def get_bullpen(self, team_query: str) -> Optional["BullpenData"]:
         """Fetch the bullpen availability and last 4 days of pitch counts."""

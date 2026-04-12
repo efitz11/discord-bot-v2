@@ -604,6 +604,140 @@ class MLBSlash(commands.Cog):
         
         await interaction.followup.send(embed=embed)
 
+    async def stat_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        # Map common names to API internal stat keys
+        stats_map = {
+            "Home Runs (Hitting - HR)": "hitting|homeRuns",
+            "Home Runs Allowed (Pitching - HR)": "pitching|homeRuns",
+            "Batting Average (AVG)": "hitting|battingAverage",
+            "Batting Average Against (BAA)": "pitching|battingAverage",
+            "RBI": "hitting|runsBattedIn",
+            "On Base Percentage (OBP)": "hitting|onBasePercentage",
+            "Slugging Percentage (SLG)": "hitting|sluggingPercentage",
+            "OPS": "hitting|onBasePlusSlugging",
+            "Hits (Hitting - H)": "hitting|hits",
+            "Hits Allowed (Pitching - H)": "pitching|hits",
+            "Runs (Hitting - R)": "hitting|runs",
+            "Runs Allowed (Pitching - R)": "pitching|runs",
+            "Stolen Bases (SB)": "hitting|stolenBases",
+            "Walks (Hitting - BB)": "hitting|walks",
+            "Walks (Pitching - BB)": "pitching|walks",
+            "Strikeouts (Hitting - SO)": "hitting|strikeouts", 
+            "Wins (W)": "pitching|wins",
+            "ERA": "pitching|earnedRunAverage",
+            "WHIP": "pitching|walksAndHitsPerInningPitched",
+            "Saves (SV)": "pitching|saves",
+            "Strikeouts (Pitching - SO)": "pitching|strikeouts",
+            "Innings Pitched (IP)": "pitching|inningsPitched",
+            "Games Played (Hitting - G)": "hitting|gamesPlayed",
+            "Games Played (Pitching - G)": "pitching|gamesPlayed",
+            "Doubles (2B)": "hitting|doubles",
+            "Triples (3B)": "hitting|triples",
+            "At Bats (AB)": "hitting|atBats",
+            "Total Bases (TB)": "hitting|totalBases",
+        }
+        raw_stats = ['assists', 'shutouts', 'homeRuns', 'sacrificeBunts', 'sacrificeFlies', 'runs', 'groundoutToFlyoutRatio', 'stolenBases', 'battingAverage', 'groundOuts', 'numberOfPitches', 'onBasePercentage', 'caughtStealing', 'groundIntoDoublePlays', 'totalBases', 'earnedRunAverage', 'fieldingPercentage', 'walksAndHitsPerInningPitched', 'flyouts', 'hitByPitches', 'gamesPlayed', 'walks', 'sluggingPercentage', 'onBasePlusSlugging', 'runsBattedIn', 'triples', 'extraBaseHits', 'hits', 'atBats', 'strikeouts', 'doubles', 'totalPlateAppearances', 'intentionalWalks', 'wins', 'losses', 'saves', 'wildPitch', 'airOuts', 'balk', 'blownSaves', 'catcherEarnedRunAverage', 'catchersInterference', 'chances', 'completeGames', 'doublePlays', 'earnedRun', 'errors', 'gamesFinished', 'gamesStarted', 'hitBatsman', 'hitsPer9Inn', 'holds', 'innings', 'inningsPitched', 'outfieldAssists', 'passedBalls', 'pickoffs', 'pitchesPerInning', 'putOuts', 'rangeFactorPerGame', 'rangeFactorPer9Inn', 'saveOpportunities', 'stolenBasePercentage', 'strikeoutsPer9Inn', 'strikeoutWalkRatio', 'throwingErrors', 'totalBattersFaced', 'triplePlays', 'walksPer9Inn', 'winPercentage']
+
+        choices = []
+        for readable, stat_id in stats_map.items():
+            if current.lower() in readable.lower() or current.lower() in stat_id.lower():
+                choices.append(app_commands.Choice(name=readable, value=stat_id))
+                
+        existing_values = {c.value.split('|')[1] if '|' in c.value else c.value for c in choices}
+        for rs in raw_stats:
+            if current.lower() in rs.lower() and rs not in existing_values:
+                choices.append(app_commands.Choice(name=rs, value=rs))
+                
+        return choices[:25]
+
+    @mlb.command(name="leaders", description="View MLB player stat leaderboards")
+    @app_commands.describe(stat="The statistic to view leaders for")
+    @app_commands.autocomplete(stat=stat_autocomplete)
+    @app_commands.describe(league="The league to filter by (AL/NL/All)")
+    @app_commands.choices(league=[
+        app_commands.Choice(name="All", value="all"),
+        app_commands.Choice(name="AL", value="al"),
+        app_commands.Choice(name="NL", value="nl")
+    ])
+    @app_commands.describe(position="Position filter (e.g. C, 1B, 2B, SS, 3B, OF, P, RP)")
+    @app_commands.describe(player_pool="Player pool filter (Qualified, Rookies, All)")
+    @app_commands.choices(player_pool=[
+        app_commands.Choice(name="Qualified", value="QUALIFIED"),
+        app_commands.Choice(name="All", value="ALL"),
+        app_commands.Choice(name="Rookies", value="ROOKIES")
+    ])
+    @app_commands.describe(stat_group="Filter by stat group (Hitting/Pitching/etc.)")
+    @app_commands.choices(stat_group=[
+        app_commands.Choice(name="Hitting", value="hitting"),
+        app_commands.Choice(name="Pitching", value="pitching"),
+        app_commands.Choice(name="Fielding", value="fielding"),
+        app_commands.Choice(name="Catching", value="catching")
+    ])
+    async def leaders(
+        self, 
+        interaction: discord.Interaction, 
+        stat: str, 
+        stat_group: app_commands.Choice[str] = None,
+        league: app_commands.Choice[str] = None, 
+        position: str = None, 
+        player_pool: app_commands.Choice[str] = None
+    ):
+        await interaction.response.defer()
+        
+        lg_val = league.value if league else None
+        pool_val = player_pool.value if player_pool else None
+
+        parts = stat.split("|")
+        if len(parts) == 2:
+            group_val = parts[0]
+            stat_val = parts[1]
+        else:
+            group_val = stat_group.value if stat_group else "hitting"
+            stat_val = stat
+        
+        leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val)
+        if not leaders_list:
+            await interaction.followup.send("Could not find any leaders for those filters.")
+            return
+            
+        desc = "```python\n"
+        for leader in leaders_list:
+            desc += f"{leader.format()}\n"
+        desc += "```"
+
+        title_parts = []
+        if pool_val == "ROOKIES": title_parts.append("Rookie")
+        if lg_val and lg_val != "all": title_parts.append(lg_val.upper())
+        if position: title_parts.append(position.upper())
+        
+        display_stat = stat_val.capitalize()
+        stats_map_display = {
+            "Home Runs": "homeRuns", "Batting Average": "battingAverage", "RBI": "runsBattedIn",
+            "OBP": "onBasePercentage", "SLG": "sluggingPercentage", "OPS": "onBasePlusSlugging",
+            "Hits": "hits", "Runs": "runs", "Stolen Bases": "stolenBases", "Walks": "walks",
+            "Strikeouts": "strikeouts", "Wins": "wins", "ERA": "earnedRunAverage", 
+            "WHIP": "walksAndHitsPerInningPitched", "Saves": "saves", "Innings Pitched": "inningsPitched",
+            "Games Played": "gamesPlayed", "Doubles": "doubles", "Triples": "triples", 
+            "At Bats": "atBats", "Total Bases": "totalBases"
+        }
+        for readable, stat_id in stats_map_display.items():
+            if stat_id == stat_val:
+                display_stat = readable
+                break
+
+        if display_stat in ["Strikeouts", "Walks", "Home Runs", "Hits", "Runs", "Games Played", "Doubles", "Triples", "Batting Average"]:
+            if group_val == 'pitching' and display_stat in ["Home Runs", "Hits", "Runs", "Doubles", "Triples"]:
+                display_stat = f"{display_stat} Allowed"
+            elif group_val == 'pitching' and display_stat == "Batting Average":
+                display_stat = "Batting Average Against (BAA)"
+            else:
+                display_stat = f"{display_stat} ({group_val.capitalize()})"
+                
+        title_parts.append(display_stat + " Leaders")
+        title_str = " ".join(title_parts)
+
+        embed = discord.Embed(title=title_str, description=desc, color=discord.Color.blue())
+        await interaction.followup.send(embed=embed)
 
 
     @mlb.command(name="next", description="Get the upcoming games for a team")
