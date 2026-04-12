@@ -1595,7 +1595,7 @@ class MLBClient:
             game_abstract_state=game.abstract_state,
         )
 
-    async def get_leaders(self, stat: str, stat_group: str = None, league: str = None, position: str = None, player_pool: str = None) -> List["Leader"]:
+    async def get_leaders(self, stat: str, stat_group: str = None, league: str = None, position: str = None, player_pool: str = None, team_id: str = None) -> List["Leader"]:
         session = await self.get_session()
         params = {
             "leaderCategories": stat,
@@ -1604,6 +1604,9 @@ class MLBClient:
         }
         if stat_group:
             params["statGroup"] = stat_group
+            
+        if team_id:
+            params["teamId"] = team_id
             
         if league and league.lower() in ["al", "nl"]:
             params["leagueId"] = "103" if league.lower() == "al" else "104"

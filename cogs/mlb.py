@@ -673,6 +673,7 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="Fielding", value="fielding"),
         app_commands.Choice(name="Catching", value="catching")
     ])
+    @app_commands.describe(team="Filter by a specific team (e.g. wsh, dodgers)")
     async def leaders(
         self, 
         interaction: discord.Interaction, 
@@ -680,9 +681,19 @@ class MLBSlash(commands.Cog):
         stat_group: app_commands.Choice[str] = None,
         league: app_commands.Choice[str] = None, 
         position: str = None, 
-        player_pool: app_commands.Choice[str] = None
+        player_pool: app_commands.Choice[str] = None,
+        team: str = None
     ):
         await interaction.response.defer()
+        
+        team_id = None
+        team_display = None
+        if team:
+            team_id = await self.bot.mlb_client.get_team_id(team)
+            if not team_id:
+                await interaction.followup.send("Could not find that team.")
+                return
+            team_display = team.upper() if len(team) <= 3 else team.capitalize()
         
         lg_val = league.value if league else None
         pool_val = player_pool.value if player_pool else None
@@ -695,7 +706,7 @@ class MLBSlash(commands.Cog):
             group_val = stat_group.value if stat_group else "hitting"
             stat_val = stat
         
-        leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val)
+        leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id)
         if not leaders_list:
             await interaction.followup.send("Could not find any leaders for those filters.")
             return
@@ -706,6 +717,7 @@ class MLBSlash(commands.Cog):
         desc += "```"
 
         title_parts = []
+        if team_display: title_parts.append(team_display)
         if pool_val == "ROOKIES": title_parts.append("Rookie")
         if lg_val and lg_val != "all": title_parts.append(lg_val.upper())
         if position: title_parts.append(position.upper())
