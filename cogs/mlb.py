@@ -33,7 +33,21 @@ def parse_date(date_str: str) -> str:
             
     return None
 
+class PlayerAbsView(discord.ui.View):
+    def __init__(self, cog, player_id: str, date: str, milb: bool):
+        super().__init__(timeout=600)
+        self.cog = cog
+        self.player_id = player_id
+        self.date = date
+        self.milb = milb
+
+    @discord.ui.button(label="Show At-Bats", style=discord.ButtonStyle.secondary, emoji="⚾")
+    async def show_abs(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog._send_player_abs(interaction, self.player_id, self.date, self.milb, edit_original=True)
+        self.stop()
+
 class MLBSlash(commands.Cog):
+
     def __init__(self, bot):
         self.bot = bot
 
@@ -70,8 +84,16 @@ class MLBSlash(commands.Cog):
                 
         if stats_list[0].headshot_url:
             embed.set_thumbnail(url=stats_list[0].headshot_url)
+        
+        # Add button if any game had batting stats
+        view = None
+        has_batting = any(s.batting_stats is not None for s in stats_list if not s.info_message)
+        if has_batting:
+            first = stats_list[0]
+            view = PlayerAbsView(self, first.player_id, first.date, milb=False)
                 
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, view=view)
+
 
     @line.autocomplete('player')
     async def player_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -648,8 +670,17 @@ class MLBSlash(commands.Cog):
                 
         if stats_list[0].headshot_url:
             embed.set_thumbnail(url=stats_list[0].headshot_url)
+        
+        # Add button if any game had batting stats
+        view = None
+        has_batting = any(s.batting_stats is not None for s in stats_list if not s.info_message)
+        if has_batting:
+            first = stats_list[0]
+            view = PlayerAbsView(self, first.player_id, first.date, milb=True)
                 
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, view=view)
+
+
 
     @milb_line.autocomplete('player')
     async def milb_line_player_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -665,9 +696,14 @@ class MLBSlash(commands.Cog):
     async def milb_abs_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.milb_stats_player_autocomplete(interaction, current)
 
-    async def _send_player_abs(self, interaction: discord.Interaction, player: str, date: str, milb: bool):
-        await interaction.response.defer()
+    async def _send_player_abs(self, interaction: discord.Interaction, player: str, date: str, milb: bool, edit_original: bool = False):
+        if edit_original:
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer()
+        
         parsed_date = parse_date(date)
+
 
         stats_list = await self.bot.mlb_client.get_player_game_stats(player, date=parsed_date, milb=milb, include_abs=True)
 
@@ -716,7 +752,11 @@ class MLBSlash(commands.Cog):
             embed.description = desc.strip()
             embeds.append(embed)
             
-        await interaction.followup.send(embeds=embeds)
+        if edit_original:
+            await interaction.edit_original_response(embeds=embeds, view=None)
+        else:
+            await interaction.followup.send(embeds=embeds)
+
 
     DIVISION_TEAMS = {
         'nle': {'WSH', 'NYM', 'ATL', 'PHI', 'MIA'},

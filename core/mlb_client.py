@@ -415,6 +415,7 @@ class ScoringPlay:
 
 @dataclass
 class PlayerGameStats:
+    player_id: str
     player_name: str
     team_abbrev: str
     opp_abbrev: str
@@ -1165,7 +1166,8 @@ class MLBClient:
         person = person_data['people'][0]
         player_name = person.get('fullName', player_name)
         if 'currentTeam' not in person:
-            return [PlayerGameStats(player_name, "FA", "N/A", False, date or "Today", info_message="Player is not currently on a team.", headshot_url=headshot_url)]
+            return [PlayerGameStats(player_id, player_name, "FA", "N/A", False, date or "Today", info_message="Player is not currently on a team.", headshot_url=headshot_url)]
+
 
         team_id = person['currentTeam']['id']
         team_abbrev = person['currentTeam'].get('abbreviation', 'TEAM')
@@ -1179,7 +1181,8 @@ class MLBClient:
             sched_data = await resp.json()
 
         if not sched_data.get('dates') or not sched_data['dates'][0].get('games'):
-            return [PlayerGameStats(player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
+            return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
+
 
         results = []
         games = sched_data['dates'][0]['games']
@@ -1205,8 +1208,9 @@ class MLBClient:
             player_key = f"ID{player_id}"
             
             if player_key not in players_dict:
-                results.append(PlayerGameStats(player_name, team_abbrev, opp_abbrev, is_home, game_date_formatted, info_message="Player did not play in this game.", headshot_url=headshot_url))
+                results.append(PlayerGameStats(player_id, player_name, team_abbrev, opp_abbrev, is_home, game_date_formatted, info_message="Player did not play in this game.", headshot_url=headshot_url))
                 continue
+
                 
             player_stats = players_dict[player_key]['stats']
             batting = player_stats.get('batting')
@@ -1219,8 +1223,9 @@ class MLBClient:
                 pitching = None
                 
             if not batting and not pitching:
-                results.append(PlayerGameStats(player_name, team_abbrev, opp_abbrev, is_home, game_date_formatted, info_message="Player played but recorded no stats (e.g., pinch runner or defensive sub).", headshot_url=headshot_url))
+                results.append(PlayerGameStats(player_id, player_name, team_abbrev, opp_abbrev, is_home, game_date_formatted, info_message="Player played but recorded no stats (e.g., pinch runner or defensive sub).", headshot_url=headshot_url))
                 continue
+
                 
             at_bats = []
             if include_abs:
@@ -1283,10 +1288,12 @@ class MLBClient:
                         at_bats.append(AtBat(inning, pitcher, desc, pitch_str, statcast_str, vid_url, vid_blurb, is_scoring, is_complete))
 
             results.append(PlayerGameStats(
+                player_id=player_id,
                 player_name=player_name, team_abbrev=team_abbrev, opp_abbrev=opp_abbrev, is_home=is_home,
                 date=game_date_formatted, batting_stats=batting, pitching_stats=pitching, pitching_dec=pitching.get('note', '') if pitching else "",
                 headshot_url=headshot_url, at_bats=at_bats
             ))
+
             
         return results
 
