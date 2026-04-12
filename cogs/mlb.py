@@ -254,6 +254,65 @@ class MLBSlash(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Error fetching standings: {e}")
 
+    @mlb.command(name="matchup", description="Get career stats for a team's roster against a pitcher")
+    @app_commands.describe(team="Team abbreviation or name", pitcher="Pitcher name")
+    @app_commands.autocomplete(pitcher=player_autocomplete)
+    async def matchup(self, interaction: discord.Interaction, team: str, pitcher: str):
+        await interaction.response.defer()
+        try:
+            data = await self.bot.mlb_client.get_matchup(team, pitcher)
+            if not data or not data['matchups']:
+                await interaction.followup.send(f"No career matchup data found for **{team}** hitters against **{pitcher}**.")
+                return
+
+            pitcher_name = data['pitcher']
+            matchups = data['matchups']
+            
+            embed = discord.Embed(
+                title=f"⚔️ Matchup: {team.upper()} vs {pitcher_name}",
+                color=discord.Color.dark_red()
+            )
+            
+            # Create Table
+            header = "BATTER          PA  AVG    OPS  HR  SO\n"
+            rows = []
+            for m in matchups[:20]: # Show top 20 by PA
+                name = m.batter_name[:14].ljust(14)
+                pa = str(m.pa).rjust(3)
+                avg = m.avg.rjust(5)
+                ops = m.ops.rjust(6)
+                hr = str(m.hr).rjust(3)
+                so = str(m.so).rjust(3)
+                rows.append(f"{name} {pa} {avg} {ops} {hr} {so}")
+            
+            table = f"```\n{header}{'='*40}\n" + "\n".join(rows) + "\n```"
+            embed.description = table
+
+            # Buckets
+            hitter_owns = []
+            pitcher_owns = []
+            
+            for m in matchups:
+                if m.pa < 5: continue
+                
+                try:
+                    ops_f = float(m.ops)
+                except: ops_f = 0.0
+                
+                if ops_f > 1.100:
+                    hitter_owns.append(f"**{m.batter_name}** ({m.pa} PA, {m.ops} OPS)")
+                elif ops_f < .500:
+                    pitcher_owns.append(f"**{m.batter_name}** ({m.pa} PA, {m.ops} OPS)")
+            
+            if hitter_owns:
+                embed.add_field(name="👑 Hitter Owns Pitcher", value="\n".join(hitter_owns[:5]), inline=False)
+            if pitcher_owns:
+                embed.add_field(name="🔒 Pitcher Owns Hitter", value="\n".join(pitcher_owns[:5]), inline=False)
+                
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching matchup: {e}")
+
     @mlb.command(name="arsenal", description="Get a pitcher's pitch arsenal breakdown from Savant")
     @app_commands.describe(player="Pitcher name", year="Year (e.g. 2025)")
     @app_commands.autocomplete(player=player_autocomplete)

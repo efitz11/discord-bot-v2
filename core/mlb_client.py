@@ -580,6 +580,33 @@ class SavantLeaderboard:
             lines.append(f"{rank}  {name} {team} {val}")
         return "\n".join(lines)
 
+
+@dataclass
+class BatterVsPitcher:
+    batter_name: str
+    pa: int
+    ab: int
+    h: int
+    hr: int
+    bb: int
+    so: int
+    avg: str
+    ops: str
+
+    @property
+    def score(self) -> float:
+        """Heuristic to determine who 'owns' who."""
+        try:
+            ops_val = float(self.ops)
+        except:
+            ops_val = 0.0
+        
+        # Factor in volume - ownership needs at least a few PAs to be meaningful
+        if self.pa < 3:
+            return 0.0
+            
+        return ops_val
+
 @dataclass
 class HighlightItem:
     title: str
@@ -1825,6 +1852,100 @@ class MLBClient:
             groups.append(StandingsGroup(title=group_name, records=records))
             
         return groups
+
+    async def get_matchup(self, team_query: str, pitcher_name: str) -> Optional[dict]:
+        """Fetch career stats for all hitters on a team against a specific pitcher."""
+        session = await self.get_session()
+        
+        # 1. Resolve Pitcher
+        pitcher = await self.resolve_player(pitcher_name)
+        if not pitcher:
+            return None
+            
+        pid = pitcher['id']
+        pitcher_display = pitcher['name']
+        
+        # 2. Get Team ID and Roster
+        team_id = await self.get_team_id(team_query)
+        if not team_id:
+            return None
+            
+        roster_url = f"{self.BASE_URL}/teams/{team_id}/roster?rosterType=active"
+        async with session.get(roster_url) as resp:
+            roster_data = await resp.json()
+            
+        batters = []
+        for entry in roster_data.get('roster', []):
+            if entry.get('position', {}).get('type') != 'Pitcher':
+                batters.append({
+                    'id': entry['person']['id'],
+                    'name': entry['person']['fullName']
+                })
+        
+        if not batters:
+            return None
+            
+        # 3. Fetch stats for each batter (parallel)
+        async def fetch_vs(batter_id, batter_name):
+            url = f"{self.BASE_URL}/people/{batter_id}/stats?stats=vsPlayer&opposingPlayerId={pid}&group=hitting"
+            async with session.get(url) as resp:
+                data = await resp.json()
+                
+            splits = []
+            for sg in data.get('stats', []):
+                splits.extend(sg.get('splits', []))
+                
+            if not splits:
+                return None
+                
+            # Aggregate totals
+            pa = ab = h = hr = bb = so = 0
+            for s in splits:
+                st = s.get('stat', {})
+                pa += st.get('plateAppearances', 0)
+                ab += st.get('atBats', 0)
+                h += st.get('hits', 0)
+                hr += st.get('homeRuns', 0)
+                bb += st.get('baseOnBalls', 0)
+                so += st.get('strikeOuts', 0)
+            
+            if pa == 0:
+                return None
+                
+            avg = f"{(h / ab):.3f}".lstrip('0') if ab > 0 else ".---"
+            # Rough OPS calculation
+            # OBP = (H + BB) / PA approx
+            # SLG = (H + ??) / AB - we don't have doubles/triples easily here without more parsing
+            # Use the provided OPS from the splits if we want to be exact, or just parse season averages
+            ops_sum = 0
+            count = 0
+            for s in splits:
+                st = s.get('stat', {})
+                if 'ops' in st:
+                    try:
+                        ops_sum += float(st['ops'])
+                        count += 1
+                    except: pass
+            
+            avg_ops = f"{(ops_sum / count):.3f}" if count > 0 else ".000"
+            
+            return BatterVsPitcher(
+                batter_name=batter_name,
+                pa=pa, ab=ab, h=h, hr=hr, bb=bb, so=so,
+                avg=avg if avg != ".000" else ".000",
+                ops=avg_ops
+            )
+
+        tasks = [fetch_vs(b['id'], b['name']) for b in batters]
+        results = await asyncio.gather(*tasks)
+        
+        final_list = [r for r in results if r is not None]
+        final_list.sort(key=lambda x: x.pa, reverse=True)
+        
+        return {
+            'pitcher': pitcher_display,
+            'matchups': final_list
+        }
 
     async def get_pitch_arsenal(self, player_name: str, year: str = None) -> Optional[PitchArsenal]:
         """Fetch pitch arsenal stats for a pitcher from Baseball Savant."""
