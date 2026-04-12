@@ -1,4 +1,4 @@
-# Modern Nats MLB Discord Bot
+# MLB Discord Bot
 
 A powerful, high-performance Discord bot designed for MLB fans, featuring deep integration with Baseball Savant (Statcast) and the MLB Stats API. Built with a focus on rich visual data representation and modern Discord features like Slash Commands and Autocomplete.
 
