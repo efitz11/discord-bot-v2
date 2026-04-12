@@ -974,7 +974,15 @@ class MLBClient:
     async def resolve_player(self, name_or_id: str, milb: bool = False) -> Optional[dict]:
         """Resolve a player name or ID to {'id': str, 'name': str}.
         Prioritizes Nationals > active MLB > any result, matching the old bot's behavior."""
+        session = await self.get_session()
         if name_or_id.isdigit():
+            # If it's an ID, we still want the name for display purposes
+            url = f"{self.BASE_URL}/people/{name_or_id}"
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    person = data.get('people', [{}])[0]
+                    return {'id': name_or_id, 'name': person.get('fullName', name_or_id)}
             return {'id': name_or_id, 'name': name_or_id}
 
         players = await self.search_players(name_or_id, milb=milb)
