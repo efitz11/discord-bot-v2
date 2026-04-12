@@ -739,6 +739,76 @@ class MLBSlash(commands.Cog):
         embed = discord.Embed(title=title_str, description=desc, color=discord.Color.blue())
         await interaction.followup.send(embed=embed)
 
+    @mlb.command(name="team_leaders", description="View MLB team stat leaderboards")
+    @app_commands.describe(stat="The statistic to view leaders for")
+    @app_commands.autocomplete(stat=stat_autocomplete)
+    @app_commands.describe(league="The league to filter by (AL/NL/All)")
+    @app_commands.choices(league=[
+        app_commands.Choice(name="All", value="all"),
+        app_commands.Choice(name="AL", value="103"),
+        app_commands.Choice(name="NL", value="104")
+    ])
+    async def team_leaders(
+        self, 
+        interaction: discord.Interaction, 
+        stat: str, 
+        league: app_commands.Choice[str] = None
+    ):
+        await interaction.response.defer()
+        
+        lg_val = league.value if league else None
+
+        parts = stat.split("|")
+        if len(parts) == 2:
+            group_val = parts[0]
+            stat_val = parts[1]
+        else:
+            group_val = "hitting"
+            stat_val = stat
+            
+        leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val)
+        if not leaders_list:
+            await interaction.followup.send("Could not find any team leaders for those filters.")
+            return
+            
+        desc = "```python\n"
+        for leader in leaders_list:
+            desc += f"{leader.format(is_team=True)}\n"
+        desc += "```"
+
+        title_parts = []
+        if lg_val:
+            title_parts.append("AL" if lg_val == "103" else "NL")
+            
+        display_stat = stat_val.capitalize()
+        stats_map_display = {
+            "Home Runs": "homeRuns", "Batting Average": "battingAverage", "RBI": "runsBattedIn",
+            "OBP": "onBasePercentage", "SLG": "sluggingPercentage", "OPS": "onBasePlusSlugging",
+            "Hits": "hits", "Runs": "runs", "Stolen Bases": "stolenBases", "Walks": "walks",
+            "Strikeouts": "strikeouts", "Wins": "wins", "ERA": "earnedRunAverage", 
+            "WHIP": "walksAndHitsPerInningPitched", "Saves": "saves", "Innings Pitched": "inningsPitched",
+            "Games Played": "gamesPlayed", "Doubles": "doubles", "Triples": "triples", 
+            "At Bats": "atBats", "Total Bases": "totalBases"
+        }
+        for readable, stat_id in stats_map_display.items():
+            if stat_id == stat_val:
+                display_stat = readable
+                break
+                
+        if display_stat in ["Strikeouts", "Walks", "Home Runs", "Hits", "Runs", "Games Played", "Doubles", "Triples", "Batting Average"]:
+            if group_val == 'pitching' and display_stat in ["Home Runs", "Hits", "Runs", "Doubles", "Triples"]:
+                display_stat = f"{display_stat} Allowed"
+            elif group_val == 'pitching' and display_stat == "Batting Average":
+                display_stat = "Batting Average Against (BAA)"
+            else:
+                display_stat = f"{display_stat} ({group_val.capitalize()})"
+                
+        title_parts.append(display_stat + " Team Leaders")
+        title_str = " ".join(title_parts)
+
+        embed = discord.Embed(title=title_str, description=desc, color=discord.Color.blue())
+        await interaction.followup.send(embed=embed)
+
 
     @mlb.command(name="next", description="Get the upcoming games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")

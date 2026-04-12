@@ -718,7 +718,9 @@ class Leader:
     value: str
     position: str = ""
 
-    def format(self, max_name_len=18) -> str:
+    def format(self, max_name_len=18, is_team=False) -> str:
+        if is_team:
+            return f"{self.rank:<2} {self.name:<{max_name_len + 8}} {self.value}"
         return f"{self.rank:<2} {self.team_abbrev:<4} {self.position:<3} {self.name:<{max_name_len}} {self.value}"
 
 class MLBClient:
@@ -1641,6 +1643,67 @@ class MLBClient:
             team_abbrev = l.get("team", {}).get("abbreviation", "FA")
             pos_abbrev = l.get("person", {}).get("primaryPosition", {}).get("abbreviation", "")
             leaders.append(Leader(rank, name, team_abbrev, value, pos_abbrev))
+            
+        return leaders
+
+    async def get_team_leaders(self, stat: str, stat_group: str, league: str = None) -> List["Leader"]:
+        session = await self.get_session()
+        
+        # Translate player stat key to team stat key
+        team_stat_keys = {
+            "battingAverage": "avg",
+            "runsBattedIn": "rbi",
+            "onBasePercentage": "obp",
+            "sluggingPercentage": "slg",
+            "onBasePlusSlugging": "ops",
+            "walks": "baseOnBalls",
+            "strikeouts": "strikeOuts",
+            "earnedRunAverage": "era",
+            "walksAndHitsPerInningPitched": "whip"
+        }
+        team_stat_key = team_stat_keys.get(stat, stat)
+        
+        # Fetch data
+        season = datetime.utcnow().year
+        if datetime.utcnow().month < 3:
+            season -= 1
+            
+        url = f"{self.BASE_URL}/teams/stats?season={season}&sportId=1&group={stat_group}&stats=season"
+        
+        async with session.get(url) as resp:
+            data = await resp.json()
+            
+        if not data.get("stats") or not data["stats"][0].get("splits"):
+            return []
+            
+        teams = data["stats"][0]["splits"]
+        
+        # Filter by league
+        if league:
+            teams = [t for t in teams if str(t.get("team", {}).get("league", {}).get("id", "")) == league or str(t.get("league", {}).get("id", "")) == (league)]
+            
+        # Determine sort direction
+        asc_pitching = {"era", "whip", "baseOnBalls", "hits", "runs", "homeRuns", "losses", "doubles", "triples", "avg", "obp", "slg", "ops"}
+        reverse_sort = True
+        if stat_group == "pitching" and team_stat_key in asc_pitching:
+            reverse_sort = False
+            
+        def safe_float(val):
+            try:
+                if isinstance(val, str):
+                    val = val.replace(',', '')
+                return float(val)
+            except:
+                return float('-inf') if reverse_sort else float('inf')
+
+        teams.sort(key=lambda t: safe_float(t.get("stat", {}).get(team_stat_key, 0)), reverse=reverse_sort)
+        
+        leaders = []
+        for i, team in enumerate(teams[:10]):
+            rank = i + 1
+            team_name = team.get("team", {}).get("name", "Unknown")
+            value = str(team.get("stat", {}).get(team_stat_key, ""))
+            leaders.append(Leader(rank, team_name, "", value, position=""))
             
         return leaders
 
