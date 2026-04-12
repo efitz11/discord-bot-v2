@@ -2356,6 +2356,16 @@ class MLBClient:
         url = f"{self.BASE_URL}/schedule?sportId=1&teamId={team_id}&startDate={start_date}&endDate={end_date}"
         async with session.get(url) as resp:
             data = await resp.json()
+            
+        # 1. Fetch hydrated roster for accurate handedness (L/R)
+        roster_url = f"{self.BASE_URL}/teams/{team_id}/roster?hydrate=person"
+        hand_map = {}
+        async with session.get(roster_url) as resp:
+            roster_data = await resp.json()
+            for entry in roster_data.get('roster', []):
+                pid = entry['person']['id']
+                hand = entry['person'].get('pitchHand', {}).get('code', 'R')
+                hand_map[pid] = hand
 
         if not data.get('dates'):
             return None
@@ -2426,7 +2436,7 @@ class MLBClient:
             p_key = f"ID{pid}"
             player_info = players_db.get(p_key, {})
             name = player_info.get('person', {}).get('boxscoreName', 'Unknown')
-            t_hand = player_info.get('person', {}).get('pitchHand', {}).get('code', 'R')
+            t_hand = hand_map.get(pid, player_info.get('person', {}).get('pitchHand', {}).get('code', 'R'))
             era = player_info.get('seasonStats', {}).get('pitching', {}).get('era', '-.--')
             
             row = {
