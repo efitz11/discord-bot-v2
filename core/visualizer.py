@@ -21,11 +21,13 @@ def get_color_for_desc(desc: str):
     if 'in play' in d or 'hit' in d: return COLORS['In play']
     return DEFAULT_COLOR
 
-def generate_pitch_plot(pitches) -> io.BytesIO:
+def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
+
     # canvas size - taller to accommodate high pitches
-    width, height = 1450, 1350
+    width, height = 1550, 1350
     # The zone area will be on the left, legend on the right
-    zone_area_width = 750
+    zone_area_width = 850
+
     
     img = Image.new('RGB', (width, height), color=(18, 25, 33)) # Dark background
     draw = ImageDraw.Draw(img)
@@ -99,9 +101,21 @@ def generate_pitch_plot(pitches) -> io.BytesIO:
                 continue
         return ImageFont.load_default()
 
+    font_title = get_font(56, bold=True)
     font_large = get_font(64)
     font_small = get_font(42)
     font_bold = get_font(42, bold=True)
+
+    # Draw Batter indicator
+    bat_color = (60, 70, 80)
+    if stand == "R":
+        draw.text((get_x(-1.8), get_y(4.5)), "RHB", fill=bat_color, font=font_title)
+    else:
+        draw.text((get_x(1.2), get_y(4.5)), "LHB", fill=bat_color, font=font_title)
+
+
+
+
 
 
     # Plot pitches
@@ -120,7 +134,8 @@ def generate_pitch_plot(pitches) -> io.BytesIO:
         draw.text((px - tw/2, py - th/2 - 5), num_str, fill=(255, 255, 255), font=font_bold)
         
         # Legend (on the right)
-        lx = 780
+        lx = 880
+
         ly = 100 + (i * 140)
         
         # In case too many pitches, start a second column

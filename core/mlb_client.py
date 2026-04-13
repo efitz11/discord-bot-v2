@@ -418,6 +418,8 @@ class AtBat:
     is_scoring: bool
     is_complete: bool
     pitches: List[Pitch] = None
+    stand: str = "R" # 'L' or 'R'
+
 
 
 @dataclass
@@ -1272,8 +1274,11 @@ class MLBClient:
                         is_complete = play.get('about', {}).get('isComplete', False)
                         desc = play.get('result', {}).get('description', 'Currently at bat.')
                         desc = _bold_play_description(desc, play)
-                        pitcher = play.get('matchup', {}).get('pitcher', {}).get('fullName', '')
+                        matchup = play.get('matchup', {})
+                        pitcher = matchup.get('pitcher', {}).get('fullName', '')
+                        stand = matchup.get('batSide', {}).get('code', 'R')
                         is_scoring = play.get('about', {}).get('isScoringPlay', False)
+
 
                         pitch_str, statcast_str, vid_url, vid_blurb = "", "", "", ""
                         pitches_list = []
@@ -1324,7 +1329,8 @@ class MLBClient:
                                 vid_url = content_dict[play_id]['url']
                                 vid_blurb = content_dict[play_id]['blurb']
 
-                        at_bats.append(AtBat(inning, pitcher, desc, pitch_str, statcast_str, vid_url, vid_blurb, is_scoring, is_complete, pitches_list))
+                        at_bats.append(AtBat(inning, pitcher, desc, pitch_str, statcast_str, vid_url, vid_blurb, is_scoring, is_complete, pitches_list, stand))
+
 
 
             results.append(PlayerGameStats(

@@ -203,7 +203,8 @@ class MLBSlash(commands.Cog):
             
         # Generate the graphic
         loop = asyncio.get_event_loop()
-        img_buffer = await loop.run_in_executor(None, generate_pitch_plot, target_ab.pitches)
+        img_buffer = await loop.run_in_executor(None, generate_pitch_plot, target_ab.pitches, target_ab.stand)
+
         
         # Prepare file name
         safe_name = stats_list[0].player_name.replace(" ", "_").lower()
