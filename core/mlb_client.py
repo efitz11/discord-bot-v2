@@ -955,11 +955,31 @@ class MLBClient:
 
     def __init__(self):
         self._session: Optional[aiohttp.ClientSession] = None
+        self._team_abbrevs: Optional[dict] = None
+
 
     async def get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
+
+    async def get_team_abbrevs(self) -> dict:
+        if self._team_abbrevs:
+            return self._team_abbrevs
+        
+        session = await self.get_session()
+        async with session.get(f"{self.BASE_URL}/teams?sportId=1") as resp:
+            data = await resp.json()
+            mapping = {}
+            for team in data.get('teams', []):
+                tid = team.get('id')
+                abbrev = team.get('abbreviation')
+                if abbrev == "OAK":
+                    abbrev = "ATH" # Per user request
+                mapping[tid] = abbrev
+            self._team_abbrevs = mapping
+        return self._team_abbrevs
+
 
     async def close(self):
         """Closes the aiohttp session properly."""
@@ -2330,65 +2350,112 @@ class MLBClient:
             game_abstract_state=game.abstract_state,
         )
 
-    async def get_leaders(self, stat: str, stat_group: str = None, league: str = None, position: str = None, player_pool: str = None, team_id: str = None, year: str = None) -> List["Leader"]:
+    async def get_leaders(self, stat: str, stat_group: str = None, team_id: str = None, year: str = None, league: str = None, player_pool: str = None, position: str = None, reverse: bool = False) -> List["Leader"]:
         session = await self.get_session()
+        
+        stat_group = stat_group or "hitting"
+        season = year or datetime.utcnow().year
+        if not year and datetime.utcnow().month < 3:
+            season -= 1
+
+        # Use the stats/season endpoint which allows fetching a larger pool to sort manually
         params = {
-            "leaderCategories": stat,
-            "hydrate": "team,person",
-            "limit": 10
+            "stats": "season",
+            "group": stat_group,
+            "sportId": "1",
+            "season": season,
+            "limit": 200, # Fetch enough to cover all qualified players
+            "playerPool": player_pool.upper() if player_pool else "QUALIFIED"
         }
-        if stat_group:
-            params["statGroup"] = stat_group
-            
+        
         if team_id:
             params["teamId"] = team_id
 
-        if year:
-            params["season"] = year
-            
-        if league and league.lower() in ["al", "nl"]:
-            params["leagueId"] = "103" if league.lower() == "al" else "104"
-            
-        if player_pool and player_pool.upper() != "ALL":
-            params["playerPool"] = player_pool.upper()
-
-            
         query_string = urllib.parse.urlencode(params)
         
+        if league and league.lower() in ["al", "nl"]:
+            query_string += f"&leagueId={'103' if league.lower() == 'al' else '104'}"
+
         if position:
             if position.upper() == "OF":
                 query_string += "&position=LF&position=CF&position=RF&position=OF"
             else:
                 query_string += f"&position={position.upper()}"
                 
-        url = f"{self.BASE_URL}/stats/leaders?{query_string}"
+        url = f"{self.BASE_URL}/stats?{query_string}"
         
         async with session.get(url) as resp:
             data = await resp.json()
             
-        if not data.get("leagueLeaders"):
+        if not data.get("stats") or not data["stats"][0].get("splits"):
             return []
             
+        splits = data["stats"][0]["splits"]
+        abbrev_map = await self.get_team_abbrevs()
+        
+        # Mapping for common stat keys
+
+        stat_keys = {
+            "battingAverage": "avg",
+            "earnedRunAverage": "era",
+            "runsBattedIn": "rbi",
+            "onBasePercentage": "obp",
+            "sluggingPercentage": "slg",
+            "onBasePlusSlugging": "ops",
+            "walksAndHitsPerInningPitched": "whip",
+            "strikeouts": "strikeOuts",
+            "stolenBases": "stolenBases",
+            "wins": "wins",
+            "saves": "saves",
+            "homeRuns": "homeRuns",
+            "hits": "hits",
+            "runs": "runs",
+            "walks": "baseOnBalls",
+            "gamesPlayed": "gamesPlayed",
+            "totalBases": "totalBases",
+            "atBats": "atBats",
+            "doubles": "doubles",
+            "triples": "triples"
+        }
+        
+        api_key = stat_keys.get(stat, stat)
+        
+        def safe_float(val):
+            try:
+                txt = str(val).replace(',', '')
+                if txt.startswith('.'):
+                    txt = "0" + txt
+                return float(txt)
+            except:
+                return -999999.0
+
+        # Determine if higher is better
+        lower_is_better = ["era", "earnedRunAverage", "whip", "walksAndHitsPerInningPitched", "runsAllowed", "hitsAllowed", "walksAllowed", "hitsPer9Inn", "walksPer9Inn", "homeRunsPer9Inn"]
+        hi_to_lo = api_key not in lower_is_better
+        
+        if reverse:
+            hi_to_lo = not hi_to_lo
+            
+        splits.sort(key=lambda x: safe_float(x.get("stat", {}).get(api_key, 0)), reverse=hi_to_lo)
+        
+        # Take top 10 after sort
         leaders = []
-        for l in data["leagueLeaders"][0].get("leaders", []):
-            rank = l.get("rank")
-            value = l.get("value")
-            first = l.get("person", {}).get("firstName", "")
-            last = l.get("person", {}).get("lastName", "")
-            box_name = l.get("person", {}).get("boxscoreName", "")
-            if box_name:
-                name = box_name
-            elif first and last:
-                name = f"{last}, {first[0]}"
-            else:
-                name = l.get("person", {}).get("fullName", "Unknown")
-            team_abbrev = l.get("team", {}).get("abbreviation", "FA")
-            pos_abbrev = l.get("person", {}).get("primaryPosition", {}).get("abbreviation", "")
-            leaders.append(Leader(rank, name, team_abbrev, value, pos_abbrev))
+        for i, s in enumerate(splits[:10]):
+            rank = i + 1
+            stat_obj = s.get("stat", {})
+            value = str(stat_obj.get(api_key, ""))
+            player_name = s.get("player", {}).get("fullName", "Unknown")
+            team_id = s.get("team", {}).get("id")
+            team_abbrev = abbrev_map.get(team_id, "??")
+            pos_abbrev = s.get("position", {}).get("abbreviation", "")
+            leaders.append(Leader(rank, player_name, team_abbrev, value, pos_abbrev))
+
             
         return leaders
 
-    async def get_team_leaders(self, stat: str, stat_group: str, league: str = None, year: str = None) -> List["Leader"]:
+
+    async def get_team_leaders(self, stat: str, stat_group: str, league: str = None, year: str = None, reverse: bool = False) -> List["Leader"]:
+
         session = await self.get_session()
         
         # Translate player stat key to team stat key
@@ -2433,6 +2500,10 @@ class MLBClient:
         reverse_sort = True
         if stat_group == "pitching" and team_stat_key in asc_pitching:
             reverse_sort = False
+            
+        if reverse:
+            reverse_sort = not reverse_sort
+
             
         def safe_float(val):
             try:

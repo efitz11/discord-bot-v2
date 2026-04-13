@@ -134,6 +134,16 @@ class MLBSlash(commands.Cog):
         if not current or len(current) < 2:
             return []
 
+        leaders = await self.bot.mlb_client.get_leaders(
+            stat, 
+            stat_group=group_name, 
+            team_id=team_id, 
+            year=year,
+            league=league_id,
+            player_pool=pool_name,
+            position=position,
+            reverse=reverse
+        )
         players = await self.bot.mlb_client.search_players(current)
         
         nats_choices = []
@@ -680,6 +690,7 @@ class MLBSlash(commands.Cog):
         s_type = stat_type.value if stat_type else None
         result = await self.bot.mlb_client.get_compare_stats(player_names, stat_type=s_type, year=year, career=career)
 
+
         if not result:
             await interaction.followup.send("Could not find stats for those players.")
             return
@@ -1165,7 +1176,9 @@ class MLBSlash(commands.Cog):
         year: str = None,
         position: str = None, 
         player_pool: app_commands.Choice[str] = None,
-        team: str = None
+        team: str = None,
+        reverse: bool = False
+
     ):
 
         await interaction.response.defer()
@@ -1191,7 +1204,8 @@ class MLBSlash(commands.Cog):
             group_val = stat_group.value if stat_group else ("pitching" if stat in default_pitching_stats else "hitting")
             stat_val = stat
         
-        leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id, year=year)
+        leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id, year=year, reverse=reverse)
+
 
         if not leaders_list:
             await interaction.followup.send("Could not find any leaders for those filters.")
@@ -1265,7 +1279,9 @@ class MLBSlash(commands.Cog):
         interaction: discord.Interaction, 
         stat: str, 
         league: app_commands.Choice[str] = None,
-        year: str = None
+        year: str = None,
+        reverse: bool = False
+
     ):
 
         await interaction.response.defer()
@@ -1280,8 +1296,10 @@ class MLBSlash(commands.Cog):
             default_pitching_stats = {"earnedRunAverage", "wins", "saves", "walksAndHitsPerInningPitched", "strikeoutsPer9Inn", "hitsPer9Inn", "walksPer9Inn", "homeRunsPer9", "strikeoutWalkRatio", "inningsPitched", "shutouts", "completeGames", "blownSaves", "holds", "balk", "wildPitch", "hitBatsman", "saveOpportunities", "runsScoredPer9"}
             group_val = "pitching" if stat in default_pitching_stats else "hitting"
             stat_val = stat
-            
-        leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val, year=year)
+
+        leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val, year=year, reverse=reverse)
+
+
 
         if not leaders_list:
             await interaction.followup.send("Could not find any team leaders for those filters.")
