@@ -530,9 +530,24 @@ class StandingsGroup:
     def format_discord_code_block(self, is_wc: bool = False) -> str:
         lines = []
         if is_wc:
-            lines.append("TEAM         W   L   PCT   WCGB  STRK  DIFF")
+            h_team = "TEAM".ljust(11)
+            h_w = "W".rjust(3)
+            h_l = "L".rjust(3)
+            h_pct = "PCT".rjust(5)
+            h_wcgb = "WCGB".rjust(5)
+            h_strk = "STRK".rjust(4)
+            h_diff = "RunDiff".rjust(7)
+            lines.append(f"{h_team} {h_w} {h_l} {h_pct} {h_wcgb}  {h_strk} {h_diff}")
         else:
-            lines.append("TEAM         W   L   PCT     GB  STRK  DIFF")
+            h_team = "TEAM".ljust(11)
+            h_w = "W".rjust(3)
+            h_l = "L".rjust(3)
+            h_pct = "PCT".rjust(5)
+            h_gb = "GB".rjust(6)
+            h_wcgb = "WCGB".rjust(5)
+            h_strk = "STRK".rjust(5)
+            h_diff = "Diff".rjust(5)
+            lines.append(f"{h_team} {h_w} {h_l} {h_pct} {h_gb} {h_wcgb} {h_strk} {h_diff}")
             
         for r in self.records:
             team = r['team'][:11].ljust(11)
@@ -540,16 +555,24 @@ class StandingsGroup:
             l = str(r['l']).rjust(3)
             pct = r['pct'].lstrip("0").rjust(5)
             
-            gb_val = r['wc_gb'] if is_wc else r['gb']
-            gb = "-" if str(gb_val) == "-" else str(gb_val)
-            gb = gb.rjust(5)
-            
-            strk = r['streak'].rjust(4)
-            diff = str(r['diff']).rjust(5)
-            
-            lines.append(f"{team} {w} {l} {pct} {gb}  {strk} {diff}")
+            if is_wc:
+                gb_val = r['wc_gb']
+                gb = gb_val.rjust(5)
+                strk = r['streak'].rjust(4)
+                diff = str(r['diff']).rjust(7)
+                lines.append(f"{team} {w} {l} {pct} {gb}  {strk} {diff}")
+            else:
+                gb_val = r['gb']
+                gb = str(gb_val).rjust(6)
+                wc_gb_val = r['wc_gb']
+                wc_gb = str(wc_gb_val).rjust(5)
+                strk = r['streak'].rjust(5)
+                diff = str(r['diff']).rjust(5)
+                lines.append(f"{team} {w} {l} {pct} {gb} {wc_gb} {strk} {diff}")
             
         return "\n".join(lines)
+
+
 
 @dataclass
 class PitchArsenal:
