@@ -85,15 +85,24 @@ def generate_pitch_plot(pitches) -> io.BytesIO:
     draw.line([zx_left, zy_top + 2*h_step, zx_right, zy_top + 2*h_step], fill=(120, 120, 120), width=4)
 
     # Load fonts - Ultra Large for 1450x1350 resolution
-    try:
-        font_path = "arial.ttf"
-        font_bold_path = "arialbd.ttf"
-        
-        font_large = ImageFont.truetype(font_path, 64)
-        font_small = ImageFont.truetype(font_path, 42)
-        font_bold = ImageFont.truetype(font_bold_path, 42)
-    except:
-        font_large = font_small = font_bold = ImageFont.load_default()
+    # Try different font paths for Windows/Linux compatibility
+    def get_font(size, bold=False):
+        if bold:
+            fonts = ["arialbd.ttf", "DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]
+        else:
+            fonts = ["arial.ttf", "DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"]
+            
+        for f in fonts:
+            try:
+                return ImageFont.truetype(f, size)
+            except:
+                continue
+        return ImageFont.load_default()
+
+    font_large = get_font(64)
+    font_small = get_font(42)
+    font_bold = get_font(42, bold=True)
+
 
     # Plot pitches
     for i, p in enumerate(pitches):
