@@ -50,6 +50,36 @@ class PlayerAbsView(discord.ui.View):
         await self.cog._send_player_abs(interaction, self.player_id, self.date, self.milb, edit_original=True)
         self.stop()
 
+class PitchPlotView(discord.ui.View):
+    def __init__(self, cog, player_id: str, date: str, labels: list[str]):
+        super().__init__(timeout=600)
+        self.cog = cog
+        self.player_id = player_id
+        self.date = date
+        
+        # Max 25 buttons in 5 rows
+        for i, label in enumerate(labels, 1):
+            if i > 25: break
+            btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
+            btn.callback = self.create_callback(i, label)
+            self.add_item(btn)
+
+    def create_callback(self, ab_index, label):
+        async def callback(interaction: discord.Interaction):
+            # Disable the button that was clicked to prevent spam
+            for child in self.children:
+                if isinstance(child, discord.ui.Button) and child.label == label:
+                    child.disabled = True
+                    break
+            
+            # Update the original message to show the disabled button
+            await interaction.response.edit_message(view=self)
+            # Now send the actual pitch plot as a followup
+            await self.cog._send_pitch_plot(interaction, self.player_id, ab_index, self.date)
+        return callback
+
+
+
 class MLBSlash(commands.Cog):
 
     def __init__(self, bot):
@@ -141,11 +171,13 @@ class MLBSlash(commands.Cog):
     @app_commands.autocomplete(player=player_autocomplete)
     async def plot_command(self, interaction: discord.Interaction, player: str, ab_number: int = 1, date: str = None):
         await interaction.response.defer()
+        await self._send_pitch_plot(interaction, player, ab_number, date)
+
+    async def _send_pitch_plot(self, interaction: discord.Interaction, player_id_or_name: str, ab_number: int, date: str):
         parsed_date = parse_date(date)
         
         # stats_list will typically have one GameStats object
-        stats_list = await self.bot.mlb_client.get_player_game_stats(player, date=parsed_date, include_abs=True)
-
+        stats_list = await self.bot.mlb_client.get_player_game_stats(player_id_or_name, date=parsed_date, include_abs=True)
         if not stats_list:
             await interaction.followup.send("Could not find stats for that player.")
             return
@@ -170,12 +202,11 @@ class MLBSlash(commands.Cog):
             return
             
         # Generate the graphic
-        # Use a background task or run_in_executor if it gets slow, but PIL for simple plots is fast.
         loop = asyncio.get_event_loop()
         img_buffer = await loop.run_in_executor(None, generate_pitch_plot, target_ab.pitches)
         
-        # Prepare file name (sanitize player string for filename just in case)
-        safe_name = player.replace(" ", "_").lower()
+        # Prepare file name
+        safe_name = stats_list[0].player_name.replace(" ", "_").lower()
         filename = f"pitch_plot_{safe_name}_{ab_number}.png"
         file = discord.File(fp=img_buffer, filename=filename)
         
@@ -188,10 +219,10 @@ class MLBSlash(commands.Cog):
             description=desc,
             color=discord.Color.blue()
         )
-
         embed.set_image(url=f"attachment://{filename}")
         
         await interaction.followup.send(embed=embed, file=file)
+
 
 
     async def team_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -829,10 +860,49 @@ class MLBSlash(commands.Cog):
             embed.description = desc.strip()
             embeds.append(embed)
             
+        # Create a view with inning labels for each AB
+        view = None
+        all_abs = []
+        for s in stats_list:
+            if s.at_bats:
+                all_abs.extend(s.at_bats)
+        
+        if all_abs:
+            inning_labels = []
+            inning_counts = {}
+            # First pass: count innings
+            for ab in all_abs:
+                parts = ab.inning.lower().split()
+                if len(parts) >= 2:
+                    side, num = parts[0], parts[1]
+                    emoji = "🔺" if side == "top" else "🔻"
+                    key = f"{emoji}{num}"
+                    inning_counts[key] = inning_counts.get(key, 0) + 1
+            
+            # Second pass: generate final strings
+            current_counts = {}
+            for ab in all_abs:
+                parts = ab.inning.lower().split()
+                if len(parts) >= 2:
+                    side, num = parts[0], parts[1]
+                    emoji = "🔺" if side == "top" else "🔻"
+                    key = f"{emoji}{num}"
+                    if inning_counts.get(key, 0) > 1:
+                        current_counts[key] = current_counts.get(key, 0) + 1
+                        inning_labels.append(f"{key}-{current_counts[key]}")
+                    else:
+                        inning_labels.append(key)
+                else:
+                    inning_labels.append(f"AB {len(inning_labels)+1}")
+
+            view = PitchPlotView(self, stats_list[0].player_id, stats_list[0].date, inning_labels)
+
+
         if edit_original:
-            await interaction.edit_original_response(embeds=embeds, view=None)
+            await interaction.edit_original_response(embeds=embeds, view=view)
         else:
-            await interaction.followup.send(embeds=embeds)
+            await interaction.followup.send(embeds=embeds, view=view)
+
 
 
     DIVISION_TEAMS = {
