@@ -447,20 +447,28 @@ class PlayerGameStats:
     def format_discord_code_block(self) -> str:
         if self.info_message:
             return self.info_message
-
+            
         output = ""
+        dec = self.pitching_dec if self.pitching_dec else ""
 
         if self.pitching_stats:
             s = self.pitching_stats
+            ip = s.get('inningsPitched', '0.0')
             output += " IP  H  R ER HR BB SO  P-S\n"
-            output += f"{str(s.get('inningsPitched', '0.0')):>3} {s.get('hits', 0):>2} {s.get('runs', 0):>2} {s.get('earnedRuns', 0):>2} {s.get('homeRuns', 0):>2} {s.get('baseOnBalls', 0):>2} {s.get('strikeOuts', 0):>2} {s.get('pitchesThrown', 0):>2}-{s.get('strikes', 0)} {self.pitching_dec}\n\n"
+            output += f"{ip} {s.get('hits', 0):2d} {s.get('runs', 0):2d} {s.get('earnedRuns', 0):2d} {s.get('homeRuns', 0):2d} {s.get('baseOnBalls', 0):2d} {s.get('strikeOuts', 0):2d} {s.get('pitchesThrown', 0):2d}-{s.get('strikes', 0)} {dec}\n\n"
 
         if self.batting_stats:
             s = self.batting_stats
             output += "AB H 2B 3B HR R RBI BB SO SB CS\n"
-            output += f"{s.get('atBats', 0):>2} {s.get('hits', 0)} {s.get('doubles', 0):>2} {s.get('triples', 0):>2} {s.get('homeRuns', 0):>2} {s.get('runs', 0)} {s.get('rbi', 0):>3} {s.get('baseOnBalls', 0):>2} {s.get('strikeOuts', 0):>2} {s.get('stolenBases', 0):>2} {s.get('caughtStealing', 0):>2}\n\n"
+            output += f"{s.get('atBats', 0):2d} {s.get('hits', 0):1d} {s.get('doubles', 0):2d} {s.get('triples', 0):2d} {s.get('homeRuns', 0):2d} {s.get('runs', 0):1d} {s.get('rbi', 0):3d} {s.get('baseOnBalls', 0):2d} {s.get('strikeOuts', 0):2d} {s.get('stolenBases', 0):2d} {s.get('caughtStealing', 0):2d}\n\n"
 
-        return output.strip()
+        return output.strip('\n')
+
+
+
+
+
+
 
 @dataclass
 class PlayerPercentiles:
