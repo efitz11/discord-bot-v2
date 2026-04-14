@@ -522,54 +522,87 @@ class PlayerPercentiles:
             embed.description = "No percentiles found for this year."
             return
 
-        def get_circle(val):
-            if val >= 90: return "🔥"
-            if val >= 70: return "🔴"
-            if val >= 30: return "⚪"
-            if val >= 10: return "🔵"
-            return "🧊"
-            
-        categories = {
-            "Batted Ball Profile": ["exit_velocity_avg", "barrel_batted_rate", "hard_hit_percent", "xwoba", "xba", "xslg", "sweet_spot_percent"],
-            "Plate Discipline": ["k_percent", "bb_percent", "whiff_percent", "chase_percent"],
-            "Athleticism & Value": ["sprint_speed", "oaa", "framing", "runner_run_value", "fielding_run_value", "batting_run_value"],
-            "Run Values (Pitcher)": ["pitch_run_value_fastball", "pitch_run_value_breaking", "pitch_run_value_offspeed"],
-            "Quality of Contact (Pitcher)": ["barrel_batted_rate", "exit_velocity_avg", "launch_angle_avg", "groundballs_percent", "xwoba", "xera", "k_percent", "bb_percent", "whiff_percent", "chase_percent"]
+        def get_bar(val):
+            filled = round(val / 10)
+            return "█" * filled + "░" * (10 - filled)
+
+        display_names = {
+            "exit_velocity_avg":        "Avg Exit Velo",
+            "barrel_batted_rate":       "Barrel %",
+            "hard_hit_percent":         "Hard-Hit %",
+            "xwoba":                    "xwOBA",
+            "xba":                      "xBA",
+            "xslg":                     "xSLG",
+            "sweet_spot_percent":       "LA Sweet-Spot %",
+            "k_percent":                "K %",
+            "bb_percent":               "BB %",
+            "whiff_percent":            "Whiff %",
+            "chase_percent":            "Chase %",
+            "sprint_speed":             "Sprint Speed",
+            "oaa":                      "Range (OAA)",
+            "framing":                  "Framing",
+            "runner_run_value":         "Baserunning Runs",
+            "fielding_run_value":       "Fielding Runs",
+            "batting_run_value":        "Batting Runs",
+            "launch_angle_avg":         "Launch Angle Avg",
+            "groundballs_percent":      "GB %",
+            "xera":                     "xERA",
+            "pitch_run_value_fastball": "Fastball Value",
+            "pitch_run_value_breaking": "Breaking Ball Value",
+            "pitch_run_value_offspeed": "Offspeed Value",
         }
-        
-        display_dict = {
-            "Batted Ball Profile": [],
-            "Plate Discipline": [],
-            "Athleticism & Value": [],
-            "Run Values (Pitcher)": [],
-            "Quality of Contact (Pitcher)": [],
-            "Other Metrics": []
-        }
-        
+
+        batter_categories = [
+            ("Value",    ["batting_run_value", "runner_run_value", "fielding_run_value"]),
+            ("Batting",  ["xwoba", "xba", "xslg", "exit_velocity_avg", "barrel_batted_rate",
+                          "hard_hit_percent", "sweet_spot_percent", "whiff_percent",
+                          "chase_percent", "k_percent", "bb_percent"]),
+            ("Fielding", ["oaa", "framing"]),
+            ("Running",  ["sprint_speed"]),
+        ]
+
+        pitcher_categories = [
+            ("Pitch Values",     ["pitch_run_value_fastball", "pitch_run_value_breaking", "pitch_run_value_offspeed"]),
+            ("Contact Quality",  ["barrel_batted_rate", "exit_velocity_avg", "launch_angle_avg", "groundballs_percent", "xwoba", "xera"]),
+            ("Plate Discipline", ["k_percent", "bb_percent", "whiff_percent", "chase_percent"]),
+        ]
+
+        category_list = batter_categories if self.stat_type == "Batter" else pitcher_categories
+        stat_lookup = {row['stat']: row for row in self.percentiles}
+        assigned_stats = set()
+
+        def build_section(rows):
+            # rows: list of (name, val, raw)
+            if not rows:
+                return None
+            max_len = max(len(r[0]) for r in rows)
+            lines = []
+            for name, val, raw in rows:
+                padded = name.ljust(max_len)
+                lines.append(f"{padded}  {get_bar(val)}  {val:>2}  ({raw})")
+            return "```\n" + "\n".join(lines) + "\n```"
+
+        for cat_name, targets in category_list:
+            rows = []
+            for stat_name in targets:
+                if stat_name in stat_lookup:
+                    row = stat_lookup[stat_name]
+                    name = display_names.get(stat_name, stat_name.replace("_", " ").title())
+                    rows.append((name, row['value'], row['raw']))
+                    assigned_stats.add(stat_name)
+            content = build_section(rows)
+            if content:
+                embed.add_field(name=cat_name, value=content, inline=False)
+
+        other_rows = []
         for row in self.percentiles:
-            stat_name = row['stat']
-            display_name = stat_name.replace("_", " ").title().replace("Xwoba", "xwOBA").replace("Xba", "xBA").replace("Xera", "xERA").replace("Oaa", "OAA").replace("Bb", "BB").replace("K ", "K ")
-            val = row['value']
-            raw = row['raw']
-            
-            circle = get_circle(val)
-            line = f"{circle} **{display_name}:** {val} *({raw})*"
-            
-            assigned = False
-            for cat, targets in categories.items():
-                if stat_name in targets:
-                    if self.stat_type == "Pitcher" and cat in ["Batted Ball Profile", "Plate Discipline"]: continue
-                    if self.stat_type == "Batter" and cat in ["Quality of Contact (Pitcher)", "Run Values (Pitcher)"]: continue
-                    display_dict[cat].append(line)
-                    assigned = True
-                    break
-                    
-            if not assigned:
-                display_dict["Other Metrics"].append(line)
-                
-        for cat_name, lines in display_dict.items():
-            if lines:
-                embed.add_field(name=cat_name, value="\n".join(lines), inline=False)
+            if row['stat'] not in assigned_stats:
+                stat_name = row['stat']
+                name = display_names.get(stat_name, stat_name.replace("_", " ").title())
+                other_rows.append((name, row['value'], row['raw']))
+        content = build_section(other_rows)
+        if content:
+            embed.add_field(name="Other", value=content, inline=False)
 
 @dataclass
 class StandingsGroup:
