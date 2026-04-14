@@ -2,6 +2,8 @@ from core.visualizer import generate_pitch_plot
 import io
 import asyncio
 import discord
+from typing import List, Optional, Union, Dict
+
 from discord import app_commands
 from discord.ext import commands
 from datetime import datetime, timedelta
@@ -134,17 +136,8 @@ class MLBSlash(commands.Cog):
         if not current or len(current) < 2:
             return []
 
-        leaders = await self.bot.mlb_client.get_leaders(
-            stat, 
-            stat_group=group_name, 
-            team_id=team_id, 
-            year=year,
-            league=league_id,
-            player_pool=pool_name,
-            position=position,
-            reverse=reverse
-        )
         players = await self.bot.mlb_client.search_players(current)
+
         
         nats_choices = []
         other_choices = []
@@ -174,16 +167,14 @@ class MLBSlash(commands.Cog):
     async def abs_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
-    @mlb.command(name="plot", description="Generate a pitch plot for a specific at-bat")
-    @app_commands.describe(player="The player to search for")
-    @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
-    @app_commands.describe(ab_number="The at-bat number to plot (1 for 1st AB, 2 for 2nd, etc.)")
+    @mlb.command(name="plot", description="Generate a pitch plot for a player's at-bat")
+    @app_commands.describe(player="Player name", ab_number="At-bat number (e.g. 1 for first AB). Defaults to most recent.", date="Date (e.g. today, yesterday, 2023-05-15)")
     @app_commands.autocomplete(player=player_autocomplete)
-    async def plot_command(self, interaction: discord.Interaction, player: str, ab_number: int = 1, date: str = None):
+    async def plot_command(self, interaction: discord.Interaction, player: str, ab_number: int = None, date: str = None):
         await interaction.response.defer()
         await self._send_pitch_plot(interaction, player, ab_number, date)
 
-    async def _send_pitch_plot(self, interaction: discord.Interaction, player_id_or_name: str, ab_number: int, date: str):
+    async def _send_pitch_plot(self, interaction: discord.Interaction, player_id_or_name: str, ab_number: Optional[int], date: str):
         parsed_date = parse_date(date)
         
         # stats_list will typically have one GameStats object
@@ -202,9 +193,13 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send("No at-bat data found for this player on this date.")
             return
             
+        if ab_number is None:
+            ab_number = len(all_abs)
+            
         if ab_number < 1 or ab_number > len(all_abs):
             await interaction.followup.send(f"Invalid at-bat number. Player had {len(all_abs)} at-bats in this game(s).")
             return
+
             
         target_ab = all_abs[ab_number - 1]
         if not target_ab.pitches:
