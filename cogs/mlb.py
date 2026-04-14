@@ -121,14 +121,21 @@ class MLBSlash(commands.Cog):
         if stats_list[0].headshot_url:
             embed.set_thumbnail(url=stats_list[0].headshot_url)
         
-        # Add button if any game had batting stats
+        # Add button if any game had batting stats AND no pitching stats (for pitchers, we skip ABs view)
         view = None
+        has_pitching = any(s.pitching_stats is not None for s in stats_list if not s.info_message)
         has_batting = any(s.batting_stats is not None for s in stats_list if not s.info_message)
-        if has_batting:
+        
+        if has_batting and not has_pitching:
             first = stats_list[0]
             view = PlayerAbsView(self, first.player_id, first.date, milb=False)
+
                 
-        await interaction.followup.send(embed=embed, view=view)
+        if view:
+            await interaction.followup.send(embed=embed, view=view)
+        else:
+            await interaction.followup.send(embed=embed)
+
 
 
     @line.autocomplete('player')
