@@ -907,6 +907,12 @@ class BullpenData:
         # Attach status to data
         for r in all_rows:
             r['status'] = self._get_status(r)
+            
+        # Group by status (Fresh -> Used -> Tired -> Gassed)
+        status_order = {"🟢": 0, "🟡": 1, "🔴": 2, "💀": 3}
+        self.bullpen.sort(key=lambda x: status_order.get(x.get('status', ''), 99))
+        self.starters.sort(key=lambda x: status_order.get(x.get('status', ''), 99))
+
 
         left_cols = {'name'}
         widths = {}
@@ -2555,25 +2561,50 @@ class MLBClient:
             return None
 
         now = datetime.utcnow() - timedelta(hours=5)
-        end_date = now.strftime("%Y-%m-%d")
-        start_date = (now - timedelta(days=5)).strftime("%Y-%m-%d")
+        # Look 6 days back and 3 days ahead for starters
+        start_date = (now - timedelta(days=6)).strftime("%Y-%m-%d")
+        end_date = (now + timedelta(days=3)).strftime("%Y-%m-%d")
 
         url = f"{self.BASE_URL}/schedule?sportId=1&teamId={team_id}&startDate={start_date}&endDate={end_date}"
         async with session.get(url) as resp:
             data = await resp.json()
+
+        starter_ids = set()
+        for date_obj in data.get('dates', []):
+            for game_data in date_obj['games']:
+                teams_data = game_data.get('teams', {})
+                for side_key in ['away', 'home']:
+                    t_data = teams_data.get(side_key, {})
+                    # Handle both dict and potential nested structures from API
+                    t_id = None
+                    if isinstance(t_data.get('team'), dict):
+                        t_id = t_data['team'].get('id')
+                    elif isinstance(t_data.get('team'), int):
+                        t_id = t_data['team']
+                    
+                    if t_id == team_id:
+                        prob = t_data.get('probablePitcher', {})
+                        if isinstance(prob, dict) and prob.get('id'):
+                            starter_ids.add(prob['id'])
+
+
             
-        # 1. Fetch hydrated roster for accurate handedness (L/R)
+        # 1. Fetch hydrated roster for accurate handedness (L/R) and primary position
         roster_url = f"{self.BASE_URL}/teams/{team_id}/roster?hydrate=person"
         hand_map = {}
+        sp_ids = set()
         async with session.get(roster_url) as resp:
             roster_data = await resp.json()
             for entry in roster_data.get('roster', []):
                 pid = entry['person']['id']
                 hand = entry['person'].get('pitchHand', {}).get('code', 'R')
                 hand_map[pid] = hand
+                if entry['person'].get('primaryPosition', {}).get('code') == 'SP':
+                    sp_ids.add(pid)
 
         if not data.get('dates'):
             return None
+
 
         recent_games = []
         for date_obj in data['dates']:
@@ -2587,12 +2618,26 @@ class MLBClient:
             return None
             
         recent_games.sort(key=lambda x: x['date'], reverse=True)
-        latest_game_pk = recent_games[0]['pk']
-        latest_date_obj = datetime.strptime(recent_games[0]['date'], "%Y-%m-%d")
         
-        # We look at the 4 days *prior* to the latest game
+        # Filter out future games when determining 'latest_game' for the table columns
+        today_str = now.strftime("%Y-%m-%d")
+        past_and_today = [g for g in recent_games if g['date'] <= today_str]
+        
+        if not past_and_today:
+            return None
+            
+        latest_game_pk = past_and_today[0]['pk']
+        latest_date_obj = datetime.strptime(past_and_today[0]['date'], "%Y-%m-%d")
+
+
+        
+        # We look at the 4 days *prior* to the latest game for the TABLE COLUMNS
         past_dates = [(latest_date_obj - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 5)]
         past_dates.reverse() # Oldest first, so 4/7 4/8 4/9 4/10
+
+        # Look 5 days back for starters specifically
+        starter_dates = [(latest_date_obj - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(0, 6)]
+
 
         box_url = f"{self.BASE_URL}/game/{latest_game_pk}/boxscore"
         async with session.get(box_url) as resp:
@@ -2605,6 +2650,15 @@ class MLBClient:
         team_info = box_data['teams'][side]
         bullpen_ids = team_info.get('bullpen', [])
         players_db = team_info.get('players', {})
+
+        # Ensure today's starter and opponent's starters are caught if they are in the list
+        for side_key in ['away', 'home']:
+            t_side = box_data['teams'][side_key]
+            if t_side.get('team', {}).get('id') == team_id:
+                pitchers = t_side.get('pitchers', [])
+                if pitchers:
+                    starter_ids.add(pitchers[0])
+
 
         if not bullpen_ids:
             return None
@@ -2628,8 +2682,10 @@ class MLBClient:
         tasks = []
         for g in recent_games:
             dt = g['date']
-            if dt in past_dates:
+            # Fetch boxscores for both display columns AND starter identification range
+            if dt in starter_dates or dt in past_dates:
                 tasks.append(fetch_oldbox(g['pk'], dt))
+
         if tasks:
             await asyncio.gather(*tasks)
 
@@ -2650,11 +2706,19 @@ class MLBClient:
                 'era': era,
             }
             
-            is_starter = False
+            is_starter = (pid in starter_ids) or (pid in sp_ids)
+
+            # Check past 5 days for starters (current game + 5 prior)
+            for pd in starter_dates:
+                if pd in oldboxes:
+                    for old_team in oldboxes[pd]:
+                        if pid in (old_team.get('pitchers', [])[:1]): # Check if they were the actual starter
+                            is_starter = True
+                            break
+
             for i, pd in enumerate(past_dates):
                 short_pd = short_dates[i]
                 total_pitches = 0
-                
                 if pd in oldboxes:
                     for old_team in oldboxes[pd]:
                         old_player = old_team.get('players', {}).get(p_key, {})
@@ -2662,12 +2726,8 @@ class MLBClient:
                             p_stats = old_player.get('stats', {}).get('pitching', {})
                             if p_stats and p_stats.get('pitchesThrown', 0) > 0:
                                 total_pitches += p_stats['pitchesThrown']
-                        
-                        old_pitchers = old_team.get('pitchers', [])
-                        if old_pitchers and old_pitchers[0] == pid:
-                            is_starter = True
-                            
                 row[short_pd] = str(total_pitches) if total_pitches > 0 else ""
+
 
             if is_starter:
                 starters.append(row)
