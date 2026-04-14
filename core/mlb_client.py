@@ -464,11 +464,52 @@ class PlayerGameStats:
 
         return output.strip('\n')
 
+@dataclass
+class PaceData:
+    player_id: int
+    player_name: str
+    team_abbrev: str
+    team_gp: int
+    is_pitcher: bool
+    current_stats: dict
+    projected_stats: dict
+    year: int
+    player_url: str = ""
 
-
-
-
-
+    def format_discord_code_block(self) -> str:
+        output = ""
+        if self.is_pitcher:
+            # Row 1: G GS W L SV HLD IP SO BB
+            h1 = "       G  GS   W   L  SV HLD    IP   SO  BB\n"
+            c = self.current_stats
+            p = self.projected_stats
+            
+            c1 = "CURR " + f"{c.get('gamesPitched',0):3d} {c.get('gamesStarted',0):3d} {c.get('wins',0):3d} {c.get('losses',0):3d} {c.get('saves',0):3d} {c.get('holds',0):3d} {str(c.get('inningsPitched','0.0')):5s} {c.get('strikeOuts',0):4d} {c.get('baseOnBalls',0):3d}\n"
+            p1 = "PROJ " + f"{p.get('gamesPitched',0):3d} {p.get('gamesStarted',0):3d} {p.get('wins',0):3d} {p.get('losses',0):3d} {p.get('saves',0):3d} {p.get('holds',0):3d} {str(p.get('inningsPitched','0.0')):5s} {p.get('strikeOuts',0):4d} {p.get('baseOnBalls',0):3d}\n"
+            
+            # Row 2: H R ER HR ERA WHIP
+            h2 = "       H   R  ER  HR    ERA    WHIP\n"
+            c2 = "CURR " + f"{c.get('hits',0):3d} {c.get('runs',0):3d} {c.get('earnedRuns',0):3d} {c.get('homeRuns',0):3d} {c.get('era','-.--'):>7s} {c.get('whip','-.--'):>6s}\n"
+            p2 = "PROJ " + f"{p.get('hits',0):3d} {p.get('runs',0):3d} {p.get('earnedRuns',0):3d} {p.get('homeRuns',0):3d} {p.get('era','-.--'):>7s} {p.get('whip','-.--'):>6s}"
+            
+            output = h1 + c1 + p1 + "\n" + h2 + c2 + p2
+        else:
+            # Row 1: G PA AB R H 2B 3B HR RBI BB SO
+            h1 = "       G  PA  AB   R   H  2B  3B  HR RBI  BB  SO\n"
+            c = self.current_stats
+            p = self.projected_stats
+            
+            c1 = "CURR " + f"{c.get('gamesPlayed',0):3d} {c.get('plateAppearances',0):3d} {c.get('atBats',0):3d} {c.get('runs',0):3d} {c.get('hits',0):3d} {c.get('doubles',0):3d} {c.get('triples',0):3d} {c.get('homeRuns',0):3d} {c.get('rbi',0):3d} {c.get('baseOnBalls',0):3d} {c.get('strikeOuts',0):3d}\n"
+            p1 = "PROJ " + f"{p.get('gamesPlayed',0):3d} {p.get('plateAppearances',0):3d} {p.get('atBats',0):3d} {p.get('runs',0):3d} {p.get('hits',0):3d} {p.get('doubles',0):3d} {p.get('triples',0):3d} {p.get('homeRuns',0):3d} {p.get('rbi',0):3d} {p.get('baseOnBalls',0):3d} {p.get('strikeOuts',0):3d}\n"
+            
+            # Row 2: SB CS IBB HBP AVG OBP SLG OPS
+            h2 = "      SB  CS IBB HBP    AVG    OBP    SLG    OPS\n"
+            c2 = "CURR " + f"{c.get('stolenBases',0):3d} {c.get('caughtStealing',0):3d} {c.get('intentionalWalks',0):3d} {c.get('hitByPitch',0):3d} {c.get('avg','-.--'):>6s} {c.get('obp','-.--'):>6s} {c.get('slg','-.--'):>6s} {c.get('ops','-.--'):>6s}\n"
+            p2 = "PROJ " + f"{p.get('stolenBases',0):3d} {p.get('caughtStealing',0):3d} {p.get('intentionalWalks',0):3d} {p.get('hitByPitch',0):3d} {p.get('avg','-.--'):>6s} {p.get('obp','-.--'):>6s} {p.get('slg','-.--'):>6s} {p.get('ops','-.--'):>6s}"
+            
+            output = h1 + c1 + p1 + "\n" + h2 + c2 + p2
+            
+        return output
 
 @dataclass
 class PlayerPercentiles:
@@ -2850,5 +2891,133 @@ class MLBClient:
 
         if games:
             await asyncio.gather(*(fetch_pbp(g) for g in games), *(fetch_nohit_pitchers(g) for g in games))
-
         return games
+
+    async def get_player_pace_stats(self, player_id_or_name: str) -> Optional[PaceData]:
+
+        session = await self.get_session()
+        
+        # 1. Resolve player ID
+        player_id = None
+        if player_id_or_name.isdigit():
+            player_id = int(player_id_or_name)
+        else:
+            search_results = await self.search_players(player_id_or_name)
+            if search_results:
+                player_id = search_results[0].get('id')
+        
+        if not player_id:
+            return None
+            
+        # 2. Get season stats
+        url = f"{self.BASE_URL}/people/{player_id}/stats?stats=season&group=hitting,pitching&hydrate=team"
+        async with session.get(url) as resp:
+            data = await resp.json()
+            
+        if not data.get('stats'):
+            return None
+            
+        hitting_split = None
+        pitching_split = None
+        
+        for stat_obj in data['stats']:
+            group = stat_obj.get('group', {}).get('displayName')
+            if group == 'hitting' and stat_obj.get('splits'):
+                hitting_split = stat_obj['splits'][-1]
+            if group == 'pitching' and stat_obj.get('splits'):
+                pitching_split = stat_obj['splits'][-1]
+                
+        if not hitting_split and not pitching_split:
+            return None
+            
+        is_pitcher = pitching_split is not None
+        split = pitching_split if is_pitcher else hitting_split
+        
+        roster_url = f"{self.BASE_URL}/people/{player_id}"
+        async with session.get(roster_url) as resp:
+            p_data = await resp.json()
+            person = p_data.get('people', [{}])[0]
+            pos_code = person.get('primaryPosition', {}).get('code', '')
+            if pos_code != '1' and hitting_split:
+                is_pitcher = False
+                split = hitting_split
+        
+        player_name = person.get('fullName', 'Unknown')
+        team_id = split.get('team', {}).get('id')
+        team_abbrev = split.get('team', {}).get('abbreviation', '??')
+        current_stats = split['stat']
+        year = split['season']
+        
+        # 3. Get team games played
+        team_gp = 1
+        if team_id:
+            team_url = f"{self.BASE_URL}/teams/{team_id}?hydrate=standings"
+            async with session.get(team_url) as resp:
+                t_data = await resp.json()
+                team_obj = t_data.get('teams', [{}])[0]
+                record = team_obj.get('record', {})
+                team_gp = record.get('gamesPlayed', 1)
+        
+        if team_gp == 0: team_gp = 1
+        
+        # 4. Calculate projection
+        projected = {}
+        if is_pitcher:
+            keys = ['gamesPitched', 'gamesStarted', 'wins', 'losses', 'saves', 'holds', 'strikeOuts', 'baseOnBalls', 'inningsPitched', 'battersFaced', 'hits', 'runs', 'earnedRuns', 'homeRuns']
+        else:
+            keys = ['gamesPlayed', 'plateAppearances', 'atBats', 'runs', 'hits', 'doubles', 'triples', 'homeRuns', 'rbi', 'baseOnBalls', 'strikeOuts', 'stolenBases', 'caughtStealing', 'intentionalWalks', 'hitByPitch']
+            
+        for k in keys:
+            val = current_stats.get(k, 0)
+            if isinstance(val, str) and k == 'inningsPitched':
+                parts = val.split('.')
+                pure_innings = float(parts[0])
+                if len(parts) > 1:
+                    pure_innings += float(parts[1]) / 3.0
+                proj_pure = (pure_innings / team_gp) * 162
+                whole = int(proj_pure)
+                frac = proj_pure - whole
+                outs = round(frac * 3)
+                if outs == 3:
+                    whole += 1
+                    outs = 0
+                projected[k] = f"{whole}.{outs}"
+            else:
+                try:
+                    num = float(val)
+                    proj = (num / team_gp) * 162
+                    projected[k] = round(proj)
+                except:
+                    projected[k] = val
+                    
+        rate_keys = ['avg', 'obp', 'slg', 'ops', 'era', 'whip']
+        for k in rate_keys:
+            if k in current_stats:
+                projected[k] = current_stats[k]
+
+        return PaceData(
+            player_id=player_id,
+            player_name=player_name,
+            team_abbrev=team_abbrev,
+            team_gp=team_gp,
+            is_pitcher=is_pitcher,
+            current_stats=current_stats,
+            projected_stats=projected,
+            year=year,
+            player_url=f"https://www.mlb.com/player/{player_id}"
+        )
+
+    async def get_team_id(self, query: str) -> Optional[int]:
+        session = await self.get_session()
+        url = f"{self.BASE_URL}/teams?sportId=1"
+        try:
+            async with session.get(url) as resp:
+                data = await resp.json()
+                query = query.lower()
+                for team in data.get('teams', []):
+                    if query in team['name'].lower() or query == team.get('abbreviation', '').lower():
+                        return team['id']
+        except:
+            pass
+        return None
+

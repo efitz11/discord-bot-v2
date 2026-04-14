@@ -319,6 +319,30 @@ class MLBSlash(commands.Cog):
 
         await interaction.followup.send(embeds=embeds)
 
+    @mlb.command(name="pace", description="Calculate a player's projected 162-game season totals.")
+    @app_commands.describe(player="The player to calculate pace for")
+    @app_commands.autocomplete(player=player_autocomplete)
+    async def pace(self, interaction: discord.Interaction, player: str):
+        await interaction.response.defer()
+        pace_data = await self.bot.mlb_client.get_player_pace_stats(player)
+        
+        if not pace_data:
+            await interaction.followup.send("Could not find stats for that player.")
+            return
+
+        embed = discord.Embed(
+            title=f"162-Game Pace: {pace_data.player_name}",
+            url=pace_data.player_url,
+            color=discord.Color.blue(),
+            description=f"Projected over 162 games based on **{pace_data.team_abbrev}'s** {pace_data.team_gp} games played."
+        )
+        embed.set_thumbnail(url=f"https://img.mlbstatic.com/mlb-photos/api/v1/people/{pace_data.player_id}/headshot/67/at-bat")
+
+        embed.description += f"\n```python\n{pace_data.format_discord_code_block()}\n```"
+        await interaction.followup.send(embed=embed)
+
+
+
     @mlb.command(name="percentiles", description="Get a player's Baseball Savant percentiles")
     @app_commands.describe(player="Player name to search for", year="Target year (e.g., 2024)")
     async def percentiles(self, interaction: discord.Interaction, player: str, year: str = None):
