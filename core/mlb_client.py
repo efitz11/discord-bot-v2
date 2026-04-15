@@ -514,6 +514,7 @@ class PaceData:
 @dataclass
 class PlayerPercentiles:
     player_name: str
+    team_abbrev: str
     year: str
     stat_type: str
     percentiles: List[dict]
@@ -527,13 +528,13 @@ class PlayerPercentiles:
             return "█" * filled + "░" * (10 - filled)
 
         display_names = {
-            "exit_velocity_avg":        "Avg Exit Velo",
+            "exit_velocity_avg":        "Avg EV",
             "barrel_batted_rate":       "Barrel %",
             "hard_hit_percent":         "Hard-Hit %",
             "xwoba":                    "xwOBA",
             "xba":                      "xBA",
             "xslg":                     "xSLG",
-            "sweet_spot_percent":       "LA Sweet-Spot %",
+            "sweet_spot_percent":       "Sweet-Spot %",
             "k_percent":                "K %",
             "bb_percent":               "BB %",
             "whiff_percent":            "Whiff %",
@@ -541,19 +542,19 @@ class PlayerPercentiles:
             "sprint_speed":             "Sprint Speed",
             "oaa":                      "Range (OAA)",
             "framing":                  "Framing",
-            "runner_run_value":         "Baserunning Runs",
-            "fielding_run_value":       "Fielding Runs",
-            "batting_run_value":        "Batting Runs",
-            "launch_angle_avg":         "Launch Angle Avg",
+            "runner_run_value":         "Baserunning",
+            "fielding_run_value":       "Fielding",
+            "batting_run_value":        "Batting",
+            "launch_angle_avg":         "Avg LA",
             "groundballs_percent":      "GB %",
             "xera":                     "xERA",
-            "pitch_run_value_fastball": "Fastball Value",
-            "pitch_run_value_breaking": "Breaking Ball Value",
-            "pitch_run_value_offspeed": "Offspeed Value",
+            "pitch_run_value_fastball": "Fastball",
+            "pitch_run_value_breaking": "Breaking Ball",
+            "pitch_run_value_offspeed": "Offspeed",
         }
 
         batter_categories = [
-            ("Value",    ["batting_run_value", "runner_run_value", "fielding_run_value"]),
+            ("Run Value",    ["batting_run_value", "runner_run_value", "fielding_run_value"]),
             ("Batting",  ["xwoba", "xba", "xslg", "exit_velocity_avg", "barrel_batted_rate",
                           "hard_hit_percent", "sweet_spot_percent", "whiff_percent",
                           "chase_percent", "k_percent", "bb_percent"]),
@@ -569,6 +570,9 @@ class PlayerPercentiles:
         category_list = batter_categories if self.stat_type == "Batter" else pitcher_categories
         stat_lookup = {row['stat']: row for row in self.percentiles}
         assigned_stats = set()
+
+        # pad stat names to the length of the longest name
+        padding = max(len(v) for v in display_names.values())
 
         def build_section(rows):
             # rows: list of (name, val, raw)
@@ -586,7 +590,7 @@ class PlayerPercentiles:
             for stat_name in targets:
                 if stat_name in stat_lookup:
                     row = stat_lookup[stat_name]
-                    name = display_names.get(stat_name, stat_name.replace("_", " ").title()).rjust(16)
+                    name = display_names.get(stat_name, stat_name.replace("_", " ").title()).rjust(padding)
                     rows.append((name, row['value'], row['raw']))
                     assigned_stats.add(stat_name)
             content = build_section(rows)
@@ -597,7 +601,7 @@ class PlayerPercentiles:
         for row in self.percentiles:
             if row['stat'] not in assigned_stats:
                 stat_name = row['stat']
-                name = display_names.get(stat_name, stat_name.replace("_", " ").title()).rjust(16)
+                name = display_names.get(stat_name, stat_name.replace("_", " ").title()).rjust(padding)
                 other_rows.append((name, row['value'], row['raw']))
         content = build_section(other_rows)
         if content:
@@ -1856,8 +1860,20 @@ class MLBClient:
         resolved = await self.resolve_player(player_id_or_name)
         if not resolved:
             return None
-            
+
         pid = resolved['id']
+
+        # Fetch player's current team
+        team_abbrev = ""
+        try:
+            async with session.get(f"{self.BASE_URL}/people/{pid}?hydrate=currentTeam") as resp:
+                data = await resp.json()
+                person = data.get('people', [{}])[0]
+                team_info = person.get('currentTeam', {})
+                team_abbrev = team_info.get('abbreviation', '')
+        except:
+            pass
+
         url = f"https://baseballsavant.mlb.com/savant-player/{pid}"
         
         async with session.get(url) as resp:
@@ -1941,7 +1957,7 @@ class MLBClient:
                 table_rows.append(d)
                 
         table_rows = sorted(table_rows, key=lambda i: i["value"], reverse=True)
-        return PlayerPercentiles(resolved['name'], str(year_stats.get('year')), stat_type, table_rows)
+        return PlayerPercentiles(resolved['name'], team_abbrev, str(year_stats.get('year')), stat_type, table_rows)
 
     async def get_highlights(self, query: str, date: str = None) -> List[HighlightItem]:
         session = await self.get_session()

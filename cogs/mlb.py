@@ -355,8 +355,9 @@ class MLBSlash(commands.Cog):
                 await interaction.followup.send(f"No savant data found for **{player}**.")
                 return
 
+            team_display = f" ({stats_raw.team_abbrev})" if stats_raw.team_abbrev else ""
             embed = discord.Embed(
-                title=f"{stats_raw.year} {stats_raw.stat_type} Percentiles — {stats_raw.player_name}",
+                title=f"{stats_raw.year} {stats_raw.stat_type} Percentiles — {stats_raw.player_name}{team_display}",
                 color=discord.Color.red()
             )
             stats_raw.apply_to_embed(embed)
