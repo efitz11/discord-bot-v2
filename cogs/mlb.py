@@ -466,7 +466,7 @@ class MLBSlash(commands.Cog):
             )
             
             # Create Table
-            header = "BATTER          PA  AVG    OPS  HR  SO\n"
+            header = "BATTER          PA   AVG    OPS  HR  SO\n"
             rows = []
             for m in matchups[:20]: # Show top 20 by PA
                 name = m.batter_name[:14].ljust(14)
@@ -486,15 +486,23 @@ class MLBSlash(commands.Cog):
             
             for m in matchups:
                 if m.pa < 5: continue
-                
+
                 try:
                     ops_f = float(m.ops)
                 except: ops_f = 0.0
-                
+
+                stat_parts = [f"{m.pa} PA", f"{m.h} H"]
+                if m.d > 0: stat_parts.append(f"{m.d} 2B")
+                if m.t > 0: stat_parts.append(f"{m.t} 3B")
+                if m.hr > 0: stat_parts.append(f"{m.hr} HR")
+                if m.bb > 0: stat_parts.append(f"{m.bb} BB")
+                if m.so > 0: stat_parts.append(f"{m.so} SO")
+                stats = f"({', '.join(stat_parts)})"
+
                 if ops_f > 1.100:
-                    hitter_owns.append(f"**{m.batter_name}** ({m.pa} PA, {m.ops} OPS)")
+                    hitter_owns.append(f"**{m.batter_name}** {stats}")
                 elif ops_f < .500:
-                    pitcher_owns.append(f"**{m.batter_name}** ({m.pa} PA, {m.ops} OPS)")
+                    pitcher_owns.append(f"**{m.batter_name}** {stats}")
             
             if hitter_owns:
                 embed.add_field(name="👑 Hitter Owns Pitcher", value="\n".join(hitter_owns[:5]), inline=False)

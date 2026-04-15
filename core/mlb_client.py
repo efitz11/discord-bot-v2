@@ -708,6 +708,8 @@ class BatterVsPitcher:
     pa: int
     ab: int
     h: int
+    d: int
+    t: int
     hr: int
     bb: int
     so: int
@@ -2130,7 +2132,7 @@ class MLBClient:
                 
             if not splits:
                 return BatterVsPitcher(
-                    batter_name=batter_name, pa=0, ab=0, h=0, hr=0, bb=0, so=0, avg=".000", ops=".000"
+                    batter_name=batter_name, pa=0, ab=0, h=0, d=0, t=0, hr=0, bb=0, so=0, avg=".000", ops=".000"
                 )
                 
             # Aggregate raw totals for precise career math
@@ -2150,7 +2152,7 @@ class MLBClient:
             
             if pa == 0:
                 return BatterVsPitcher(
-                    batter_name=batter_name, pa=0, ab=0, h=0, hr=0, bb=0, so=0, avg=".000", ops=".000"
+                    batter_name=batter_name, pa=0, ab=0, h=0, d=0, t=0, hr=0, bb=0, so=0, avg=".000", ops=".000"
                 )
                 
             avg_str = f"{(h / ab):.3f}".lstrip('0') if ab > 0 else ".000"
@@ -2162,12 +2164,12 @@ class MLBClient:
             # Precise SLG = (Singles + 2*D + 3*T + 4*HR) / AB
             singles = h - (d + t + hr)
             slg = (singles + 2*d + 3*t + 4*hr) / ab if ab > 0 else 0.0
-            
-            ops_str = f"{(obp + slg):.3f}"
+
+            ops_str = f"{(obp + slg):.3f}".lstrip('0')
             
             return BatterVsPitcher(
                 batter_name=batter_name,
-                pa=pa, ab=ab, h=h, hr=hr, bb=bb, so=so,
+                pa=pa, ab=ab, h=h, d=d, t=t, hr=hr, bb=bb, so=so,
                 avg=avg_str if avg_str != ".000" else ".000",
                 ops=ops_str
             )
