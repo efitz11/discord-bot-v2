@@ -557,8 +557,7 @@ class PlayerPercentiles:
             ("Batting",  ["xwoba", "xba", "xslg", "exit_velocity_avg", "barrel_batted_rate",
                           "hard_hit_percent", "sweet_spot_percent", "whiff_percent",
                           "chase_percent", "k_percent", "bb_percent"]),
-            ("Fielding", ["oaa", "framing"]),
-            ("Running",  ["sprint_speed"]),
+            ("Fielding and Running", ["oaa", "framing", "sprint_speed"]),
         ]
 
         pitcher_categories = [
@@ -587,7 +586,7 @@ class PlayerPercentiles:
             for stat_name in targets:
                 if stat_name in stat_lookup:
                     row = stat_lookup[stat_name]
-                    name = display_names.get(stat_name, stat_name.replace("_", " ").title())
+                    name = display_names.get(stat_name, stat_name.replace("_", " ").title()).rjust(16)
                     rows.append((name, row['value'], row['raw']))
                     assigned_stats.add(stat_name)
             content = build_section(rows)
@@ -598,7 +597,7 @@ class PlayerPercentiles:
         for row in self.percentiles:
             if row['stat'] not in assigned_stats:
                 stat_name = row['stat']
-                name = display_names.get(stat_name, stat_name.replace("_", " ").title())
+                name = display_names.get(stat_name, stat_name.replace("_", " ").title()).rjust(16)
                 other_rows.append((name, row['value'], row['raw']))
         content = build_section(other_rows)
         if content:
