@@ -1612,8 +1612,13 @@ class MLBClient:
                         break
                     else:
                         if not target_years:
-                            target_years = [splits[-1].get('season', str(datetime.now().year))]
-                            
+                            now = datetime.now()
+                            # Default to current year if season has started, otherwise use most recent stats
+                            if now.month >= 4:
+                                target_years = [str(now.year)]
+                            else:
+                                target_years = [splits[-1].get('season', str(now.year))]
+
                         for split in splits:
                             season = split.get('season', '')
                             if season in target_years:
@@ -1825,8 +1830,8 @@ class MLBClient:
                     for split in stat_group.get('splits', []):
                         if split.get('season') == target_year:
                             player_stat = split.get('stat', {})
-                    # If no stats for the target year, try the most recent
-                    if player_stat is None:
+                    # Only fall back to most recent year if season hasn't started yet (before April)
+                    if player_stat is None and now.month < 4:
                         splits = stat_group.get('splits', [])
                         if splits:
                             player_stat = splits[-1].get('stat', {})
@@ -1836,7 +1841,10 @@ class MLBClient:
                 player_stat['team'] = team_abbrev
                 rows.append(player_stat)
             else:
-                errors.append(f"No {stat_type} stats found for {full_name}.")
+                if now.month >= 4:
+                    errors.append(f"No stats yet for {full_name} in {target_year}.")
+                else:
+                    errors.append(f"No {stat_type} stats found for {full_name}.")
 
         if not rows:
             return None
