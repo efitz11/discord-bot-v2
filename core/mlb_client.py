@@ -667,15 +667,15 @@ class PitchArsenal:
             return "No pitch arsenal data found."
 
         lines = []
-        lines.append("PITCH        USE%  WHIFF%  K%    BA    xBA   RV/100")
+        lines.append("PITCH         USE%  WHIFF%    K%    BA   xBA RV/100")
         
         for p in self.pitches:
             name = p['name'][:12].ljust(12)
             usage = str(p['usage']).rjust(4) + '%'
             whiff = str(p['whiff']).rjust(5) + '%'
             k_pct = str(p['k_pct']).rjust(4) + '%'
-            ba = str(p['ba']).rjust(5)
-            xba = str(p['xba']).rjust(5)
+            ba = f"{float(p['ba']):.3f}".lstrip('0').rjust(5)
+            xba = f"{float(p['xba']):.3f}".lstrip('0').rjust(5)
             rv = str(p['rv100']).rjust(6)
             lines.append(f"{name} {usage}  {whiff} {k_pct} {ba} {xba} {rv}")
         
