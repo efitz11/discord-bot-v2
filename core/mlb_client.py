@@ -1578,7 +1578,7 @@ class MLBClient:
                         else:
                             t_abbrev = split.get('team', {}).get('abbreviation')
                         if t_abbrev and t_abbrev not in ['MLB', 'MiLB']:
-                            if t_abbrev not in career_teams:
+                            if len(career_teams) == 0 or career_teams[-1] != t_abbrev:
                                 career_teams.append(t_abbrev)
             
             if career_years:
