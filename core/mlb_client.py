@@ -1493,7 +1493,7 @@ class MLBClient:
 
         headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
 
-        league_list_id = "mlb_milb" if milb else "mlb_hist"
+        league_list_id = "mlb_milb" if milb else "mlb"
         person_url = f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam,team,draft,stats(type=[yearByYear,careerRegularSeason,career](team(league,sport)),leagueListId={league_list_id},group=[hitting,pitching])"
         async with session.get(person_url) as resp:
             person_data = await resp.json()
