@@ -1567,7 +1567,8 @@ class MLBClient:
         career_years_str = ""
         if career:
             career_years = []
-            career_teams = []
+            career_teams = []  # List of (team_id, abbrev) tuples in chronological order
+            team_id_to_latest_abbrev = {}  # Map of team_id -> most recent abbreviation
             for stat_group in all_stats:
                 if stat_group['type']['displayName'] == 'yearByYear':
                     for split in stat_group.get('splits', []):
@@ -1576,16 +1577,26 @@ class MLBClient:
                             career_years.append(season)
                         if milb:
                             t_abbrev = split.get('sport', {}).get('abbreviation')
+                            t_id = None
                         else:
                             t_abbrev = split.get('team', {}).get('abbreviation')
+                            t_id = split.get('team', {}).get('id')
                         if t_abbrev and t_abbrev not in ['MLB', 'MiLB']:
-                            if len(career_teams) == 0 or career_teams[-1] != t_abbrev:
-                                career_teams.append(t_abbrev)
-            
+                            # Track the most recent abbreviation for this team
+                            team_id_to_latest_abbrev[t_id] = t_abbrev
+                            # Only add if different from the last team (avoid back-to-back duplicates)
+                            if not career_teams or t_id != career_teams[-1][0]:
+                                career_teams.append((t_id, t_abbrev))
+                    # Only process the first yearByYear stat group to avoid duplicates
+                    break
+
             if career_years:
                 career_years_str = f"{min(career_years)}-{max(career_years)}" if len(career_years) > 1 else min(career_years)
             if career_teams:
-                info_line += f"\n\n{'-'.join(career_teams)}"
+                # Use the most recent abbreviation for each team
+                team_abbrevs = [team_id_to_latest_abbrev[t_id] for t_id, _ in career_teams]
+                unique_team_count = len(set(t_id for t_id, _ in career_teams))
+                info_line += f"\n\n{'-'.join(team_abbrevs)} ({unique_team_count} teams)"
 
         for st in stat_types_to_fetch:
             found_stats = []
