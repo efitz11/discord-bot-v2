@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot
+from core.visualizer import generate_pitch_plot, generate_zone_plot
 import io
 import asyncio
 import discord
@@ -1385,6 +1385,48 @@ class MLBSlash(commands.Cog):
         return await self.stat_autocomplete(interaction, current)
 
 
+
+    @mlb.command(name="zoneplot", description="Show a batter's hitting zone heatmap from Baseball Savant")
+    @app_commands.describe(player="Batter name", year="Season year (default: current)", chart_type="Stat to display (default: ba)")
+    @app_commands.choices(chart_type=[
+        app_commands.Choice(name="Batting Average (BA)", value="ba"),
+        # app_commands.Choice(name="Slugging (SLG)", value="slg"),
+        # app_commands.Choice(name="wOBA", value="woba"),
+        # app_commands.Choice(name="xBA", value="xba"),
+        # app_commands.Choice(name="xSLG", value="xslg"),
+        # app_commands.Choice(name="xwOBA", value="xwoba"),
+        app_commands.Choice(name="Whiff %", value="whiff_percent"),
+        app_commands.Choice(name="Swing %", value="swing_percent"),
+    ])
+    async def zoneplot_command(self, interaction: discord.Interaction, player: str, year: str = None, chart_type: str = "ba"):
+        await interaction.response.defer()
+        data = await self.bot.mlb_client.get_zone_plot_data(player, year=year, chart_type=chart_type)
+        if not data:
+            await interaction.followup.send(f"No zone data found for **{player}**.")
+            return
+
+        loop = asyncio.get_event_loop()
+        img_buffer = await loop.run_in_executor(None, generate_zone_plot, data)
+
+        label_map = {
+            'ba': 'BA', 'slg': 'SLG', 'obp': 'OBP', 'woba': 'wOBA',
+            'xba': 'xBA', 'xslg': 'xSLG', 'xwoba': 'xwOBA',
+            'whiff_percent': 'Whiff%', 'swing_percent': 'Swing%',
+        }
+        chart_label = label_map.get(chart_type, chart_type.upper())
+        safe_name = data['player_name'].replace(' ', '_').lower()
+        filename = f"zoneplot_{safe_name}_{data['year']}_{chart_type}.png"
+
+        embed = discord.Embed(
+            title=f"{data['player_name']} — {chart_label} Zone Plot ({data['year']})",
+            color=discord.Color.red()
+        )
+        embed.set_image(url=f"attachment://{filename}")
+        await interaction.followup.send(embed=embed, file=discord.File(fp=img_buffer, filename=filename))
+
+    @zoneplot_command.autocomplete('player')
+    async def zoneplot_player_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
 
     @mlb.command(name="next", description="Get the upcoming games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")

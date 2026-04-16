@@ -3116,6 +3116,39 @@ class MLBClient:
             player_url=f"https://www.mlb.com/player/{player_id}"
         )
 
+    async def get_zone_plot_data(self, player_id_or_name: str, year: str = None, chart_type: str = 'ba') -> Optional[dict]:
+        """Fetch batting zone data from Baseball Savant for a given batter."""
+        resolved = await self.resolve_player(player_id_or_name)
+        if not resolved:
+            return None
+        player_id = resolved['id']
+        player_name = resolved['name']
+
+        from datetime import timezone
+        target_year = year or str(datetime.now(timezone.utc).year)
+        session = await self.get_session()
+        url = (
+            f"https://baseballsavant.mlb.com/visuals/sm"
+            f"?pitch_type=&batter={player_id}&pitcher=&balls=&strikes="
+            f"&year={target_year}&min_strikes=0&bucket_size=0.5&chart_type={chart_type}"
+            f"&player_id={player_id}&position=6"
+        )
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                return None
+            cells = await resp.json(content_type=None)
+
+        if not cells:
+            return None
+
+        return {
+            'player_name': player_name,
+            'player_id': player_id,
+            'year': target_year,
+            'chart_type': chart_type,
+            'cells': cells,
+        }
+
     async def get_team_id(self, query: str) -> Optional[int]:
         session = await self.get_session()
         url = f"{self.BASE_URL}/teams?sportId=1"
