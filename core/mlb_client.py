@@ -671,18 +671,19 @@ class PitchArsenal:
             return "No pitch arsenal data found."
 
         lines = []
-        lines.append("PITCH         USE%  WHIFF%    K%    BA   xBA RV/100")
-        
+        lines.append("PITCH        SPEED USE% WHIFF%  K%     BA   xBA")
+
         for p in self.pitches:
             name = p['name'][:12].ljust(12)
-            usage = str(p['usage']).rjust(4) + '%'
-            whiff = str(p['whiff']).rjust(5) + '%'
-            k_pct = str(p['k_pct']).rjust(4) + '%'
-            ba = f"{float(p['ba']):.3f}".lstrip('0').rjust(5)
-            xba = f"{float(p['xba']):.3f}".lstrip('0').rjust(5)
+            usage = str(int(float(p['usage'] or 0))).rjust(3) + '%'
+            whiff = str(int(float(p['whiff'] or 0))).rjust(5) + '%'
+            k_pct = str(int(float(p['k_pct'] or 0))).rjust(2) + '%'
+            speed = f"{float(p['avg_speed'] or 0):.1f}".rjust(5)
+            ba = f"{float(p['ba'] or 0):.3f}".lstrip('0').rjust(5)
+            xba = f"{float(p['xba'] or 0):.3f}".lstrip('0').rjust(5)
             rv = str(p['rv100']).rjust(6)
-            lines.append(f"{name} {usage}  {whiff} {k_pct} {ba} {xba} {rv}")
-        
+            lines.append(f"{name} {speed} {usage} {whiff} {k_pct}  {ba} {xba}")
+
         return "\n".join(lines)
 
 @dataclass
@@ -2211,52 +2212,89 @@ class MLBClient:
 
     async def get_pitch_arsenal(self, player_name: str, year: str = None) -> Optional[PitchArsenal]:
         """Fetch pitch arsenal stats for a pitcher from Baseball Savant."""
-        import io, csv
+        import re, json
         session = await self.get_session()
         resolved = await self.resolve_player(player_name)
         if not resolved:
             return None
-        
+
         pid = str(resolved['id'])
         target_year = year or str(datetime.utcnow().year)
-        
+
+        # Fetch from statcast breakdown endpoint
+        pitch_data = None
         for try_year in ([target_year] if year else [target_year, str(int(target_year) - 1)]):
-            url = f"https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats?type=pitcher&pitchType=&year={try_year}&team=&min=1&csv=true"
-            
-            async with session.get(url) as resp:
-                raw = await resp.read()
-                text = raw.decode('utf-8-sig')
-            
-            reader = csv.DictReader(io.StringIO(text))
-            player_rows = [r for r in reader if r.get('player_id') == pid]
-            
-            if player_rows:
-                target_year = try_year
-                break
-        
-        if not player_rows:
+            url = f"https://baseballsavant.mlb.com/player-services/statcast-pitches-breakdown?playerId={pid}&position=1&pitchBreakdown=pitches&timeFrame=yearly&season={try_year}&updatePitches=true"
+
+            try:
+                async with session.get(url) as resp:
+                    text = await resp.text()
+                    match = re.search(r'window\.serverVals\.pitchDetails\s*=\s*(\[.*?\])\s*(?:;|$)', text, re.DOTALL)
+                    if match:
+                        pitch_data = json.loads(match.group(1))
+                        if pitch_data:
+                            target_year = try_year
+                            break
+            except:
+                continue
+
+        if not pitch_data:
             return None
-        
-        player_display = player_rows[0].get('last_name, first_name', resolved['name'])
-        team = player_rows[0].get('team_name_alt', '')
-        
-        # Sort by usage descending
-        player_rows.sort(key=lambda r: float(r.get('pitch_usage', 0) or 0), reverse=True)
-        
+
+        player_display = resolved['name']
+        team = 'FA'
+
+        # Fetch player data to get team abbreviation
+        try:
+            async with session.get(f"{self.BASE_URL}/people/{pid}?hydrate=currentTeam") as resp:
+                person_data = await resp.json()
+                if person_data.get('people'):
+                    team_id = person_data['people'][0].get('currentTeam', {}).get('id')
+                    if team_id:
+                        async with session.get(f"{self.BASE_URL}/teams/{team_id}") as team_resp:
+                            team_data = await team_resp.json()
+                            if team_data.get('teams'):
+                                team = team_data['teams'][0].get('abbreviation', 'FA')
+        except:
+            pass
+
+        # Map pitch types to full names
+        pitch_name_map = {
+            'FF': 'Four-Seam Fastball',
+            'SI': 'Sinker',
+            'FC': 'Cut Fastball',
+            'CH': 'Changeup',
+            'CU': 'Curveball',
+            'SL': 'Slider',
+            'KB': 'Knuckle Curve',
+            'FS': 'Splitter',
+            'KN': 'Knuckleball',
+            'EP': 'Eephus',
+            'ST': 'Sweeper',
+            'GY': 'Gyroball',
+            'SC': 'Screwball',
+        }
+
         pitches = []
-        for r in player_rows:
+        for pitch in pitch_data:
+            api_type = pitch.get('api_pitch_type', '')
+            pitch_name = pitch_name_map.get(api_type)
+            if not pitch_name:
+                pitch_name = pitch.get('pitch_name', api_type if api_type else '?')
+
             pitches.append({
-                'name': r.get('pitch_name', '?'),
-                'type': r.get('pitch_type', '?'),
-                'usage': r.get('pitch_usage', '0'),
-                'whiff': r.get('whiff_percent', '0'),
-                'k_pct': r.get('k_percent', '0'),
-                'ba': r.get('ba', '.000'),
-                'xba': r.get('est_ba', '.000'),
-                'rv100': r.get('run_value_per_100', '0'),
-                'hard_hit': r.get('hard_hit_percent', '0'),
+                'name': pitch_name,
+                'type': api_type,
+                'usage': pitch.get('pitch_percent', '0'),
+                'whiff': pitch.get('whiff_percent', '0'),
+                'k_pct': pitch.get('k_percent', '0'),
+                'ba': pitch.get('ba', '.000'),
+                'xba': pitch.get('xba', '.000'),
+                'rv100': pitch.get('run_value', '0'),
+                'hard_hit': pitch.get('hard_hit_percent', '0'),
+                'avg_speed': pitch.get('release_speed', '0'),
             })
-        
+
         return PitchArsenal(player_display, team, target_year, pitches)
 
     async def get_savant_leaderboard(self, stat: str, year: str = None, player_type: str = 'batter', count: int = 10) -> Optional[SavantLeaderboard]:
