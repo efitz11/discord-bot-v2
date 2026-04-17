@@ -3051,6 +3051,7 @@ class MLBClient:
             'home': game.home.abbreviation,
             'exit_velocity': ev,
             'player_id': player_id,
+            'scoreboard': data.get('scoreboard', {}),
         }
 
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:

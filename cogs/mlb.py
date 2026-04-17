@@ -643,13 +643,37 @@ class MLBSlash(commands.Cog):
             for r in rows:
                 lines.append(f"{r['batter']:<10} {r['result']:<10} {r['ev']:>5} {r['dist']:>4} {r['la']:>4} {r['xba']:>5} {r['pks']:>3}")
 
+            sb = feed.get('scoreboard', {})
+            ls_teams = sb.get('linescore', {}).get('teams', {})
+            xba_team = sb.get('stats', {}).get('exitVelocity', {}).get('xbaTeam', {})
+            game_wpa = sb.get('stats', {}).get('wpa', {}).get('gameWpa', [])
+
+            away, home = feed['away'], feed['home']
+            scoreboard_lines = []
+            if ls_teams:
+                header_sb = f"{'TEAM':<4} {'R':>2} {'H':>2} {'E':>2} {'LOB':>3} {'XBA':>5} {'WP':>5}"
+                scoreboard_lines.append(header_sb)
+                scoreboard_lines.append('-' * len(header_sb))
+                for side, abbr in (('away', away), ('home', home)):
+                    t = ls_teams.get(side, {})
+                    xba = xba_team.get(side, {}).get('xba', '-')
+                    wp = '-'
+                    if game_wpa:
+                        last = game_wpa[-1]
+                        raw = last['awayTeamWinProbability'] if side == 'away' else last['homeTeamWinProbability']
+                        wp = str(int(round(raw)))
+                    scoreboard_lines.append(
+                        f"{abbr:<4} {t.get('runs',0):>2} {t.get('hits',0):>2} {t.get('errors',0):>2} "
+                        f"{t.get('leftOnBase',0):>3} {xba:>5} {wp:>5}"
+                    )
+
             label = "Top EV" if is_final else "Last 5 batted balls"
-            title = f"{'🏁' if is_final else '🔴'} {feed['away']} @ {feed['home']} — {label}"
-            embed = discord.Embed(
-                title=title,
-                description=f"```python\n{chr(10).join(lines)}\n```",
-                color=discord.Color.red()
-            )
+            title = f"{'🏁' if is_final else '🔴'} {away} @ {home} — {label}"
+            desc = ""
+            if scoreboard_lines:
+                desc += f"```python\n{chr(10).join(scoreboard_lines)}\n```\n"
+            desc += f"```python\n{chr(10).join(lines)}\n```"
+            embed = discord.Embed(title=title, description=desc, color=discord.Color.red())
             await interaction.followup.send(embed=embed)
 
         else:
