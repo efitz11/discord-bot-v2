@@ -103,7 +103,10 @@ class HomeRunView(discord.ui.View):
 
             inning_title = hr['inning'].title()
             statcast_parts = []
-            if hr['pitch_type']: statcast_parts.append(hr['pitch_type'])
+            if hr['pitch_type'] and hr['pitch_speed']:
+                statcast_parts.append(f"{hr['pitch_speed']:.1f} mph {hr['pitch_type']}")
+            elif hr['pitch_type']:
+                statcast_parts.append(hr['pitch_type'])
             if hr['ev']:         statcast_parts.append(f"{hr['ev']:.1f} mph EV")
             if hr['dist']:       statcast_parts.append(f"{hr['dist']} ft")
             if hr['la']:         statcast_parts.append(f"{hr['la']}° LA")

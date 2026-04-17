@@ -1360,7 +1360,7 @@ class MLBClient:
                     batter_team = away_abbrev
                     pitcher_team = home_abbrev
 
-                dist, ev, la, pitch_type = 0, 0.0, 0, ''
+                dist, ev, la, pitch_type, pitch_speed = 0, 0.0, 0, '', 0.0
                 last_play_id = None
                 for event in play.get('playEvents', []):
                     if event.get('details', {}).get('isInPlay') and 'hitData' in event:
@@ -1369,6 +1369,7 @@ class MLBClient:
                         ev = hd.get('launchSpeed') or 0.0
                         la = int(hd.get('launchAngle') or 0)
                         pitch_type = event.get('details', {}).get('type', {}).get('description', '')
+                        pitch_speed = event.get('pitchData', {}).get('startSpeed') or 0.0
                         last_play_id = event.get('playId')
                         break
 
@@ -1400,6 +1401,7 @@ class MLBClient:
                     'inning': f"{'bot' if half == 'bottom' else 'top'} {inning_num}",
                     'desc': desc,
                     'pitch_type': pitch_type,
+                    'pitch_speed': pitch_speed,
                     'video_url': video_url,
                     'video_blurb': video_blurb,
                 })
