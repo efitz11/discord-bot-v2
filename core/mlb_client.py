@@ -1298,7 +1298,7 @@ class MLBClient:
         await asyncio.gather(*(process_game(g) for g in games))
         return games
 
-    async def get_recent_home_runs(self, date: str = None, count: int = 10) -> List[dict]:
+    async def get_recent_home_runs(self, date: str = None) -> List[dict]:
         session = await self.get_session()
         from datetime import timezone
         now = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=5)
@@ -1383,8 +1383,7 @@ class MLBClient:
 
         await asyncio.gather(*(fetch_game_hrs(g) for g in games))
 
-        home_runs.sort(key=lambda h: h['time'], reverse=True)
-        return home_runs[:count]
+        return home_runs
 
     async def get_player_game_stats(self, player_id_or_name: str, date: str = None, milb: bool = False, include_abs: bool = False) -> List[PlayerGameStats]:
         session = await self.get_session()

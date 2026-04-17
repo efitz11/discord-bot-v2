@@ -1005,35 +1005,47 @@ class MLBSlash(commands.Cog):
 
         if games:
             embeds = []
+
+            def game_name(game) -> str:
+                if game.abstract_state == "Live":
+                    return f"🔴 {game.away.abbreviation} @ {game.home.abbreviation} - {game.status}"
+                elif game.abstract_state == "Final":
+                    final_str = f"{game.status}/{game.inning}" if game.inning != 9 and game.inning > 0 else game.status
+                    return f"🏁 {game.away.abbreviation} @ {game.home.abbreviation} - {final_str}"
+                else:
+                    return f"🗓️ {game.away.abbreviation} @ {game.home.abbreviation} - {game.status}"
+
+            if len(games) == 1:
+                game = games[0]
+                value = f"```python\n{game.format_score_line()}\n```"
+                last_play = game.format_last_play()
+                if last_play:
+                    value += f"\n{last_play}"
+                embed = discord.Embed(title=game_name(game), description=value, color=discord.Color.blue())
+                await interaction.followup.send(embed=embed)
+                return
+
             title = f"MLB Scores ({parsed_date})" if parsed_date else "MLB Scores"
             if division:
                 title += f" - {division.name}"
             if live:
                 title += " - Live"
             current_embed = discord.Embed(title=title, color=discord.Color.blue())
-            
-            for game in games:
-                # Use emojis in the field title to indicate game status
-                if game.abstract_state == "Live":
-                    name = f"🔴 {game.away.abbreviation} @ {game.home.abbreviation} - {game.status}"
-                elif game.abstract_state == "Final":
-                    final_str = f"{game.status}/{game.inning}" if game.inning != 9 and game.inning > 0 else game.status
-                    name = f"🏁 {game.away.abbreviation} @ {game.home.abbreviation} - {final_str}"
-                else:
-                    name = f"🗓️ {game.away.abbreviation} @ {game.home.abbreviation} - {game.status}"
 
+            for game in games:
+                name = game_name(game)
                 value = f"```python\n{game.format_score_line()}\n```"
                 last_play = game.format_last_play()
                 if last_play:
                     value += f"\n{last_play}"
-                
+
                 # Discord limits embeds to 25 fields and 6000 total characters
                 if len(current_embed.fields) >= 25 or len(current_embed) + len(name) + len(value) > 5900:
                     embeds.append(current_embed)
                     current_embed = discord.Embed(title=f"{title} (Cont.)", color=discord.Color.blue())
-                    
+
                 current_embed.add_field(name=name, value=value, inline=False)
-                
+
             embeds.append(current_embed)
             await interaction.followup.send(embeds=embeds)
         else:
@@ -1428,34 +1440,72 @@ class MLBSlash(commands.Cog):
     async def zoneplot_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
-    @mlb.command(name="homeruns", description="Get the most recent home runs across the league today")
-    @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)", count="Number of home runs to show (default 10, max 25)")
-    async def homeruns(self, interaction: discord.Interaction, date: str = None, count: int = 10):
+    @mlb.command(name="homeruns", description="Get home runs across the league today")
+    @app_commands.describe(
+        date="A specific date (e.g. 4/7/26, yesterday, +2, -5)",
+        count="Number of home runs to show (default 10, max 25)",
+        sort="How to sort the results (default: most recent)"
+    )
+    @app_commands.choices(sort=[
+        app_commands.Choice(name="Most Recent", value="recent"),
+        app_commands.Choice(name="Most (HR #)", value="most"),
+        app_commands.Choice(name="Longest Distance", value="long"),
+        app_commands.Choice(name="Shortest Distance", value="short"),
+        app_commands.Choice(name="Fastest EV", value="fast"),
+        app_commands.Choice(name="Slowest EV", value="slow"),
+        app_commands.Choice(name="Highest Launch Angle", value="high"),
+        app_commands.Choice(name="Lowest Launch Angle", value="low"),
+    ])
+    async def homeruns(self, interaction: discord.Interaction, date: str = None, count: int = 10, sort: app_commands.Choice[str] = None):
         await interaction.response.defer()
         parsed_date = parse_date(date)
         count = min(max(count, 1), 25)
+        sort_val = sort.value if sort else "recent"
 
-        hrs = await self.bot.mlb_client.get_recent_home_runs(date=parsed_date, count=count)
+        all_hrs = await self.bot.mlb_client.get_recent_home_runs(date=parsed_date)
 
-        if not hrs:
+        if not all_hrs:
             await interaction.followup.send("No home runs found for that date.")
             return
 
-        first = hrs[0]
-        try:
-            t = datetime.strptime(first['time'], "%Y-%m-%dT%H:%M:%S.%fZ")
-            from datetime import timezone
-            mins_ago = int((datetime.now(timezone.utc).replace(tzinfo=None) - t).total_seconds() / 60)
-            if mins_ago < 60:
-                recency = f"{mins_ago} minute{'s' if mins_ago != 1 else ''} ago"
-            else:
-                h = mins_ago // 60
-                recency = f"{h} hour{'s' if h != 1 else ''} ago"
-            header = f"({first['batter_team']} {first['batter']}'s homer: {recency})"
-        except Exception:
-            header = ""
+        sort_configs = {
+            "recent": (lambda h: h['time'],        True,  False),
+            "most":   (lambda h: h['num'],          True,  False),
+            "long":   (lambda h: h['dist'],         True,  True),
+            "short":  (lambda h: h['dist'],         False, True),
+            "fast":   (lambda h: h['ev'],           True,  True),
+            "slow":   (lambda h: h['ev'],           False, True),
+            "high":   (lambda h: h['la'],           True,  True),
+            "low":    (lambda h: h['la'],           False, True),
+        }
+        key_fn, reverse, needs_value = sort_configs[sort_val]
+        if needs_value:
+            hrs = sorted((h for h in all_hrs if key_fn(h)), key=key_fn, reverse=reverse)[:count]
+        else:
+            hrs = sorted(all_hrs, key=key_fn, reverse=reverse)[:count]
 
-        header_line = f"Most recent home runs (most recent on top):\n\n{header}\n" if header else "Most recent home runs (most recent on top):\n\n"
+        sort_labels = {
+            "recent": "Most recent home runs (most recent on top)",
+            "most":   "Home runs by HR # (highest on top)",
+            "long":   "Home runs by distance (longest on top)",
+            "short":  "Home runs by distance (shortest on top)",
+            "fast":   "Home runs by exit velocity (fastest on top)",
+            "slow":   "Home runs by exit velocity (slowest on top)",
+            "high":   "Home runs by launch angle (highest on top)",
+            "low":    "Home runs by launch angle (lowest on top)",
+        }
+        header_line = sort_labels[sort_val] + ":\n\n"
+
+        if sort_val == "recent":
+            first = hrs[0]
+            try:
+                t = datetime.strptime(first['time'], "%Y-%m-%dT%H:%M:%S.%fZ")
+                from datetime import timezone
+                mins_ago = int((datetime.now(timezone.utc).replace(tzinfo=None) - t).total_seconds() / 60)
+                recency = f"{mins_ago} minute{'s' if mins_ago != 1 else ''} ago" if mins_ago < 60 else f"{mins_ago // 60} hour{'s' if mins_ago // 60 != 1 else ''} ago"
+                header_line += f"({first['batter_team']} {first['batter']}'s homer: {recency})\n"
+            except Exception:
+                pass
 
         def abbrev_name(full_name: str) -> str:
             parts = full_name.split()
