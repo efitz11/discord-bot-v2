@@ -1428,6 +1428,66 @@ class MLBSlash(commands.Cog):
     async def zoneplot_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
+    @mlb.command(name="homeruns", description="Get the most recent home runs across the league today")
+    @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)", count="Number of home runs to show (default 10, max 25)")
+    async def homeruns(self, interaction: discord.Interaction, date: str = None, count: int = 10):
+        await interaction.response.defer()
+        parsed_date = parse_date(date)
+        count = min(max(count, 1), 25)
+
+        hrs = await self.bot.mlb_client.get_recent_home_runs(date=parsed_date, count=count)
+
+        if not hrs:
+            await interaction.followup.send("No home runs found for that date.")
+            return
+
+        first = hrs[0]
+        try:
+            t = datetime.strptime(first['time'], "%Y-%m-%dT%H:%M:%S.%fZ")
+            from datetime import timezone
+            mins_ago = int((datetime.now(timezone.utc).replace(tzinfo=None) - t).total_seconds() / 60)
+            if mins_ago < 60:
+                recency = f"{mins_ago} minute{'s' if mins_ago != 1 else ''} ago"
+            else:
+                h = mins_ago // 60
+                recency = f"{h} hour{'s' if h != 1 else ''} ago"
+            header = f"({first['batter_team']} {first['batter']}'s homer: {recency})"
+        except Exception:
+            header = ""
+
+        header_line = f"Most recent home runs (most recent on top):\n\n{header}\n" if header else "Most recent home runs (most recent on top):\n\n"
+
+        def abbrev_name(full_name: str) -> str:
+            parts = full_name.split()
+            if len(parts) >= 2:
+                return f"{parts[0][0]}.{' '.join(parts[1:])}"
+            return full_name
+
+        header_row = (
+            f"{'NUM':>3} {'TM':3} {'BATTER':<13} {'TM':3} {'PITCHER':<13} "
+            f"{'R':>1} {'DIST':>4} {'EV':>5} {'LA':>3}"
+        )
+        sep = "-" * len(header_row)
+        rows = [header_row, sep]
+        for h in hrs:
+            ev_str = f"{h['ev']:.1f}" if h['ev'] else "   -"
+            dist_str = str(h['dist']) if h['dist'] else "  -"
+            la_str = str(h['la']) if h['la'] else " -"
+            num_str = str(h['num']) if h['num'] else " -"
+            rows.append(
+                f"{num_str:>3} {h['batter_team']:3} {abbrev_name(h['batter'])[:13]:<13} "
+                f"{h['pitcher_team']:3} {abbrev_name(h['pitcher'])[:13]:<13} "
+                f"{h['rbi']:>1} {dist_str:>4} {ev_str:>5} {la_str:>3}"
+            )
+
+        table = "\n".join(rows)
+        embed = discord.Embed(
+            title=f"Home Runs — {parsed_date or 'Today'}",
+            description=f"{header_line}```python\n{table}\n```",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed)
+
     @mlb.command(name="next", description="Get the upcoming games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
     @app_commands.describe(games="Number of games to show (default 3, max 10)")

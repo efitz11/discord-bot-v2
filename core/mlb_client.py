@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import re
 import urllib.parse
 from dataclasses import dataclass
 from typing import List, Optional
@@ -1296,6 +1297,94 @@ class MLBClient:
 
         await asyncio.gather(*(process_game(g) for g in games))
         return games
+
+    async def get_recent_home_runs(self, date: str = None, count: int = 10) -> List[dict]:
+        session = await self.get_session()
+        from datetime import timezone
+        now = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=5)
+        date_str = date or now.strftime("%Y-%m-%d")
+
+        sched_url = f"{self.BASE_URL}/schedule?sportId=1&date={date_str}&hydrate=team"
+        async with session.get(sched_url) as resp:
+            sched = await resp.json() if resp.status == 200 else {}
+
+        dates = sched.get('dates', [])
+        if not dates:
+            return []
+        games = dates[0].get('games', [])
+
+        home_runs = []
+
+        async def fetch_game_hrs(game):
+            if game.get('status', {}).get('abstractGameCode') == 'P':
+                return
+            game_pk = game['gamePk']
+            away_abbrev = game['teams']['away']['team']['abbreviation']
+            home_abbrev = game['teams']['home']['team']['abbreviation']
+
+            pbp_url = f"{self.BASE_URL}/game/{game_pk}/playByPlay"
+            try:
+                async with session.get(pbp_url) as resp:
+                    pbp = await resp.json() if resp.status == 200 else {}
+            except Exception:
+                return
+
+            for play in pbp.get('allPlays', []):
+                if play.get('result', {}).get('eventType') != 'home_run':
+                    continue
+
+                about = play.get('about', {})
+                half = about.get('halfInning', '')
+                inning_num = about.get('inning', '')
+                end_time = about.get('endTime', '')
+
+                batter = play.get('matchup', {}).get('batter', {}).get('fullName', '')
+                pitcher = play.get('matchup', {}).get('pitcher', {}).get('fullName', '')
+                rbi = play.get('result', {}).get('rbi', 0)
+
+                if half == 'bottom':
+                    batter_team = home_abbrev
+                    pitcher_team = away_abbrev
+                else:
+                    batter_team = away_abbrev
+                    pitcher_team = home_abbrev
+
+                dist, ev, la = 0, 0.0, 0
+                for event in play.get('playEvents', []):
+                    if event.get('details', {}).get('isInPlay') and 'hitData' in event:
+                        hd = event['hitData']
+                        dist = int(hd.get('totalDistance') or 0)
+                        ev = hd.get('launchSpeed') or 0.0
+                        la = int(hd.get('launchAngle') or 0)
+                        break
+
+                desc = play.get('result', {}).get('description', '')
+                hr_num = 0
+                for keyword in ('grand slam', 'home run', 'homers'):
+                    if keyword in desc:
+                        m = re.search(r'\((\d+)\)', desc[desc.index(keyword):])
+                        if m:
+                            hr_num = int(m.group(1))
+                        break
+
+                home_runs.append({
+                    'batter': batter,
+                    'batter_team': batter_team,
+                    'pitcher': pitcher,
+                    'pitcher_team': pitcher_team,
+                    'rbi': rbi,
+                    'dist': dist,
+                    'ev': ev,
+                    'la': la,
+                    'num': hr_num,
+                    'time': end_time,
+                    'inning': f"{'bot' if half == 'bottom' else 'top'} {inning_num}",
+                })
+
+        await asyncio.gather(*(fetch_game_hrs(g) for g in games))
+
+        home_runs.sort(key=lambda h: h['time'], reverse=True)
+        return home_runs[:count]
 
     async def get_player_game_stats(self, player_id_or_name: str, date: str = None, milb: bool = False, include_abs: bool = False) -> List[PlayerGameStats]:
         session = await self.get_session()
