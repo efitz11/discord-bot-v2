@@ -3012,6 +3012,47 @@ class MLBClient:
             starters=starters
         )
 
+    async def get_savant_game_feed(self, team_query: str = None, player_id: str = None, date: str = None) -> dict:
+        """
+        Fetches the Baseball Savant game feed (exit velocity data) for a team's game.
+        If player_id is given and team_query is None, resolves the player's current team first.
+        Returns {'game_pk', 'status', 'away', 'home', 'exit_velocity': [...]}.
+        """
+        if team_query is None and player_id is not None:
+            session = await self.get_session()
+            async with session.get(f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam") as resp:
+                person = (await resp.json()).get('people', [{}])[0] if resp.status == 200 else {}
+            team_id = person.get('currentTeam', {}).get('id')
+            if not team_id:
+                return {}
+            abbrevs = await self.get_team_abbrevs()
+            team_query = abbrevs.get(team_id, '')
+
+        games = await self.get_todays_games(team_query=team_query, date=date)
+        if not games:
+            return {}
+        game = games[0]
+
+        session = await self.get_session()
+        url = f"https://baseballsavant.mlb.com/gf?game_pk={game.game_pk}"
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return {}
+                data = await resp.json(content_type=None)
+        except Exception:
+            return {}
+
+        ev = data.get('exit_velocity', [])
+        return {
+            'game_pk': game.game_pk,
+            'status': game.abstract_state,
+            'away': game.away.abbreviation,
+            'home': game.home.abbreviation,
+            'exit_velocity': ev,
+            'player_id': player_id,
+        }
+
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:
         session = await self.get_session()
         # Request all the expanded data your old bot was using

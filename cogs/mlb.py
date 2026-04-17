@@ -592,6 +592,124 @@ class MLBSlash(commands.Cog):
         return await self.player_autocomplete(interaction, current)
 
 
+    @mlb.command(name="savant", description="Get Statcast exit velocity data for a team's game or a player's at-bats today")
+    @app_commands.describe(
+        query="Team abbreviation/name (shows last 5 batted balls) or player name (shows all their ABs)",
+        date="A specific date (e.g. 4/7/26, yesterday, +2, -5)"
+    )
+    async def savant(self, interaction: discord.Interaction, query: str, date: str = None):
+        await interaction.response.defer()
+        parsed_date = parse_date(date)
+
+        def is_hr(result: str) -> bool:
+            r = result.lower()
+            return 'home run' in r or 'grand slam' in r
+
+        # Try team first
+        team_id = await self.bot.mlb_client.get_team_id(query)
+
+        if team_id:
+            feed = await self.bot.mlb_client.get_savant_game_feed(team_query=query, date=parsed_date)
+            if not feed or not feed.get('exit_velocity'):
+                await interaction.followup.send(f"No Statcast data found for **{query.upper()}** today.")
+                return
+
+            ev = feed['exit_velocity']
+            is_final = feed['status'] == 'Final'
+            if is_final:
+                display = sorted(ev, key=lambda e: float(e.get('hit_speed') or 0), reverse=True)[:5]
+            else:
+                display = list(reversed(ev[-5:]))
+
+            rows = []
+            for e in display:
+                batter   = e.get('batter_name', '')
+                result   = e.get('result', '')
+                speed    = e.get('hit_speed', '')
+                dist     = e.get('hit_distance', '')
+                angle    = e.get('hit_angle', '')
+                xba      = e.get('xba', '')
+                parks    = e.get('contextMetrics', {}).get('homeRunBallparks', '')
+                last_name = batter.split(',')[0] if ',' in batter else batter.split()[-1] if batter else '?'
+                rows.append({
+                    'batter': last_name[:10],
+                    'result': result[:10],
+                    'ev':   str(speed) if speed else '-',
+                    'dist': str(dist)  if dist  else '-',
+                    'la':   str(angle) if angle else '-',
+                    'xba':  str(xba)   if xba   else '-',
+                    'pks':  str(parks) if (parks and is_hr(result)) else '-',
+                })
+
+            header = f"{'BATTER':<10} {'RESULT':<10} {'EV':>5} {'DIST':>4} {'LA':>4} {'xBA':>5} {'Pks':>3}"
+            sep = '-' * len(header)
+            lines = [header, sep]
+            for r in rows:
+                lines.append(f"{r['batter']:<10} {r['result']:<10} {r['ev']:>5} {r['dist']:>4} {r['la']:>4} {r['xba']:>5} {r['pks']:>3}")
+
+            label = "Top EV" if is_final else "Last 5 batted balls"
+            title = f"{'🏁' if is_final else '🔴'} {feed['away']} @ {feed['home']} — {label}"
+            embed = discord.Embed(
+                title=title,
+                description=f"```python\n{chr(10).join(lines)}\n```",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
+
+        else:
+            # Treat as player
+            resolved = await self.bot.mlb_client.resolve_player(query)
+            if not resolved:
+                await interaction.followup.send(f"No matching team or player found for **{query}**.")
+                return
+
+            player_id = int(resolved['id'])
+            player_name = resolved['name']
+
+            feed = await self.bot.mlb_client.get_savant_game_feed(
+                team_query=None, player_id=str(player_id), date=parsed_date
+            )
+            if not feed or not feed.get('exit_velocity'):
+                await interaction.followup.send(f"No Statcast data found for **{player_name}** today.")
+                return
+
+            ev = [e for e in feed['exit_velocity'] if e.get('batter') == player_id]
+            if not ev:
+                await interaction.followup.send(f"No batted ball data found for **{player_name}** in today's game.")
+                return
+
+            header = f"{'INN':<6} {'RESULT':<12} {'EV':>5} {'DIST':>4} {'LA':>4} {'xBA':>5} {'Pks':>3}"
+            sep = '-' * len(header)
+            lines = [header, sep]
+            for e in ev:
+                inning = str(e.get('inning', ''))
+                result = str(e.get('result', ''))[:12]
+                speed  = e.get('hit_speed', '')
+                dist   = e.get('hit_distance', '')
+                angle  = e.get('hit_angle', '')
+                xba    = e.get('xba', '')
+                parks  = e.get('contextMetrics', {}).get('homeRunBallparks', '')
+                pks    = str(parks) if (parks and is_hr(result)) else '-'
+                lines.append(
+                    f"{inning:<6} {result:<12} "
+                    f"{str(speed) if speed else '-':>5} "
+                    f"{str(dist) if dist else '-':>4} "
+                    f"{str(angle) if angle else '-':>4} "
+                    f"{str(xba) if xba else '-':>5} "
+                    f"{pks:>3}"
+                )
+
+            embed = discord.Embed(
+                title=f"Statcast: {player_name} ({feed['away']} @ {feed['home']})",
+                description=f"```python\n{chr(10).join(lines)}\n```",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
+
+    @savant.autocomplete('query')
+    async def savant_query_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
     @mlb.command(name="savant_leaders", description="Get Statcast leaderboards from Baseball Savant")
     @app_commands.describe(
         stat="Statcast metric to rank by",
