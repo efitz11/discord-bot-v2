@@ -707,8 +707,13 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send(embed=embed)
 
     @savant.autocomplete('query')
-    async def savant_query_autocomplete(self, interaction: discord.Interaction, current: str):
-        return await self.player_autocomplete(interaction, current)
+    async def savant_query_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        team_choices = await self.team_autocomplete(interaction, current)
+        # team_autocomplete includes "All Teams" which isn't valid here — drop it
+        team_choices = [c for c in team_choices if c.value != 'all']
+        player_choices = await self.player_autocomplete(interaction, current)
+        # Teams first, then players, capped at 25
+        return (team_choices + player_choices)[:25]
 
     @mlb.command(name="savant_leaders", description="Get Statcast leaderboards from Baseball Savant")
     @app_commands.describe(
