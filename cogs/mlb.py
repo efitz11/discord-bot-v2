@@ -82,6 +82,47 @@ class PitchPlotView(discord.ui.View):
 
 
 
+class HomeRunView(discord.ui.View):
+    def __init__(self, hrs: list):
+        super().__init__(timeout=600)
+        for hr in hrs:
+            last_name = hr['batter'].split()[-1] if hr['batter'] else "?"
+            num_str = f"({hr['num']})" if hr['num'] else ""
+            label = f"{last_name} {num_str}"[:80]
+            btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
+            btn.callback = self._make_callback(hr, label)
+            self.add_item(btn)
+
+    def _make_callback(self, hr: dict, label: str):
+        async def callback(interaction: discord.Interaction):
+            for child in self.children:
+                if isinstance(child, discord.ui.Button) and child.label == label:
+                    child.disabled = True
+                    break
+            await interaction.response.edit_message(view=self)
+
+            inning_title = hr['inning'].title()
+            statcast_parts = []
+            if hr['pitch_type']: statcast_parts.append(hr['pitch_type'])
+            if hr['ev']:         statcast_parts.append(f"{hr['ev']:.1f} mph EV")
+            if hr['dist']:       statcast_parts.append(f"{hr['dist']} ft")
+            if hr['la']:         statcast_parts.append(f"{hr['la']}° LA")
+
+            desc = f"**{inning_title}:** With **{hr['pitcher']}** pitching, {hr['desc']}"
+            if statcast_parts:
+                desc += f" *({' | '.join(statcast_parts)})*"
+            if hr['video_url']:
+                desc += f"\n> [🎥 **{hr['video_blurb'] or 'Watch'}**]({hr['video_url']})"
+
+            embed = discord.Embed(
+                title=f"⚾ {hr['batter_team']} {hr['batter']} — HR #{hr['num'] or '?'}",
+                description=desc,
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
+        return callback
+
+
 class MLBSlash(commands.Cog):
 
     def __init__(self, bot):
@@ -1536,7 +1577,8 @@ class MLBSlash(commands.Cog):
             description=f"{header_line}```python\n{table}\n```",
             color=discord.Color.red()
         )
-        await interaction.followup.send(embed=embed)
+        view = HomeRunView(hrs[:25])
+        await interaction.followup.send(embed=embed, view=view)
 
     @mlb.command(name="next", description="Get the upcoming games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")

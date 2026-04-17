@@ -1323,11 +1323,22 @@ class MLBClient:
             home_abbrev = game['teams']['home']['team']['abbreviation']
 
             pbp_url = f"{self.BASE_URL}/game/{game_pk}/playByPlay"
+            content_url = f"{self.BASE_URL}/game/{game_pk}/content"
             try:
                 async with session.get(pbp_url) as resp:
                     pbp = await resp.json() if resp.status == 200 else {}
+                async with session.get(content_url) as resp:
+                    content_data = await resp.json() if resp.status == 200 else {}
             except Exception:
                 return
+
+            content_dict = {}
+            for item in content_data.get('highlights', {}).get('highlights', {}).get('items', []):
+                if 'guid' in item:
+                    for pb in item.get('playbacks', []):
+                        if pb.get('name') == 'mp4Avc':
+                            content_dict[item['guid']] = {'url': pb['url'], 'blurb': item.get('headline', item.get('blurb', ''))}
+                            break
 
             for play in pbp.get('allPlays', []):
                 if play.get('result', {}).get('eventType') != 'home_run':
@@ -1349,13 +1360,16 @@ class MLBClient:
                     batter_team = away_abbrev
                     pitcher_team = home_abbrev
 
-                dist, ev, la = 0, 0.0, 0
+                dist, ev, la, pitch_type = 0, 0.0, 0, ''
+                last_play_id = None
                 for event in play.get('playEvents', []):
                     if event.get('details', {}).get('isInPlay') and 'hitData' in event:
                         hd = event['hitData']
                         dist = int(hd.get('totalDistance') or 0)
                         ev = hd.get('launchSpeed') or 0.0
                         la = int(hd.get('launchAngle') or 0)
+                        pitch_type = event.get('details', {}).get('type', {}).get('description', '')
+                        last_play_id = event.get('playId')
                         break
 
                 desc = play.get('result', {}).get('description', '')
@@ -1366,6 +1380,11 @@ class MLBClient:
                         if m:
                             hr_num = int(m.group(1))
                         break
+
+                video_url, video_blurb = '', ''
+                if last_play_id and last_play_id in content_dict:
+                    video_url = content_dict[last_play_id]['url']
+                    video_blurb = content_dict[last_play_id]['blurb']
 
                 home_runs.append({
                     'batter': batter,
@@ -1379,6 +1398,10 @@ class MLBClient:
                     'num': hr_num,
                     'time': end_time,
                     'inning': f"{'bot' if half == 'bottom' else 'top'} {inning_num}",
+                    'desc': desc,
+                    'pitch_type': pitch_type,
+                    'video_url': video_url,
+                    'video_blurb': video_blurb,
                 })
 
         await asyncio.gather(*(fetch_game_hrs(g) for g in games))
