@@ -601,10 +601,6 @@ class MLBSlash(commands.Cog):
         await interaction.response.defer()
         parsed_date = parse_date(date)
 
-        def is_hr(result: str) -> bool:
-            r = result.lower()
-            return 'home run' in r or 'grand slam' in r
-
         # Try team first
         team_id = await self.bot.mlb_client.get_team_id(query)
 
@@ -638,7 +634,7 @@ class MLBSlash(commands.Cog):
                     'dist': str(dist)  if dist  else '-',
                     'la':   str(angle) if angle else '-',
                     'xba':  str(xba)   if xba   else '-',
-                    'pks':  str(parks) if (parks and is_hr(result)) else '-',
+                    'pks':  str(parks) if parks else '-',
                 })
 
             header = f"{'BATTER':<10} {'RESULT':<10} {'EV':>5} {'DIST':>4} {'LA':>4} {'xBA':>5} {'Pks':>3}"
@@ -689,7 +685,7 @@ class MLBSlash(commands.Cog):
                 angle  = e.get('hit_angle', '')
                 xba    = e.get('xba', '')
                 parks  = e.get('contextMetrics', {}).get('homeRunBallparks', '')
-                pks    = str(parks) if (parks and is_hr(result)) else '-'
+                pks    = str(parks) if parks else '-'
                 lines.append(
                     f"{inning:<6} {result:<12} "
                     f"{str(speed) if speed else '-':>5} "
