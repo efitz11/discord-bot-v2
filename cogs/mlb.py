@@ -136,6 +136,7 @@ class MLBSlash(commands.Cog):
     # Create a slash command group: /mlb
     mlb = app_commands.Group(name="mlb", description="MLB stats and scores commands")
     milb = app_commands.Group(name="milb", description="MiLB stats and scores commands")
+    savant = app_commands.Group(name="savant", description="Baseball Savant / Statcast commands")
 
     @mlb.command(name="line", description="Get a player's stat line for today or a specific date")
     @app_commands.describe(player="The player to search for")
@@ -389,7 +390,7 @@ class MLBSlash(commands.Cog):
 
 
 
-    @mlb.command(name="percentiles", description="Get a player's Baseball Savant percentiles")
+    @savant.command(name="percentiles", description="Get a player's Baseball Savant percentiles")
     @app_commands.describe(player="Player name to search for", year="Target year (e.g., 2024)")
     async def percentiles(self, interaction: discord.Interaction, player: str, year: str = None):
 
@@ -415,6 +416,149 @@ class MLBSlash(commands.Cog):
     async def percentiles_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
+    @savant.command(name="compare_percentiles", description="Compare two players' Savant percentiles side-by-side")
+    @app_commands.describe(player1="First player", player2="Second player", year="Season year (default: current)")
+    async def compare_percentiles(self, interaction: discord.Interaction, player1: str, player2: str, year: str = None):
+        await interaction.response.defer()
+        try:
+            p1_data, p2_data = await asyncio.gather(
+                self.bot.mlb_client.get_player_percentiles(player1, year=year),
+                self.bot.mlb_client.get_player_percentiles(player2, year=year),
+            )
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching percentiles: {e}")
+            return
+
+        if not p1_data:
+            await interaction.followup.send(f"No Savant data found for **{player1}**.")
+            return
+        if not p2_data:
+            await interaction.followup.send(f"No Savant data found for **{player2}**.")
+            return
+
+        display_names = {
+            "exit_velocity_avg":        "Avg EV",
+            "barrel_batted_rate":       "Barrel %",
+            "hard_hit_percent":         "Hard-Hit %",
+            "xwoba":                    "xwOBA",
+            "xba":                      "xBA",
+            "xslg":                     "xSLG",
+            "sweet_spot_percent":       "Sweet-Spot %",
+            "k_percent":                "K %",
+            "bb_percent":               "BB %",
+            "whiff_percent":            "Whiff %",
+            "chase_percent":            "Chase %",
+            "sprint_speed":             "Sprint Speed",
+            "oaa":                      "Range (OAA)",
+            "framing":                  "Framing",
+            "runner_run_value":         "Baserunning",
+            "fielding_run_value":       "Fielding",
+            "batting_run_value":        "Batting",
+            "launch_angle_avg":         "Avg LA",
+            "groundballs_percent":      "GB %",
+            "xera":                     "xERA",
+            "pitch_run_value_fastball": "Fastball",
+            "pitch_run_value_breaking": "Breaking Ball",
+            "pitch_run_value_offspeed": "Offspeed",
+        }
+
+        batter_categories = [
+            ("Run Value",            ["batting_run_value", "runner_run_value", "fielding_run_value"]),
+            ("Batting",              ["xwoba", "xba", "xslg", "exit_velocity_avg", "barrel_batted_rate",
+                                      "hard_hit_percent", "sweet_spot_percent", "whiff_percent",
+                                      "chase_percent", "k_percent", "bb_percent"]),
+            ("Fielding and Running", ["oaa", "framing", "sprint_speed"]),
+        ]
+        pitcher_categories = [
+            ("Pitch Values",     ["pitch_run_value_fastball", "pitch_run_value_breaking", "pitch_run_value_offspeed"]),
+            ("Contact Quality",  ["barrel_batted_rate", "exit_velocity_avg", "launch_angle_avg", "groundballs_percent", "xwoba", "xera"]),
+            ("Plate Discipline", ["k_percent", "bb_percent", "whiff_percent", "chase_percent"]),
+        ]
+
+        # Use p1's stat_type to pick category layout; warn if they differ
+        stat_type = p1_data.stat_type
+        category_list = batter_categories if stat_type == "Batter" else pitcher_categories
+
+        p1_lookup = {row['stat']: row for row in p1_data.percentiles}
+        p2_lookup = {row['stat']: row for row in p2_data.percentiles}
+        all_stats = set(p1_lookup) | set(p2_lookup)
+
+        BAR_WIDTH = 10  # blocks per side, full bar = 100pt gap
+
+        def make_bars(v1, v2):
+            # filled blocks = how much of the 100pt scale the gap covers
+            diff = v1 - v2
+            filled = round(abs(diff) / 10)
+            bar = "█" * filled + "░" * (BAR_WIDTH - filled)
+            if diff > 0:
+                # p1 wins: bar on the left, right is empty
+                return bar[::-1], "░" * BAR_WIDTH
+            elif diff < 0:
+                # p2 wins: left is empty, bar on the right
+                return "░" * BAR_WIDTH, bar
+            else:
+                return "░" * BAR_WIDTH, "░" * BAR_WIDTH
+
+        def build_section(stat_names):
+            rows = []
+            for stat in stat_names:
+                if stat not in all_stats:
+                    continue
+                label = display_names.get(stat, stat.replace("_", " ").title())
+                v1 = p1_lookup[stat]['value'] if stat in p1_lookup else 0
+                v2 = p2_lookup[stat]['value'] if stat in p2_lookup else 0
+                left_bar, right_bar = make_bars(v1, v2)
+                rows.append((label, v1, v2, left_bar, right_bar))
+            return rows
+
+        p1_name = p1_data.player_name.split()[-1]  # last name for brevity
+        p2_name = p2_data.player_name.split()[-1]
+
+        assigned = set()
+        sections = []
+        for cat_name, targets in category_list:
+            rows = build_section(targets)
+            if rows:
+                sections.append((cat_name, rows))
+                assigned.update(t for t in targets if t in all_stats)
+
+        other_stats = [s for s in (p1_lookup.keys() | p2_lookup.keys()) if s not in assigned]
+        if other_stats:
+            rows = build_section(other_stats)
+            if rows:
+                sections.append(("Other", rows))
+
+        if not sections:
+            await interaction.followup.send("No overlapping stats found between these two players.")
+            return
+
+        year_str = p1_data.year
+        embed = discord.Embed(
+            title=f"{year_str} Percentile Comparison",
+            color=discord.Color.blurple()
+        )
+
+        # Compute label width once across all sections so bars align vertically
+        label_w = max(len(r[0]) for _, rows in sections for r in rows)
+        header = f"{p1_name:>3}  {'':>{BAR_WIDTH}}  {'':^{label_w}}  {'':>{BAR_WIDTH}}  {p2_name}"
+
+        for cat_name, rows in sections:
+            lines = [header]
+            for label, v1, v2, left_bar, right_bar in rows:
+                centered = label.center(label_w)
+                lines.append(f"{v1:>3}  {left_bar}  {centered}  {right_bar}  {v2:<3}")
+            embed.add_field(name=cat_name, value=f"```\n" + "\n".join(lines) + "\n```", inline=False)
+
+        embed.set_footer(text=f"{p1_data.player_name} (left)  vs  {p2_data.player_name} (right) — {year_str} {stat_type} percentiles")
+        await interaction.followup.send(embed=embed)
+
+    @compare_percentiles.autocomplete('player1')
+    async def compare_p1_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
+    @compare_percentiles.autocomplete('player2')
+    async def compare_p2_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
 
 
     @mlb.command(name="highlights", description="Get video highlights for a player or team")
@@ -569,7 +713,7 @@ class MLBSlash(commands.Cog):
         return await self.team_autocomplete(interaction, current)
 
 
-    @mlb.command(name="arsenal", description="Get a pitcher's pitch arsenal breakdown from Savant")
+    @savant.command(name="arsenal", description="Get a pitcher's pitch arsenal breakdown from Savant")
     @app_commands.describe(player="Pitcher name", year="Year (e.g. 2025)")
     async def arsenal(self, interaction: discord.Interaction, player: str, year: str = None):
 
@@ -594,12 +738,12 @@ class MLBSlash(commands.Cog):
         return await self.player_autocomplete(interaction, current)
 
 
-    @mlb.command(name="savant", description="Get Statcast exit velocity data for a team's game or a player's at-bats today")
+    @savant.command(name="game", description="Get Statcast exit velocity data for a team's game or a player's at-bats today")
     @app_commands.describe(
         query="Team abbreviation/name (shows last 5 batted balls) or player name (shows all their ABs)",
         date="A specific date (e.g. 4/7/26, yesterday, +2, -5)"
     )
-    async def savant(self, interaction: discord.Interaction, query: str, date: str = None):
+    async def game(self, interaction: discord.Interaction, query: str, date: str = None):
         await interaction.response.defer()
         parsed_date = parse_date(date)
 
@@ -728,8 +872,8 @@ class MLBSlash(commands.Cog):
             )
             await interaction.followup.send(embed=embed)
 
-    @savant.autocomplete('query')
-    async def savant_query_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    @game.autocomplete('query')
+    async def game_query_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         team_choices = await self.team_autocomplete(interaction, current)
         # team_autocomplete includes "All Teams" which isn't valid here — drop it
         team_choices = [c for c in team_choices if c.value != 'all']
@@ -737,7 +881,7 @@ class MLBSlash(commands.Cog):
         # Teams first, then players, capped at 25
         return (team_choices + player_choices)[:25]
 
-    @mlb.command(name="savant_leaders", description="Get Statcast leaderboards from Baseball Savant")
+    @savant.command(name="leaders", description="Get Statcast leaderboards from Baseball Savant")
     @app_commands.describe(
         stat="Statcast metric to rank by",
         player_type="Batters or Pitchers",
@@ -1252,7 +1396,7 @@ class MLBSlash(commands.Cog):
     async def score_team_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
 
-    @mlb.command(name="pitches", description="Get a pitcher's pitch counts by inning, recent pitches, and pitch mix")
+    @savant.command(name="pitches", description="Get a pitcher's pitch counts by inning, recent pitches, and pitch mix")
     @app_commands.describe(player="The pitcher to look up")
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, today)")
     async def pitches(self, interaction: discord.Interaction, player: str, date: str = None):
@@ -1723,7 +1867,7 @@ class MLBSlash(commands.Cog):
 
 
 
-    @mlb.command(name="zoneplot", description="Show a batter's hitting zone heatmap from Baseball Savant")
+    @savant.command(name="zoneplot", description="Show a batter's hitting zone heatmap from Baseball Savant")
     @app_commands.describe(player="Batter name", year="Season year (default: current)", chart_type="Stat to display (default: ba)")
     @app_commands.choices(chart_type=[
         app_commands.Choice(name="Batting Average (BA)", value="ba"),
