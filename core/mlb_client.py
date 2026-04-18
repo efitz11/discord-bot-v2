@@ -3054,6 +3054,70 @@ class MLBClient:
             'scoreboard': data.get('scoreboard', {}),
         }
 
+    async def get_pitcher_game_feed(self, team_query: str, date: str = None, player_id: int = None) -> dict:
+        """
+        Returns pitcher pitch data from the Baseball Savant game feed for a team.
+        If player_id is given, only that pitcher's data is returned.
+        Result: {'away': abbr, 'home': abbr, 'side': 'away'|'home',
+                 'pitchers': [{'name', 'total', innings..., 'pitch_data': [...]}]}
+        Each pitch_data entry is the raw savant pitch dict.
+        """
+        games = await self.get_todays_games(team_query=team_query, date=date)
+        if not games:
+            return {}
+        game = games[0]
+
+        # Determine which side this team is on
+        query = team_query.lower()
+        aliases = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals",
+                   "dbacks": "diamondbacks", "barves": "braves"}
+        query = aliases.get(query, query)
+        away_name = game.away.name.lower()
+        away_abbr = game.away.abbreviation.lower()
+        if query == away_abbr or query in away_name:
+            side = 'away'
+        else:
+            side = 'home'
+
+        session = await self.get_session()
+        url = f"https://baseballsavant.mlb.com/gf?game_pk={game.game_pk}"
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return {}
+                data = await resp.json(content_type=None)
+        except Exception:
+            return {}
+
+        savant_pitchers = data.get(f'{side}_pitchers', {})
+        boxscore_pitchers = data.get('boxscore', {}).get('teams', {}).get(side, {}).get('pitchers', [])
+
+        pitchers = []
+        columns_seen = set()
+        for pid in boxscore_pitchers:
+            if player_id is not None and pid != player_id:
+                continue
+            pitcher_pitches = savant_pitchers.get(str(pid))
+            if not pitcher_pitches:
+                continue
+            p = {'name': pitcher_pitches[0].get('pitcher_name', str(pid)), 'total': len(pitcher_pitches)}
+            for pitch in pitcher_pitches:
+                inn = str(pitch.get('inning', '?'))
+                p[inn] = p.get(inn, 0) + 1
+                columns_seen.add(inn)
+            p['pitch_data'] = pitcher_pitches
+            pitchers.append(p)
+
+        return {
+            'away': game.away.abbreviation,
+            'home': game.home.abbreviation,
+            'game_time': game.game_time_str,
+            'status': game.abstract_state,
+            'side': side,
+            'inning_columns': sorted(columns_seen, key=lambda x: int(x) if x.isdigit() else 99),
+            'pitchers': pitchers,
+        }
+
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:
         session = await self.get_session()
         # Request all the expanded data your old bot was using

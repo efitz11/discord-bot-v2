@@ -19,6 +19,8 @@ def parse_date(date_str: str) -> str:
     date_str = date_str.lower().strip()
     if date_str == 'yesterday':
         return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    elif date_str == 'today':
+        return now.strftime("%Y-%m-%d")
     elif date_str == 'tomorrow':
         return (now + timedelta(days=1)).strftime("%Y-%m-%d")
     elif date_str.startswith('+') or date_str.startswith('-'):
@@ -1249,6 +1251,142 @@ class MLBSlash(commands.Cog):
     @score.autocomplete('team')
     async def score_team_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
+
+    @mlb.command(name="pitches", description="Get a pitcher's pitch counts by inning, recent pitches, and pitch mix")
+    @app_commands.describe(player="The pitcher to look up")
+    @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, today)")
+    async def pitches(self, interaction: discord.Interaction, player: str, date: str = None):
+        await interaction.response.defer()
+        parsed_date = parse_date(date)
+
+        resolved = await self.bot.mlb_client.resolve_player(player)
+        if not resolved:
+            await interaction.followup.send("Could not find that player.")
+            return
+        player_id = int(resolved['id'])
+
+        # Find the player's current team so we can look up the right game
+        session = await self.bot.mlb_client.get_session()
+        async with session.get(f"{self.bot.mlb_client.BASE_URL}/people/{player_id}?hydrate=currentTeam") as resp:
+            person = ((await resp.json()).get('people') or [{}])[0] if resp.status == 200 else {}
+        team_id = person.get('currentTeam', {}).get('id')
+        abbrevs = await self.bot.mlb_client.get_team_abbrevs()
+        team = abbrevs.get(team_id, '')
+        if not team:
+            await interaction.followup.send("Could not determine this player's team.")
+            return
+
+        feed = await self.bot.mlb_client.get_pitcher_game_feed(team_query=team, date=parsed_date, player_id=player_id)
+
+        if not feed or not feed.get('pitchers'):
+            await interaction.followup.send("No pitcher data found for that team.")
+            return
+
+        inn_cols = feed['inning_columns']
+        pitchers = feed['pitchers']
+
+        # --- Section 1: pitch counts by inning ---
+        name_w = max(len(p['name']) for p in pitchers)
+        col_w = max(len(c) for c in inn_cols) if inn_cols else 1
+        col_w = max(col_w, 2)
+        header = f"{'PITCHER':<{name_w}}"
+        for c in inn_cols:
+            header += f" {c:>{col_w}}"
+        header += f" {'TOTAL':>5}"
+        rows = [header]
+        for p in pitchers:
+            row = f"{p['name']:<{name_w}}"
+            for c in inn_cols:
+                row += f" {p.get(c, ''):>{col_w}}"
+            row += f" {p['total']:>5}"
+            rows.append(row)
+        inning_block = "\n".join(rows)
+
+        embeds = []
+        embed = discord.Embed(
+            title=f"{feed['away']} @ {feed['home']} — Pitches",
+            color=discord.Color.blue()
+        )
+        embed.description = f"```python\n{inning_block}\n```"
+
+        # --- Section 2 & 3: per-pitcher last 5 pitches + pitch mix ---
+        for p in pitchers:
+            pitch_data = p.get('pitch_data', [])
+            if not pitch_data:
+                continue
+
+            # Last 5 pitches
+            last5 = pitch_data[-5:]
+            last5_lines = [f"{'BATTER':<14} {'NUM':>3} {'INN':>3} {'DESCRIPTION':<15} {'PITCH':<11} {'VEL':>5}"]
+            for pitch in last5:
+                batter = (pitch.get('batter_name') or '')[:14]
+                num = pitch.get('player_total_pitches', '')
+                inn = pitch.get('inning', '')
+                desc = (pitch.get('description') or '')[:15]
+                pname = (pitch.get('pitch_name') or '')[:11]
+                vel = pitch.get('start_speed', '')
+                vel_str = f"{vel:.1f}" if isinstance(vel, (int, float)) else str(vel)
+                last5_lines.append(f"{batter:<14} {str(num):>3} {str(inn):>3} {desc:<15} {pname: <11} {vel_str:>5}")
+            last5_block = "\n".join(last5_lines)
+
+            # Pitch mix summary from avg_pitch_speed on first entry
+            mix_block = ""
+            avg_speed_data = pitch_data[0].get('avg_pitch_speed', [])
+            def _f(val, default=0.0):
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    return float(default)
+
+            if avg_speed_data:
+                mix_lines = [f"{'PITCH':<12} {'#':>3} {'SWSTR':>5} {'CALLED':>6} {'FOUL':>4} {'BIP':>3} {'AVG':>5} {'MIN':>5} {'MAX':>5}"]
+                for entry in avg_speed_data:
+                    ptype = entry.get('pitch_type', '')
+                    if ptype == "4-Seam Fastball":
+                        ptype = "4-Seam FB"
+                    elif ptype == "2-Seam Fastball":
+                        ptype = "2-Seam FB"
+                    mix_lines.append(
+                        f"{ptype:<12} "
+                        f"{entry.get('count', 0):>3} "
+                        f"{entry.get('swinging_strikes', 0):>5} "
+                        f"{entry.get('called_strikes', 0):>6} "
+                        f"{entry.get('fouls', 0):>4} "
+                        f"{entry.get('balls_in_play', 0):>3} "
+                        f"{_f(entry.get('avg_pitch_speed')):>5.1f} "
+                        f"{_f(entry.get('min_pitch_speed')):>5.1f} "
+                        f"{_f(entry.get('max_pitch_speed')):>5.1f}"
+                    )
+                # totals row
+                total_pitches = sum(e.get('count', 0) for e in avg_speed_data)
+                total_swstr = sum(e.get('swinging_strikes', 0) for e in avg_speed_data)
+                total_called = sum(e.get('called_strikes', 0) for e in avg_speed_data)
+                total_foul = sum(e.get('fouls', 0) for e in avg_speed_data)
+                total_bip = sum(e.get('balls_in_play', 0) for e in avg_speed_data)
+                all_speeds = [_f(e.get('avg_pitch_speed')) for e in avg_speed_data if e.get('avg_pitch_speed')]
+                avg_all = sum(all_speeds) / len(all_speeds) if all_speeds else 0.0
+                min_all = min((_f(e.get('min_pitch_speed')) for e in avg_speed_data if e.get('min_pitch_speed')), default=0.0)
+                max_all = max((_f(e.get('max_pitch_speed')) for e in avg_speed_data if e.get('max_pitch_speed')), default=0.0)
+                mix_lines.append(
+                    f"{'ALL':<12} {total_pitches:>3} {total_swstr:>5} {total_called:>6} {total_foul:>4} {total_bip:>3} {avg_all:>5.1f} {min_all:>5.1f} {max_all:>5.1f}"
+                )
+                mix_block = "\n".join(mix_lines)
+
+            field_val = f"```python\n{last5_block}\n```"
+            if mix_block:
+                field_val += f"```\n{mix_block}\n```"
+
+            if len(embed) + len(p['name']) + len(field_val) > 5900:
+                embeds.append(embed)
+                embed = discord.Embed(color=discord.Color.blue())
+            embed.add_field(name=p['name'], value=field_val, inline=False)
+
+        embeds.append(embed)
+        await interaction.followup.send(embeds=embeds)
+
+    @pitches.autocomplete('player')
+    async def pitches_player_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
 
 
     @mlb.command(name="box", description="Get the box score for a team's game today")
