@@ -2212,6 +2212,8 @@ class MLBClient:
                 if "east" in q and "east" not in group_name.lower(): continue
                 if "central" in q and "central" not in group_name.lower(): continue
                 if "west" in q and "west" not in group_name.lower(): continue
+                if "nl" in q and "al" not in q and "national" not in group_name.lower(): continue
+                if "al" in q and "nl" not in q and "american" not in group_name.lower(): continue
             
             records = []
             for tr in grp.get('teamRecords', []):
