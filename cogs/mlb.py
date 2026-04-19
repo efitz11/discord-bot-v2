@@ -1303,7 +1303,7 @@ class MLBSlash(commands.Cog):
     DIVISION_TEAMS['al'] = DIVISION_TEAMS['ale'] | DIVISION_TEAMS['alc'] | DIVISION_TEAMS['alw']
 
     @mlb.command(name="score", description="Get today's MLB games or a specific team's game")
-    @app_commands.describe(team="The team abbreviation or name (e.g. wsh, lad). Default is Nats. Use 'all' for everyone.")
+    @app_commands.describe(team="The team abbreviation or name (e.g. wsh, lad). Use 'all' for everyone.")
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
     @app_commands.describe(live="Only show games currently in progress")
     @app_commands.describe(division="Filter by division or league")
@@ -1318,15 +1318,13 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="National League", value="nl"),
         app_commands.Choice(name="American League", value="al"),
     ])
-    async def score(self, interaction: discord.Interaction, team: str = None, date: str = None, live: bool = False, division: app_commands.Choice[str] = None):
+    async def score(self, interaction: discord.Interaction, team: str, date: str = None, live: bool = False, division: app_commands.Choice[str] = None):
         # Defer the response immediately. The MLB API might take longer than 3 seconds to respond.
         await interaction.response.defer()
 
-        # Handle defaults: None -> WSH, "all" -> None
+        # Handle "all" -> None
         team_query = team
-        if team_query is None:
-            team_query = "wsh"
-        elif team_query.lower() == "all":
+        if team_query.lower() == "all":
             team_query = None
 
         # Parse the date if provided
