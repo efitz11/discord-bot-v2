@@ -594,6 +594,12 @@ class MLBSlash(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Error fetching highlights: {e}")
 
+    @highlights.autocomplete('query')
+    async def highlights_query_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        team_choices = [c for c in await self.team_autocomplete(interaction, current) if c.value != 'all']
+        player_choices = await self.player_autocomplete(interaction, current)
+        return (team_choices + player_choices)[:25]
+
     @mlb.command(name="standings", description="Get MLB standings by league, division, or wildcard")
     @app_commands.describe(query="Standings to display. Defaults to NL East.")
     @app_commands.choices(query=[
