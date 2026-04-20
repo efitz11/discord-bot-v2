@@ -1617,6 +1617,10 @@ class MLBSlash(commands.Cog):
         
         await interaction.followup.send(embed=embed)
 
+    @bullpen.autocomplete('team')
+    async def bullpen_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
     async def stat_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         # Map common names to API internal stat keys
         stats_map = {
@@ -2018,11 +2022,19 @@ class MLBSlash(commands.Cog):
     async def next_games(self, interaction: discord.Interaction, team: str, games: int = 3):
         await self._send_schedule(interaction, team, games, past=False)
 
+    @next_games.autocomplete('team')
+    async def next_games_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
     @mlb.command(name="past", description="Get the recently completed games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
     @app_commands.describe(games="Number of games to show (default 3, max 10)")
     async def past_games(self, interaction: discord.Interaction, team: str, games: int = 3):
         await self._send_schedule(interaction, team, games, past=True)
+
+    @past_games.autocomplete('team')
+    async def past_games_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
 
     async def _send_schedule(self, interaction: discord.Interaction, team: str, num_games: int, past: bool):
         await interaction.response.defer()
