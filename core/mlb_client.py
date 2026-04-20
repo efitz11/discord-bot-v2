@@ -225,7 +225,7 @@ class Game:
             try:
                 dt = datetime.strptime(data['gameDate'], "%Y-%m-%dT%H:%M:%SZ")
                 dt = dt - timedelta(hours=4)  # ET offset for baseball season
-                game.game_time_str = dt.strftime("%I:%M %p").lstrip('0') + " ET"
+                game.game_time_str = dt.strftime("%I:%M").lstrip('0') + " ET"
                 game.game_date_str = dt.strftime("%A, %b %d").replace(" 0", " ")
             except ValueError:
                 pass
@@ -308,7 +308,7 @@ class Game:
             away_prob_str = f" | {away_prob}" if away_prob else ""
             home_prob_str = f" | {home_prob}" if home_prob else ""
             
-            return f"{self.away.abbreviation.ljust(3)} {self.away.record.center(7)} | {time_str.ljust(11)}{away_prob_str}\n{self.home.abbreviation.ljust(3)} {self.home.record.center(7)} | {' ' * 11}{home_prob_str}"
+            return f"{self.away.abbreviation.ljust(3)} {self.away.record.center(7)} | {time_str.ljust(9)}{away_prob_str}\n{self.home.abbreviation.ljust(3)} {self.home.record.center(7)} | {' ' * 9}{home_prob_str}"
 
     def format_last_play(self) -> str:
         """Format the last play description and statcast info as markdown (outside code block)."""
