@@ -1431,49 +1431,47 @@ class MLBClient:
 
         person = person_data['people'][0]
         player_name = person.get('fullName', player_name)
-        if 'currentTeam' not in person:
-            return [PlayerGameStats(player_id, player_name, "FA", "N/A", False, date or "Today", info_message="Player is not currently on a team.", headshot_url=headshot_url)]
+        team_id = person.get('currentTeam', {}).get('id')
+        team_abbrev = person.get('currentTeam', {}).get('abbreviation', 'TEAM')
 
-
-        team_id = person['currentTeam']['id']
-        team_abbrev = person['currentTeam'].get('abbreviation', 'TEAM')
-
-        # Fetch the team's schedule for the target date to get the gamePk(s)
-        sport_ids = "11,12,13,14,15,5442,16" if milb else "1"
-        schedule_url = f"{self.BASE_URL}/schedule?sportId={sport_ids}&teamId={team_id}"
-        if date: schedule_url += f"&date={date}"
-
-        async with session.get(schedule_url) as resp:
-            sched_data = await resp.json()
-
-        if not sched_data.get('dates') or not sched_data['dates'][0].get('games'):
-            # For historical dates, the player may have been on a different team — try gameLog fallback
-            if date and not milb:
-                try:
-                    parsed = datetime.strptime(date, "%m/%d/%Y") if "/" in date else datetime.strptime(date, "%Y-%m-%d")
-                    season = str(parsed.year)
-                    target_date_str = parsed.strftime("%Y-%m-%d")
-                    game_pks = []
-                    for grp in ["pitching", "hitting"]:
-                        gl_url = f"{self.BASE_URL}/people/{player_id}/stats?stats=gameLog&season={season}&group={grp}"
-                        async with session.get(gl_url) as resp:
-                            gl_data = await resp.json()
-                        for stat_block in gl_data.get("stats", []):
-                            for split in stat_block.get("splits", []):
-                                if split.get("date") == target_date_str:
-                                    gpk = split["game"]["gamePk"]
-                                    if gpk not in game_pks:
-                                        game_pks.append(gpk)
-                                    team_id = split["team"]["id"]
-                                    team_abbrev = split["team"].get("abbreviation", team_abbrev)
-                    if game_pks:
-                        sched_data = {"dates": [{"date": target_date_str, "games": [{"gamePk": gpk, "teams": {}} for gpk in game_pks]}]}
-                    else:
-                        return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
-                except Exception:
-                    return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
+        # For a specific historical date (MLB only), use gameLog to find the correct team+game
+        # rather than assuming the player is on their current team
+        if date and not milb:
+            try:
+                parsed = datetime.strptime(date, "%m/%d/%Y") if "/" in date else datetime.strptime(date, "%Y-%m-%d")
+                season = str(parsed.year)
+                target_date_str = parsed.strftime("%Y-%m-%d")
+                game_pks = []
+                for grp in ["pitching", "hitting"]:
+                    gl_url = f"{self.BASE_URL}/people/{player_id}/stats?stats=gameLog&season={season}&group={grp}"
+                    async with session.get(gl_url) as resp:
+                        gl_data = await resp.json()
+                    for stat_block in gl_data.get("stats", []):
+                        for split in stat_block.get("splits", []):
+                            if split.get("date") == target_date_str:
+                                gpk = split["game"]["gamePk"]
+                                if gpk not in game_pks:
+                                    game_pks.append(gpk)
+                                team_id = split["team"]["id"]
+                                team_abbrev = split["team"].get("abbreviation", team_abbrev)
+            except Exception:
+                game_pks = []
+            if game_pks:
+                sched_data = {"dates": [{"date": target_date_str, "games": [{"gamePk": gpk, "teams": {}} for gpk in game_pks]}]}
             else:
-                return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
+                return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date, info_message="No games found for this date.", headshot_url=headshot_url)]
+        else:
+            if not team_id:
+                return [PlayerGameStats(player_id, player_name, "FA", "N/A", False, "Today", info_message="Player is not currently on a team.", headshot_url=headshot_url)]
+
+            # Fetch the team's schedule for today to get the gamePk(s)
+            sport_ids = "11,12,13,14,15,5442,16" if milb else "1"
+            schedule_url = f"{self.BASE_URL}/schedule?sportId={sport_ids}&teamId={team_id}"
+            async with session.get(schedule_url) as resp:
+                sched_data = await resp.json()
+
+            if not sched_data.get('dates') or not sched_data['dates'][0].get('games'):
+                return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, "Today", info_message="No games scheduled for today.", headshot_url=headshot_url)]
 
 
         results = []
