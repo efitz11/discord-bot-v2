@@ -1447,7 +1447,33 @@ class MLBClient:
             sched_data = await resp.json()
 
         if not sched_data.get('dates') or not sched_data['dates'][0].get('games'):
-            return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
+            # For historical dates, the player may have been on a different team — try gameLog fallback
+            if date and not milb:
+                try:
+                    parsed = datetime.strptime(date, "%m/%d/%Y") if "/" in date else datetime.strptime(date, "%Y-%m-%d")
+                    season = str(parsed.year)
+                    target_date_str = parsed.strftime("%Y-%m-%d")
+                    game_pks = []
+                    for grp in ["pitching", "hitting"]:
+                        gl_url = f"{self.BASE_URL}/people/{player_id}/stats?stats=gameLog&season={season}&group={grp}"
+                        async with session.get(gl_url) as resp:
+                            gl_data = await resp.json()
+                        for stat_block in gl_data.get("stats", []):
+                            for split in stat_block.get("splits", []):
+                                if split.get("date") == target_date_str:
+                                    gpk = split["game"]["gamePk"]
+                                    if gpk not in game_pks:
+                                        game_pks.append(gpk)
+                                    team_id = split["team"]["id"]
+                                    team_abbrev = split["team"].get("abbreviation", team_abbrev)
+                    if game_pks:
+                        sched_data = {"dates": [{"date": target_date_str, "games": [{"gamePk": gpk, "teams": {}} for gpk in game_pks]}]}
+                    else:
+                        return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
+                except Exception:
+                    return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
+            else:
+                return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
 
 
         results = []
@@ -1457,13 +1483,16 @@ class MLBClient:
 
         # Loop through all games that day (handles doubleheaders cleanly)
         for game in games:
-            is_home = (game['teams']['home']['team']['id'] == team_id)
-            side = 'home' if is_home else 'away'
-            
             # Fetch the Boxscore for that game
             box_url = f"{self.BASE_URL}/game/{game['gamePk']}/boxscore"
             async with session.get(box_url) as resp:
                 box_data = await resp.json()
+
+            if game.get('teams') and game['teams'].get('home', {}).get('team', {}).get('id'):
+                is_home = (game['teams']['home']['team']['id'] == team_id)
+            else:
+                is_home = (box_data['teams']['home']['team']['id'] == team_id)
+            side = 'home' if is_home else 'away'
                 
             box_away = box_data['teams']['away']['team']
             box_home = box_data['teams']['home']['team']
