@@ -540,13 +540,16 @@ class MLBSlash(commands.Cog):
 
         # Compute label width once across all sections so bars align vertically
         label_w = max(len(r[0]) for _, rows in sections for r in rows)
-        header = f"{p1_name:>3}  {'':>{BAR_WIDTH}}  {'':^{label_w}}  {'':>{BAR_WIDTH}}  {p2_name}"
+        data_row_w = 3 + 2 + BAR_WIDTH + 2 + label_w + 2 + BAR_WIDTH + 2 + 3
+        p1_section = f"{p1_name:>3}  {'':>{BAR_WIDTH}}  {'':^{label_w}}  {'':>{BAR_WIDTH}}  "
+        p2_start = data_row_w - len(p2_name)
+        header = p1_section[:p2_start].ljust(p2_start) + p2_name
 
         for cat_name, rows in sections:
             lines = [header]
             for label, v1, v2, left_bar, right_bar in rows:
                 centered = label.center(label_w)
-                lines.append(f"{v1:>3}  {left_bar}  {centered}  {right_bar}  {v2:<3}")
+                lines.append(f"{v1:>3}  {left_bar}  {centered}  {right_bar}  {v2:>3}")
             embed.add_field(name=cat_name, value=f"```\n" + "\n".join(lines) + "\n```", inline=False)
 
         embed.set_footer(text=f"{p1_data.player_name} (left)  vs  {p2_data.player_name} (right) — {year_str} {stat_type} percentiles")
