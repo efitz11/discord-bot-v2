@@ -1123,9 +1123,28 @@ class MLBClient:
             url = f"https://baseballsavant.mlb.com/player/search-all?search={urllib.parse.quote(query)}"
             try:
                 async with session.get(url) as resp:
-                    return await resp.json()
+                    results = await resp.json()
             except Exception:
-                return []
+                results = []
+
+            # Fall back to MLB Stats API for players not yet indexed by Savant (e.g. fresh callups)
+            if not any(p.get('mlb') == 1 for p in results):
+                try:
+                    fallback_url = f"{self.BASE_URL}/people/search?names={urllib.parse.quote(query)}&sportId=1&active=true&hydrate=currentTeam"
+                    async with session.get(fallback_url) as resp:
+                        data = await resp.json()
+                    for p in data.get('people', []):
+                        team_name = p.get('currentTeam', {}).get('name', 'FA')
+                        results.append({
+                            'id': str(p['id']),
+                            'name': p['fullName'],
+                            'name_display_club': team_name,
+                            'mlb': 1,
+                        })
+                except Exception:
+                    pass
+
+            return results
 
     async def resolve_player(self, name_or_id: str, milb: bool = False) -> Optional[dict]:
         """Resolve a player name or ID to {'id': str, 'name': str}.
@@ -1734,7 +1753,7 @@ class MLBClient:
                 # Only process the first yearByYear stat group to avoid duplicates
                 break
 
-        if career_teams:
+        if career and career_teams:
             # Use the most recent abbreviation for each team
             team_abbrevs = [team_id_to_latest_abbrev[t_id] for t_id, _ in career_teams]
             unique_team_count = len(set(t_id for t_id, _ in career_teams))
