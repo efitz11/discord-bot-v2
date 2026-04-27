@@ -388,6 +388,46 @@ class MLBSlash(commands.Cog):
         embed.description += f"\n```python\n{pace_data.format_discord_code_block()}\n```"
         await interaction.followup.send(embed=embed)
 
+    @mlb.command(name="transactions", description="Get a player's transactions for a season")
+    @app_commands.describe(player="The player to search for", year="Season year (e.g. 2024). Defaults to current year.")
+    @app_commands.autocomplete(player=player_autocomplete)
+    async def transactions(self, interaction: discord.Interaction, player: str, year: int = None):
+        await interaction.response.defer()
+        result = await self.bot.mlb_client.get_player_transactions(player, year=year)
+
+        if not result:
+            await interaction.followup.send("Could not find that player.")
+            return
+
+        player_info = result['player']
+        txns = result['transactions']
+        display_year = result['year']
+
+        if not txns:
+            await interaction.followup.send(
+                f"No transactions found for **{player_info['name']}** in {display_year}."
+            )
+            return
+
+        lines = []
+        for t in txns:
+            date = t.get('date', '')
+            desc = t.get('description', '')
+            lines.append(f"{date}  {desc}")
+
+        body = "\n".join(lines)
+        # Discord code block limit — truncate if enormous
+        if len(body) > 3800:
+            body = body[:3797] + "..."
+
+        embed = discord.Embed(
+            title=f"{display_year} Transactions — {player_info['name']}",
+            description=f"```\n{body}\n```",
+            color=discord.Color.blue(),
+        )
+        embed.set_footer(text=f"{len(txns)} transaction(s)")
+        await interaction.followup.send(embed=embed)
+
 
 
     @savant.command(name="percentiles", description="Get a player's Baseball Savant percentiles")

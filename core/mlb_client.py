@@ -3430,3 +3430,26 @@ class MLBClient:
             pass
         return None
 
+    async def get_player_transactions(self, player_id_or_name: str, year: int = None) -> Optional[dict]:
+        """Fetch all transactions for a player in a given year."""
+        player = await self.resolve_player(player_id_or_name)
+        if not player:
+            return None
+
+        if year is None:
+            year = (datetime.utcnow() - timedelta(hours=5)).year
+
+        session = await self.get_session()
+        url = (
+            f"{self.BASE_URL}/transactions"
+            f"?playerId={player['id']}"
+            f"&startDate={year}-01-01"
+            f"&endDate={year}-12-31"
+        )
+        async with session.get(url) as resp:
+            data = await resp.json()
+
+        transactions = data.get('transactions', [])
+        transactions.sort(key=lambda t: t.get('date', ''))
+        return {'player': player, 'year': year, 'transactions': transactions}
+
