@@ -27,6 +27,7 @@ A Discord bot for MLB and MiLB fans, built on the MLB Stats API and Baseball Sav
 | `homeruns` | All home runs hit across the league today |
 | `next` | Upcoming schedule for a team |
 | `past` | Recently completed games for a team |
+| `transactions` | Transaction history for a player in a given season |
 
 ### /milb
 
