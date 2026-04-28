@@ -1025,12 +1025,23 @@ class MLBSlash(commands.Cog):
                 embed.title = f"{first_stats.years} {first_stats.stat_type.capitalize()} Stats for {first_stats.player_name} ({display_team})"
             
         description = f"{first_stats.info_line}\n\n"
+
+        if first_stats.birth_date:
+            try:
+                from datetime import datetime, timezone, timedelta
+                et_now = datetime.now(timezone.utc) - timedelta(hours=5)
+                bd = datetime.strptime(first_stats.birth_date, "%Y-%m-%d")
+                if et_now.month == bd.month and et_now.day == bd.day:
+                    description += "🎂 Happy Birthday 🎂\n\n"
+            except Exception:
+                pass
+
         for st in season_stats_list:
             if len(season_stats_list) > 1:
                 prefix = "Career " if st.is_career else f"{st.years} "
                 description += f"*{prefix}{st.stat_type.capitalize()}*\n"
             description += f"```python\n{st.format_discord_code_block()}\n```\n"
-            
+
         embed.description = description.strip()
         if first_stats.headshot_url:
             embed.set_thumbnail(url=first_stats.headshot_url)
