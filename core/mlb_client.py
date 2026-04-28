@@ -757,6 +757,7 @@ class PlayerSeasonStats:
     headshot_url: str = ""
     parent_org_abbrev: str = ""
     level_abbrev: str = ""
+    birth_date: str = ""
 
     def format_discord_code_block(self) -> str:
         if self.info_message:
@@ -1819,7 +1820,8 @@ class MLBClient:
                     stats=found_stats,
                     headshot_url=headshot_url,
                     parent_org_abbrev=parent_org_abbrev,
-                    level_abbrev=level_abbrev
+                    level_abbrev=level_abbrev,
+                    birth_date=birthdate
                 ))
             elif stat_type or len(stat_types_to_fetch) == 1:
                 results.append(PlayerSeasonStats(
@@ -1833,7 +1835,8 @@ class MLBClient:
                     info_message=f"No {st} stats found for this player.",
                     headshot_url=headshot_url,
                     parent_org_abbrev=parent_org_abbrev,
-                    level_abbrev=level_abbrev
+                    level_abbrev=level_abbrev,
+                    birth_date=birthdate
                 ))
 
         return results
