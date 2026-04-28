@@ -17,6 +17,9 @@ class ModernNatsBot(commands.Bot):
     async def setup_hook(self):
         # Load our new modern cog
         await self.load_extension('cogs.mlb')
+
+        # Load the live game monitor (no-hitters, big HRs)
+        await self.load_extension('cogs.monitor')
         
         # Sync the slash commands to Discord
         await self.tree.sync()
