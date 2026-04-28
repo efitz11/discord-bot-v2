@@ -1,61 +1,84 @@
 # MLB Discord Bot
 
-A powerful, high-performance Discord bot designed for MLB fans, featuring deep integration with Baseball Savant (Statcast) and the MLB Stats API. Built with a focus on rich visual data representation and modern Discord features like Slash Commands and Autocomplete.
+A Discord bot for MLB and MiLB fans, built on the MLB Stats API and Baseball Savant (Statcast). All commands use Discord slash commands with autocomplete for player and team search.
 
-## 🚀 Key Features
+## Commands
 
-- **📊 Statcast Percentiles (`/mlb percentiles`)**: Beautifully formatted Baseball Savant percentile rankings for any player, complete with dynamic emoji status indicators (🔥 to 🧊).
-- **🎥 Video Highlights (`/mlb highlights`)**: Instantly retrieve the latest video clips for any player or team. No raw URLs—just clean, clickable link embeds.
-- **⚾ Pitch Arsenal (`/mlb arsenal`)**: Detailed pitcher breakdown including pitch usage, whiff rates, K%, and run value per 100 pitches.
-- **📈 Statcast Leaderboards (`/mlb savant_leaders`)**: Live leaderboards for Exit Velocity, Barrel %, Sprint Speed, OAA, and more.
-- **🏆 Live Standings (`/mlb standings`)**: Real-time divisional, league, and wildcard leaderboards with automatic "NL East" defaults for Nats fans.
-- **🔢 Player Stats (`/mlb stats`)**: Full season and career stats for both hitters and pitchers, with support for year-by-year historical ranges.
-- **🔍 Smart Autocomplete**: Predictive search for over 20,000 MLB players as you type.
+### /mlb
 
-## 🛠️ Technology Stack
+| Command | Description |
+|---|---|
+| `line` | Stat line for a player on a given date (or today) |
+| `abs` | At-bats and video highlights for a player on a given date |
+| `plot` | Pitch plot for a specific at-bat |
+| `sp` | Scoring plays for a team's game |
+| `pace` | Projected 162-game season totals for a player |
+| `highlights` | Video highlights for a player or team |
+| `standings` | Division, league, or wildcard standings |
+| `matchup` | Career stats for a team's roster against a specific pitcher |
+| `stats` | Season or career stats for a player |
+| `last` | Stats over a player's last N games |
+| `compare` | Side-by-side stat comparison for multiple players |
+| `score` | Today's scores or a specific team's game |
+| `box` | Box score for a team's game today |
+| `bullpen` | Bullpen availability and recent pitch counts for a team |
+| `leaders` | MLB player stat leaderboards |
+| `team_leaders` | MLB team stat leaderboards |
+| `homeruns` | All home runs hit across the league today |
+| `next` | Upcoming schedule for a team |
+| `past` | Recently completed games for a team |
+| `transactions` | Transaction history for a player in a given season |
 
-- **Python 3.12+**: Utilizing the latest language features for performance and type safety.
-- **discord.py**: A robust, modern wrapper for the Discord API.
-- **MLB Stats API**: Native integration for scores, standings, and player metadata.
-- **Baseball Savant (Statcast)**: Experimental scraping and CSV API integration for advanced analytics.
-- **Aiohttp**: Fully asynchronous networking for high-concurrency performance.
+### /milb
 
-## ⚙️ Installation & Setup
+| Command | Description |
+|---|---|
+| `stats` | Season or career stats for a minor league player |
+| `line` | Stat line for a minor league player on a given date |
+| `abs` | At-bats and video highlights for a minor league player |
 
-### 1. Requirements
-Ensure you have Python 3.12 installed on your system.
+### /savant
 
-### 2. Clone and Install
+| Command | Description |
+|---|---|
+| `percentiles` | Baseball Savant percentile rankings for a player |
+| `compare_percentiles` | Side-by-side Savant percentile comparison for two players |
+| `arsenal` | Pitch arsenal breakdown (usage, whiff rate, K%, run value) |
+| `game` | Statcast exit velocity data for a team's game or a player's at-bats |
+| `leaders` | Statcast leaderboards (exit velocity, barrel %, sprint speed, OAA, etc.) |
+| `pitches` | Pitch counts by inning, recent pitches, and pitch mix for a pitcher |
+| `zoneplot` | Hitting zone heatmap for a batter |
+
+## Setup
+
+### Requirements
+
+Python 3.12+
+
+### Install
+
 ```bash
-git clone https://github.com/your-repo/discord-bot-v2.git
+git clone https://github.com/efitz11/discord-bot-v2.git
 cd discord-bot-v2
 python -m venv venv
-source venv/bin/activate  # Or venv\Scripts\activate on Windows
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Environment Variables
-Create a `.env` file in the root directory:
-```env
+### Environment
+
+Create a `.env` file in the project root:
+
+```
 DISCORD_TOKEN=your_bot_token_here
 ```
 
-### 4. Running the Bot
+### Run
+
 ```bash
 python main.py
 ```
 
-## 🚢 Deployment (Self-Hosted)
+## Deployment
 
-The project includes a `natsbot.service` file for persistent deployment on Linux servers using `systemd`.
-
-### Automated Deployment
-This repo is configured with a GitHub Actions workflow (`.github/workflows/deploy.yml`) that automatically deploys to a self-hosted runner whenever code is pushed to the `main` branch.
-
-## 🧪 Development
-
-### Testing
-Diagnostic and diagnostic scripts are located in the `/tests/` directory. You can run individual tests using:
-```bash
-PYTHONPATH=. python tests/test_highlights.py
-```
+A `natsbot.service` systemd unit file is included for persistent deployment on Linux. A GitHub Actions workflow (`.github/workflows/deploy.yml`) automatically deploys to a self-hosted runner on pushes to `master`.

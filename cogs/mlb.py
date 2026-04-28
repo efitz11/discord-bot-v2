@@ -388,6 +388,46 @@ class MLBSlash(commands.Cog):
         embed.description += f"\n```python\n{pace_data.format_discord_code_block()}\n```"
         await interaction.followup.send(embed=embed)
 
+    @mlb.command(name="transactions", description="Get a player's transactions for a season")
+    @app_commands.describe(player="The player to search for", year="Season year (e.g. 2024). Defaults to current year.")
+    @app_commands.autocomplete(player=player_autocomplete)
+    async def transactions(self, interaction: discord.Interaction, player: str, year: int = None):
+        await interaction.response.defer()
+        result = await self.bot.mlb_client.get_player_transactions(player, year=year)
+
+        if not result:
+            await interaction.followup.send("Could not find that player.")
+            return
+
+        player_info = result['player']
+        txns = result['transactions']
+        display_year = result['year']
+
+        if not txns:
+            await interaction.followup.send(
+                f"No transactions found for **{player_info['name']}** in {display_year}."
+            )
+            return
+
+        lines = []
+        for t in txns:
+            date = t.get('date', '')
+            desc = t.get('description', '')
+            lines.append(f"{date}  {desc}")
+
+        body = "\n".join(lines)
+        # Discord code block limit — truncate if enormous
+        if len(body) > 3800:
+            body = body[:3797] + "..."
+
+        embed = discord.Embed(
+            title=f"{display_year} Transactions — {player_info['name']}",
+            description=f"```\n{body}\n```",
+            color=discord.Color.blue(),
+        )
+        embed.set_footer(text=f"{len(txns)} transaction(s)")
+        await interaction.followup.send(embed=embed)
+
 
 
     @savant.command(name="percentiles", description="Get a player's Baseball Savant percentiles")
@@ -540,13 +580,16 @@ class MLBSlash(commands.Cog):
 
         # Compute label width once across all sections so bars align vertically
         label_w = max(len(r[0]) for _, rows in sections for r in rows)
-        header = f"{p1_name:>3}  {'':>{BAR_WIDTH}}  {'':^{label_w}}  {'':>{BAR_WIDTH}}  {p2_name}"
+        data_row_w = 3 + 2 + BAR_WIDTH + 2 + label_w + 2 + BAR_WIDTH + 2 + 3
+        p1_section = f"{p1_name:>3}  {'':>{BAR_WIDTH}}  {'':^{label_w}}  {'':>{BAR_WIDTH}}  "
+        p2_start = data_row_w - len(p2_name)
+        header = p1_section[:p2_start].ljust(p2_start) + p2_name
 
         for cat_name, rows in sections:
             lines = [header]
             for label, v1, v2, left_bar, right_bar in rows:
                 centered = label.center(label_w)
-                lines.append(f"{v1:>3}  {left_bar}  {centered}  {right_bar}  {v2:<3}")
+                lines.append(f"{v1:>3}  {left_bar}  {centered}  {right_bar}  {v2:>3}")
             embed.add_field(name=cat_name, value=f"```\n" + "\n".join(lines) + "\n```", inline=False)
 
         embed.set_footer(text=f"{p1_data.player_name} (left)  vs  {p2_data.player_name} (right) — {year_str} {stat_type} percentiles")
@@ -593,6 +636,12 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send(embed=embed)
         except Exception as e:
             await interaction.followup.send(f"Error fetching highlights: {e}")
+
+    @highlights.autocomplete('query')
+    async def highlights_query_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        team_choices = [c for c in await self.team_autocomplete(interaction, current) if c.value != 'all']
+        player_choices = await self.player_autocomplete(interaction, current)
+        return (team_choices + player_choices)[:25]
 
     @mlb.command(name="standings", description="Get MLB standings by league, division, or wildcard")
     @app_commands.describe(query="Standings to display. Defaults to NL East.")
@@ -976,12 +1025,23 @@ class MLBSlash(commands.Cog):
                 embed.title = f"{first_stats.years} {first_stats.stat_type.capitalize()} Stats for {first_stats.player_name} ({display_team})"
             
         description = f"{first_stats.info_line}\n\n"
+
+        if first_stats.birth_date:
+            try:
+                from datetime import datetime, timezone, timedelta
+                et_now = datetime.now(timezone.utc) - timedelta(hours=5)
+                bd = datetime.strptime(first_stats.birth_date, "%Y-%m-%d")
+                if et_now.month == bd.month and et_now.day == bd.day:
+                    description += "🎂 Happy Birthday 🎂\n\n"
+            except Exception:
+                pass
+
         for st in season_stats_list:
             if len(season_stats_list) > 1:
                 prefix = "Career " if st.is_career else f"{st.years} "
                 description += f"*{prefix}{st.stat_type.capitalize()}*\n"
             description += f"```python\n{st.format_discord_code_block()}\n```\n"
-            
+
         embed.description = description.strip()
         if first_stats.headshot_url:
             embed.set_thumbnail(url=first_stats.headshot_url)
@@ -1297,7 +1357,7 @@ class MLBSlash(commands.Cog):
     DIVISION_TEAMS['al'] = DIVISION_TEAMS['ale'] | DIVISION_TEAMS['alc'] | DIVISION_TEAMS['alw']
 
     @mlb.command(name="score", description="Get today's MLB games or a specific team's game")
-    @app_commands.describe(team="The team abbreviation or name (e.g. wsh, lad). Default is Nats. Use 'all' for everyone.")
+    @app_commands.describe(team="The team abbreviation or name (e.g. wsh, lad). Use 'all' for everyone.")
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
     @app_commands.describe(live="Only show games currently in progress")
     @app_commands.describe(division="Filter by division or league")
@@ -1312,15 +1372,13 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="National League", value="nl"),
         app_commands.Choice(name="American League", value="al"),
     ])
-    async def score(self, interaction: discord.Interaction, team: str = None, date: str = None, live: bool = False, division: app_commands.Choice[str] = None):
+    async def score(self, interaction: discord.Interaction, team: str, date: str = None, live: bool = False, division: app_commands.Choice[str] = None):
         # Defer the response immediately. The MLB API might take longer than 3 seconds to respond.
         await interaction.response.defer()
 
-        # Handle defaults: None -> WSH, "all" -> None
+        # Handle "all" -> None
         team_query = team
-        if team_query is None:
-            team_query = "wsh"
-        elif team_query.lower() == "all":
+        if team_query.lower() == "all":
             team_query = None
 
         # Parse the date if provided
@@ -1612,6 +1670,10 @@ class MLBSlash(commands.Cog):
         embed.description = f"```\n{bullpen_data.format_table()}\n```"
         
         await interaction.followup.send(embed=embed)
+
+    @bullpen.autocomplete('team')
+    async def bullpen_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
 
     async def stat_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         # Map common names to API internal stat keys
@@ -2014,11 +2076,19 @@ class MLBSlash(commands.Cog):
     async def next_games(self, interaction: discord.Interaction, team: str, games: int = 3):
         await self._send_schedule(interaction, team, games, past=False)
 
+    @next_games.autocomplete('team')
+    async def next_games_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
     @mlb.command(name="past", description="Get the recently completed games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
     @app_commands.describe(games="Number of games to show (default 3, max 10)")
     async def past_games(self, interaction: discord.Interaction, team: str, games: int = 3):
         await self._send_schedule(interaction, team, games, past=True)
+
+    @past_games.autocomplete('team')
+    async def past_games_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
 
     async def _send_schedule(self, interaction: discord.Interaction, team: str, num_games: int, past: bool):
         await interaction.response.defer()

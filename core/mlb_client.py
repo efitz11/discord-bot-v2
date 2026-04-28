@@ -225,7 +225,7 @@ class Game:
             try:
                 dt = datetime.strptime(data['gameDate'], "%Y-%m-%dT%H:%M:%SZ")
                 dt = dt - timedelta(hours=4)  # ET offset for baseball season
-                game.game_time_str = dt.strftime("%I:%M %p").lstrip('0') + " ET"
+                game.game_time_str = dt.strftime("%I:%M").lstrip('0') + " ET"
                 game.game_date_str = dt.strftime("%A, %b %d").replace(" 0", " ")
             except ValueError:
                 pass
@@ -308,7 +308,7 @@ class Game:
             away_prob_str = f" | {away_prob}" if away_prob else ""
             home_prob_str = f" | {home_prob}" if home_prob else ""
             
-            return f"{self.away.abbreviation.ljust(3)} {self.away.record.center(7)} | {time_str.ljust(11)}{away_prob_str}\n{self.home.abbreviation.ljust(3)} {self.home.record.center(7)} | {' ' * 11}{home_prob_str}"
+            return f"{self.away.abbreviation.ljust(3)} {self.away.record.center(7)} | {time_str.ljust(9)}{away_prob_str}\n{self.home.abbreviation.ljust(3)} {self.home.record.center(7)} | {' ' * 9}{home_prob_str}"
 
     def format_last_play(self) -> str:
         """Format the last play description and statcast info as markdown (outside code block)."""
@@ -757,6 +757,7 @@ class PlayerSeasonStats:
     headshot_url: str = ""
     parent_org_abbrev: str = ""
     level_abbrev: str = ""
+    birth_date: str = ""
 
     def format_discord_code_block(self) -> str:
         if self.info_message:
@@ -1123,9 +1124,28 @@ class MLBClient:
             url = f"https://baseballsavant.mlb.com/player/search-all?search={urllib.parse.quote(query)}"
             try:
                 async with session.get(url) as resp:
-                    return await resp.json()
+                    results = await resp.json()
             except Exception:
-                return []
+                results = []
+
+            # Fall back to MLB Stats API for players not yet indexed by Savant (e.g. fresh callups)
+            if not any(p.get('mlb') == 1 for p in results):
+                try:
+                    fallback_url = f"{self.BASE_URL}/people/search?names={urllib.parse.quote(query)}&sportId=1&active=true&hydrate=currentTeam"
+                    async with session.get(fallback_url) as resp:
+                        data = await resp.json()
+                    for p in data.get('people', []):
+                        team_name = p.get('currentTeam', {}).get('name', 'FA')
+                        results.append({
+                            'id': str(p['id']),
+                            'name': p['fullName'],
+                            'name_display_club': team_name,
+                            'mlb': 1,
+                        })
+                except Exception:
+                    pass
+
+            return results
 
     async def resolve_player(self, name_or_id: str, milb: bool = False) -> Optional[dict]:
         """Resolve a player name or ID to {'id': str, 'name': str}.
@@ -1431,23 +1451,47 @@ class MLBClient:
 
         person = person_data['people'][0]
         player_name = person.get('fullName', player_name)
-        if 'currentTeam' not in person:
-            return [PlayerGameStats(player_id, player_name, "FA", "N/A", False, date or "Today", info_message="Player is not currently on a team.", headshot_url=headshot_url)]
+        team_id = person.get('currentTeam', {}).get('id')
+        team_abbrev = person.get('currentTeam', {}).get('abbreviation', 'TEAM')
 
+        # For a specific historical date (MLB only), use gameLog to find the correct team+game
+        # rather than assuming the player is on their current team
+        if date and not milb:
+            try:
+                parsed = datetime.strptime(date, "%m/%d/%Y") if "/" in date else datetime.strptime(date, "%Y-%m-%d")
+                season = str(parsed.year)
+                target_date_str = parsed.strftime("%Y-%m-%d")
+                game_pks = []
+                for grp in ["pitching", "hitting"]:
+                    gl_url = f"{self.BASE_URL}/people/{player_id}/stats?stats=gameLog&season={season}&group={grp}"
+                    async with session.get(gl_url) as resp:
+                        gl_data = await resp.json()
+                    for stat_block in gl_data.get("stats", []):
+                        for split in stat_block.get("splits", []):
+                            if split.get("date") == target_date_str:
+                                gpk = split["game"]["gamePk"]
+                                if gpk not in game_pks:
+                                    game_pks.append(gpk)
+                                team_id = split["team"]["id"]
+                                team_abbrev = split["team"].get("abbreviation", team_abbrev)
+            except Exception:
+                game_pks = []
+            if game_pks:
+                sched_data = {"dates": [{"date": target_date_str, "games": [{"gamePk": gpk, "teams": {}} for gpk in game_pks]}]}
+            else:
+                return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date, info_message="No games found for this date.", headshot_url=headshot_url)]
+        else:
+            if not team_id:
+                return [PlayerGameStats(player_id, player_name, "FA", "N/A", False, "Today", info_message="Player is not currently on a team.", headshot_url=headshot_url)]
 
-        team_id = person['currentTeam']['id']
-        team_abbrev = person['currentTeam'].get('abbreviation', 'TEAM')
+            # Fetch the team's schedule for today to get the gamePk(s)
+            sport_ids = "11,12,13,14,15,5442,16" if milb else "1"
+            schedule_url = f"{self.BASE_URL}/schedule?sportId={sport_ids}&teamId={team_id}"
+            async with session.get(schedule_url) as resp:
+                sched_data = await resp.json()
 
-        # Fetch the team's schedule for the target date to get the gamePk(s)
-        sport_ids = "11,12,13,14,15,5442,16" if milb else "1"
-        schedule_url = f"{self.BASE_URL}/schedule?sportId={sport_ids}&teamId={team_id}"
-        if date: schedule_url += f"&date={date}"
-
-        async with session.get(schedule_url) as resp:
-            sched_data = await resp.json()
-
-        if not sched_data.get('dates') or not sched_data['dates'][0].get('games'):
-            return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, date or "Today", info_message="No games scheduled for this date.", headshot_url=headshot_url)]
+            if not sched_data.get('dates') or not sched_data['dates'][0].get('games'):
+                return [PlayerGameStats(player_id, player_name, team_abbrev, "N/A", False, "Today", info_message="No games scheduled for today.", headshot_url=headshot_url)]
 
 
         results = []
@@ -1457,13 +1501,16 @@ class MLBClient:
 
         # Loop through all games that day (handles doubleheaders cleanly)
         for game in games:
-            is_home = (game['teams']['home']['team']['id'] == team_id)
-            side = 'home' if is_home else 'away'
-            
             # Fetch the Boxscore for that game
             box_url = f"{self.BASE_URL}/game/{game['gamePk']}/boxscore"
             async with session.get(box_url) as resp:
                 box_data = await resp.json()
+
+            if game.get('teams') and game['teams'].get('home', {}).get('team', {}).get('id'):
+                is_home = (game['teams']['home']['team']['id'] == team_id)
+            else:
+                is_home = (box_data['teams']['home']['team']['id'] == team_id)
+            side = 'home' if is_home else 'away'
                 
             box_away = box_data['teams']['away']['team']
             box_home = box_data['teams']['home']['team']
@@ -1707,7 +1754,7 @@ class MLBClient:
                 # Only process the first yearByYear stat group to avoid duplicates
                 break
 
-        if career_teams:
+        if career and career_teams:
             # Use the most recent abbreviation for each team
             team_abbrevs = [team_id_to_latest_abbrev[t_id] for t_id, _ in career_teams]
             unique_team_count = len(set(t_id for t_id, _ in career_teams))
@@ -1773,7 +1820,8 @@ class MLBClient:
                     stats=found_stats,
                     headshot_url=headshot_url,
                     parent_org_abbrev=parent_org_abbrev,
-                    level_abbrev=level_abbrev
+                    level_abbrev=level_abbrev,
+                    birth_date=birthdate
                 ))
             elif stat_type or len(stat_types_to_fetch) == 1:
                 results.append(PlayerSeasonStats(
@@ -1787,7 +1835,8 @@ class MLBClient:
                     info_message=f"No {st} stats found for this player.",
                     headshot_url=headshot_url,
                     parent_org_abbrev=parent_org_abbrev,
-                    level_abbrev=level_abbrev
+                    level_abbrev=level_abbrev,
+                    birth_date=birthdate
                 ))
 
         return results
@@ -2212,6 +2261,8 @@ class MLBClient:
                 if "east" in q and "east" not in group_name.lower(): continue
                 if "central" in q and "central" not in group_name.lower(): continue
                 if "west" in q and "west" not in group_name.lower(): continue
+                if "nl" in q and "al" not in q and "national" not in group_name.lower(): continue
+                if "al" in q and "nl" not in q and "american" not in group_name.lower(): continue
             
             records = []
             for tr in grp.get('teamRecords', []):
@@ -3381,4 +3432,27 @@ class MLBClient:
         except:
             pass
         return None
+
+    async def get_player_transactions(self, player_id_or_name: str, year: int = None) -> Optional[dict]:
+        """Fetch all transactions for a player in a given year."""
+        player = await self.resolve_player(player_id_or_name)
+        if not player:
+            return None
+
+        if year is None:
+            year = (datetime.utcnow() - timedelta(hours=5)).year
+
+        session = await self.get_session()
+        url = (
+            f"{self.BASE_URL}/transactions"
+            f"?playerId={player['id']}"
+            f"&startDate={year}-01-01"
+            f"&endDate={year}-12-31"
+        )
+        async with session.get(url) as resp:
+            data = await resp.json()
+
+        transactions = data.get('transactions', [])
+        transactions.sort(key=lambda t: t.get('date', ''))
+        return {'player': player, 'year': year, 'transactions': transactions}
 
