@@ -1516,7 +1516,11 @@ class MLBClient:
             box_home = box_data['teams']['home']['team']
             team_abbrev = box_home.get('abbreviation', team_abbrev) if is_home else box_away.get('abbreviation', team_abbrev)
             opp_abbrev = box_away.get('abbreviation', "OPP") if is_home else box_home.get('abbreviation', "OPP")
-                
+
+            if game.get('status', {}).get('abstractGameState') == 'Preview':
+                results.append(PlayerGameStats(player_id, player_name, team_abbrev, opp_abbrev, is_home, game_date_formatted, info_message="Game has not started yet.", headshot_url=headshot_url))
+                continue
+
             players_dict = box_data['teams'][side]['players']
             player_key = f"ID{player_id}"
             
