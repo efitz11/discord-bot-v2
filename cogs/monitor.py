@@ -351,7 +351,8 @@ class MonitorCog(commands.Cog):
         if la:
             parts.append(f"{la}° LA")
 
-        body = f"**{inning}:** With **{pitcher}** pitching, {desc}"
+        desc_fmt = desc.replace(batter, f"**{batter}**", 1)
+        body = f"**{inning}:** With **{pitcher}** pitching, {desc_fmt}"
         if parts:
             body += f"\n> *{' | '.join(parts)}*"
         if video_url:
