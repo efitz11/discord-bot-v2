@@ -558,9 +558,7 @@ class MonitorCog(commands.Cog):
                 is_new_day = self._schedule_date is not None and self._schedule_date != today_str
                 await self._refresh_schedule(prune_finished=is_new_day)
                 if is_new_day:
-                    self._hr_posted.clear()
-                    self._save_hr_state()
-                    print("[monitor] new calendar day — schedule merged, finished games pruned, HR state cleared")
+                    print("[monitor] new calendar day — schedule merged, finished games pruned")
 
             # Sleep cheaply when no games are live or imminent
             if not self._any_game_active_or_imminent():
