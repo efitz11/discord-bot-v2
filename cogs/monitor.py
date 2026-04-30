@@ -32,6 +32,7 @@ ALERT_CHANNEL_ID     = 733459392263094335   # Channel to post alerts into
 POLL_INTERVAL        = 60                   # Seconds between monitor ticks
 WAKEUP_WINDOW_MINUTES = 30                  # Start polling when a game is this close
 HR_DISTANCE_THRESHOLD = 420                 # Feet — minimum projected distance for alert
+HR_ALWAYS_ALERT_TEAM  = "WSH"              # Always alert for this team's HRs regardless of distance
 VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -434,15 +435,16 @@ class MonitorCog(commands.Cog):
                     play_id    = event.get("playId")
                     break
 
-            if dist < HR_DISTANCE_THRESHOLD:
-                continue
-
             batter  = play.get("matchup", {}).get("batter", {}).get("fullName", "Unknown")
             pitcher = play.get("matchup", {}).get("pitcher", {}).get("fullName", "Unknown")
             rbi     = play.get("result", {}).get("rbi", 0)
             desc    = play.get("result", {}).get("description", "")
             half    = about.get("halfInning", "top")
             inn_num = about.get("inning", 0)
+            batter_team  = home_abbr if half == "bottom" else away_abbr
+
+            if dist < HR_DISTANCE_THRESHOLD and batter_team != HR_ALWAYS_ALERT_TEAM:
+                continue
 
             hr_num = 0
             for keyword in ("grand slam", "home run", "homers"):
@@ -452,7 +454,6 @@ class MonitorCog(commands.Cog):
                         hr_num = int(m.group(1))
                     break
 
-            batter_team  = home_abbr if half == "bottom" else away_abbr
             pitcher_team = away_abbr if half == "bottom" else home_abbr
 
             hr_data = {
