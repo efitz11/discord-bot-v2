@@ -22,3 +22,6 @@ tokens.txt
 .DS_Store
 Thumbs.db
 ehthumbs.dbscratch/
+
+# Runtime state
+hr_posted.json
