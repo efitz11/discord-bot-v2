@@ -18,6 +18,8 @@ Polling strategy:
 """
 
 import asyncio
+import json
+import os
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -33,6 +35,7 @@ POLL_INTERVAL        = 60                   # Seconds between monitor ticks
 WAKEUP_WINDOW_MINUTES = 30                  # Start polling when a game is this close
 HR_DISTANCE_THRESHOLD = 420                 # Feet — minimum projected distance for alert
 HR_ALWAYS_ALERT_TEAM  = "WSH"              # Always alert for this team's HRs regardless of distance
+HR_STATE_FILE         = "hr_posted.json"   # Persists posted HR keys across restarts
 VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -84,6 +87,7 @@ class MonitorCog(commands.Cog):
         self._hr_pending: dict = {}  # {hr_key: {"cycles_waited": int, "data": dict}}
         self._hr_posted: set = set() # hr_keys already posted
 
+        self._load_hr_state()
         self.monitor_loop.start()
 
     def cog_unload(self):
@@ -92,6 +96,21 @@ class MonitorCog(commands.Cog):
     # ─────────────────────────────────────────────
     # Schedule helpers
     # ─────────────────────────────────────────────
+
+    def _load_hr_state(self) -> None:
+        try:
+            with open(HR_STATE_FILE) as f:
+                self._hr_posted = set(json.load(f))
+            print(f"[monitor] loaded {len(self._hr_posted)} posted HR key(s) from disk")
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._hr_posted = set()
+
+    def _save_hr_state(self) -> None:
+        try:
+            with open(HR_STATE_FILE, "w") as f:
+                json.dump(list(self._hr_posted), f)
+        except Exception as e:
+            print(f"[monitor] failed to save HR state: {e}")
 
     async def _refresh_schedule(self, prune_finished: bool = False) -> None:
         """Fetch today's full MLB schedule and MERGE into the existing game cache.
@@ -517,6 +536,7 @@ class MonitorCog(commands.Cog):
             if video_found or cycles >= VIDEO_WAIT_MAX_CYCLES:
                 await self._post_hr_alert(channel, hr)
                 self._hr_posted.add(hr_key)
+                self._save_hr_state()
                 del self._hr_pending[hr_key]
             else:
                 self._hr_pending[hr_key]["cycles_waited"] += 1
@@ -538,7 +558,9 @@ class MonitorCog(commands.Cog):
                 is_new_day = self._schedule_date is not None and self._schedule_date != today_str
                 await self._refresh_schedule(prune_finished=is_new_day)
                 if is_new_day:
-                    print("[monitor] new calendar day — schedule merged, finished games pruned")
+                    self._hr_posted.clear()
+                    self._save_hr_state()
+                    print("[monitor] new calendar day — schedule merged, finished games pruned, HR state cleared")
 
             # Sleep cheaply when no games are live or imminent
             if not self._any_game_active_or_imminent():
