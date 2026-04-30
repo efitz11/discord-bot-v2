@@ -86,6 +86,7 @@ class MonitorCog(commands.Cog):
         # HR tracking
         self._hr_pending: dict = {}  # {hr_key: {"cycles_waited": int, "data": dict}}
         self._hr_posted: set = set() # hr_keys already posted
+        self._hr_clear_date = None   # date string for which we've done the 6am clear
 
         self._load_hr_state()
         self.monitor_loop.start()
@@ -440,6 +441,17 @@ class MonitorCog(commands.Cog):
             if hr_key in self._hr_posted:
                 continue
 
+            # Skip plays older than 10 minutes — catches stale HRs on restart
+            end_time_str = about.get("endTime", "")
+            if end_time_str:
+                try:
+                    end_time = datetime.strptime(end_time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - end_time).total_seconds() > 600:
+                        self._hr_posted.add(hr_key)
+                        continue
+                except Exception:
+                    pass
+
             # Extract Statcast metrics
             dist = ev = la = 0
             pitch_type = pitch_spd = ""
@@ -559,6 +571,13 @@ class MonitorCog(commands.Cog):
                 await self._refresh_schedule(prune_finished=is_new_day)
                 if is_new_day:
                     print("[monitor] new calendar day — schedule merged, finished games pruned")
+
+            # Clear HR state at 6am ET each day
+            if now_et.hour >= 6 and self._hr_clear_date != today_str:
+                self._hr_posted.clear()
+                self._save_hr_state()
+                self._hr_clear_date = today_str
+                print("[monitor] 6am ET — HR posted state cleared")
 
             # Sleep cheaply when no games are live or imminent
             if not self._any_game_active_or_imminent():
