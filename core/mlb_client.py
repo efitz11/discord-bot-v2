@@ -1732,31 +1732,44 @@ class MLBClient:
         career_teams = []  # List of (team_id, abbrev) tuples in chronological order
         team_id_to_latest_abbrev = {}  # Map of team_id -> most recent abbreviation
 
-        # Extract team chain and career years from yearByYear data (more reliable)
-        for stat_group in all_stats:
-            if stat_group['type']['displayName'] == 'yearByYear':
-                career_years = []
-                for split in stat_group.get('splits', []):
-                    season = split.get('season')
-                    if season and season not in career_years:
-                        career_years.append(season)
-                    if milb:
-                        t_abbrev = split.get('sport', {}).get('abbreviation')
-                        t_id = None
-                    else:
-                        t_abbrev = split.get('team', {}).get('abbreviation')
-                        t_id = split.get('team', {}).get('id')
-                    if t_abbrev and t_abbrev not in ['MLB', 'MiLB']:
-                        # Track the most recent abbreviation for this team
-                        team_id_to_latest_abbrev[t_id] = t_abbrev
-                        # Only add if different from the last team (avoid back-to-back duplicates)
-                        if not career_teams or t_id != career_teams[-1][0]:
-                            career_teams.append((t_id, t_abbrev))
+        # Extract team chain and career years from yearByYear data.
+        # Prefer the yearByYear group matching the player's primary stat type (hitting for
+        # position players, pitching for pitchers) so a player with sparse stats in the other
+        # group doesn't produce a truncated chain (e.g. a hitter who pitched only for one team).
+        primary_stat = stat_types_to_fetch[0] if stat_types_to_fetch else "hitting"
+        yby_groups = [sg for sg in all_stats if sg['type']['displayName'] == 'yearByYear']
+        preferred = next((sg for sg in yby_groups if sg['group']['displayName'] == primary_stat), None)
+        chain_group = preferred or (yby_groups[0] if yby_groups else None)
 
-                if career_years:
-                    career_years_str = f"{min(career_years)}-{max(career_years)}" if len(career_years) > 1 else min(career_years)
-                # Only process the first yearByYear stat group to avoid duplicates
-                break
+        if chain_group:
+            career_years = []
+            for split in chain_group.get('splits', []):
+                season = split.get('season')
+                if season and season not in career_years:
+                    career_years.append(season)
+                if milb:
+                    t_abbrev = split.get('sport', {}).get('abbreviation')
+                    t_id = None
+                else:
+                    t_abbrev = split.get('team', {}).get('abbreviation')
+                    t_id = split.get('team', {}).get('id')
+                if t_abbrev and t_abbrev not in ['MLB', 'MiLB']:
+                    # Track the most recent abbreviation for this team
+                    team_id_to_latest_abbrev[t_id] = t_abbrev
+                    # Only add if different from the last team (avoid back-to-back duplicates)
+                    if not career_teams or t_id != career_teams[-1][0]:
+                        career_teams.append((t_id, t_abbrev))
+
+            if career_years:
+                career_years_str = f"{min(career_years)}-{max(career_years)}" if len(career_years) > 1 else min(career_years)
+
+        # If the player's current team isn't the last entry in the chain (e.g., recently traded),
+        # append it so the chain reflects where they actually play now
+        current_team_id = person.get('currentTeam', {}).get('id')
+        current_team_abbrev = person.get('currentTeam', {}).get('abbreviation', '')
+        if current_team_id and current_team_abbrev and career_teams and career_teams[-1][0] != current_team_id:
+            career_teams.append((current_team_id, current_team_abbrev))
+            team_id_to_latest_abbrev[current_team_id] = current_team_abbrev
 
         if career and career_teams:
             # Use the most recent abbreviation for each team
