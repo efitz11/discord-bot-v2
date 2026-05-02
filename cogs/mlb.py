@@ -1053,6 +1053,65 @@ class MLBSlash(commands.Cog):
         return await self.player_autocomplete(interaction, current)
 
 
+    @mlb.command(name="splits", description="Get a player's stat splits for a season")
+    @app_commands.describe(player="The player to search for")
+    @app_commands.describe(split="The stat split to view")
+    @app_commands.describe(year="Season year (default: current year)")
+    @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
+    @app_commands.choices(split=[
+        app_commands.Choice(name="vs Left", value="vl"),
+        app_commands.Choice(name="vs Right", value="vr"),
+        app_commands.Choice(name="Home", value="h"),
+        app_commands.Choice(name="Away", value="a"),
+        app_commands.Choice(name="Day", value="d"),
+        app_commands.Choice(name="Night", value="n"),
+        app_commands.Choice(name="RISP", value="risp"),
+        app_commands.Choice(name="Pre All-Star", value="preas"),
+        app_commands.Choice(name="Post All-Star", value="posas"),
+        app_commands.Choice(name="Month by Month", value="all_months"),
+        app_commands.Choice(name="March", value="3"),
+        app_commands.Choice(name="April", value="4"),
+        app_commands.Choice(name="May", value="5"),
+        app_commands.Choice(name="June", value="6"),
+        app_commands.Choice(name="July", value="7"),
+        app_commands.Choice(name="August", value="8"),
+        app_commands.Choice(name="September", value="9"),
+        app_commands.Choice(name="October", value="10"),
+    ])
+    @app_commands.choices(stat_type=[
+        app_commands.Choice(name="Hitting", value="hitting"),
+        app_commands.Choice(name="Pitching", value="pitching"),
+    ])
+    async def splits(self, interaction: discord.Interaction, player: str, split: app_commands.Choice[str], year: str = None, stat_type: app_commands.Choice[str] = None):
+        await interaction.response.defer()
+
+        s_type = stat_type.value if stat_type else None
+        result_list = await self.bot.mlb_client.get_player_splits(player, split.value, year=year, stat_type=s_type)
+
+        if not result_list:
+            await interaction.followup.send("Could not find stats for that player.")
+            return
+
+        stats = result_list[0]
+
+        if stats.info_message:
+            await interaction.followup.send(stats.info_message)
+            return
+
+        split_label = "Month by Month" if split.value == "all_months" else split.name
+        embed = discord.Embed(color=discord.Color.blue())
+        embed.title = f"{stats.years} {split_label} {stats.stat_type.capitalize()} — {stats.player_name} ({stats.team_abbrev})"
+        embed.description = f"{stats.info_line}\n\n```python\n{stats.format_discord_code_block()}\n```"
+        if stats.headshot_url:
+            embed.set_thumbnail(url=stats.headshot_url)
+
+        await interaction.followup.send(embed=embed)
+
+    @splits.autocomplete('player')
+    async def splits_player_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
+
     @mlb.command(name="last", description="Get a player's stats over their last N games")
     @app_commands.describe(player="The player to search for")
     @app_commands.describe(games="Number of recent games to aggregate (default 10, max 50)")

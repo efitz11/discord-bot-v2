@@ -1955,6 +1955,92 @@ class MLBClient:
 
         return results
 
+    async def get_player_splits(self, player_id_or_name: str, sit_code: str, year: str = None, stat_type: str = None) -> List[PlayerSeasonStats]:
+        session = await self.get_session()
+
+        resolved = await self.resolve_player(player_id_or_name)
+        if not resolved:
+            return []
+        player_id = resolved['id']
+        player_name = resolved['name']
+
+        headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
+
+        async with session.get(f"{self.BASE_URL}/people/{player_id}") as resp:
+            person_data = await resp.json()
+        if not person_data.get('people'):
+            return []
+
+        person = person_data['people'][0]
+        player_name = person.get('fullName', player_name)
+        pos = person.get('primaryPosition', {}).get('abbreviation', '')
+        team_abbrev = person.get('currentTeam', {}).get('abbreviation', 'FA')
+
+        info_line = f"{pos}  |  {person.get('batSide', {}).get('code', '')}/{person.get('pitchHand', {}).get('code', '')}  |  {person.get('height', '')}  |  {person.get('weight', '')} lbs"
+
+        if not stat_type:
+            stat_type = "pitching" if pos == "P" else "hitting"
+
+        season = year or str(datetime.now().year)
+
+        _month_abbrevs = {'3':'Mar','4':'Apr','5':'May','6':'Jun','7':'Jul','8':'Aug','9':'Sep','10':'Oct'}
+        all_months = sit_code == "all_months"
+        api_sit_code = "3,4,5,6,7,8,9,10" if all_months else sit_code
+
+        url = (
+            f"{self.BASE_URL}/people/{player_id}/stats"
+            f"?stats=statSplits&group={stat_type}&season={season}&sportId=1&sitCodes={api_sit_code}"
+        )
+        async with session.get(url) as resp:
+            data = await resp.json()
+
+        api_stats = data.get('stats', [])
+        splits = api_stats[0].get('splits', []) if api_stats else []
+
+        # Use the team from the split data (accurate for the queried season)
+        split_team_id = splits[0].get('team', {}).get('id') if splits else None
+        if split_team_id:
+            async with session.get(f"{self.BASE_URL}/teams/{split_team_id}") as tresp:
+                tdata = await tresp.json()
+            team_abbrev = tdata.get('teams', [{}])[0].get('abbreviation', team_abbrev)
+
+        if not splits:
+            return [PlayerSeasonStats(
+                player_name=player_name,
+                team_abbrev=team_abbrev,
+                stat_type=stat_type,
+                years=season,
+                is_career=False,
+                info_line=info_line,
+                stats=[],
+                info_message=f"No {stat_type} split stats found for {player_name} in {season}.",
+                headshot_url=headshot_url,
+            )]
+
+        if all_months:
+            stat_rows = []
+            for sp in splits:
+                code = sp.get('split', {}).get('code', '')
+                s = sp.get('stat', {})
+                s['season'] = _month_abbrevs.get(code, code)
+                s['team'] = team_abbrev
+                stat_rows.append(s)
+        else:
+            stat = splits[0].get('stat', {})
+            stat['team'] = team_abbrev
+            stat_rows = [stat]
+
+        return [PlayerSeasonStats(
+            player_name=player_name,
+            team_abbrev=team_abbrev,
+            stat_type=stat_type,
+            years=season,
+            is_career=False,
+            info_line=info_line,
+            stats=stat_rows,
+            headshot_url=headshot_url,
+        )]
+
     async def get_compare_stats(self, player_names: List[str], stat_type: str = None, year: str = None, career: bool = False) -> Optional["CompareStats"]:
         """Fetch and compare multiple players' season or career stats side-by-side."""
         session = await self.get_session()
