@@ -37,6 +37,7 @@ HR_DISTANCE_THRESHOLD = 420                 # Feet — minimum projected distanc
 HR_ALWAYS_ALERT_TEAM  = "WSH"              # Always alert for this team's HRs regardless of distance
 HR_STATE_FILE         = "hr_posted.json"   # Persists posted HR keys across restarts
 VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
+NH_ALERT_DELAY        = 15                  # Seconds to delay NH alerts (stream spoiler protection)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -79,9 +80,10 @@ class MonitorCog(commands.Cog):
         self._scheduled_games: dict = {}
         self._schedule_date = None   # YYYY-MM-DD string of the schedule we fetched
 
-        # No-hitter tracking: {game_pk: (inning, inning_key)}
+        # No-hitter tracking: {game_pk: {"key": alert_key, "perfect": bool}}
         # We post once per half-inning transition.
         self._nh_alerted: dict = {}
+        self._nh_broken_posted: set = set()  # game_pks where break-up alert already sent
 
         # HR tracking
         self._hr_pending: dict = {}  # {hr_key: {"cycles_waited": int, "data": dict}}
@@ -170,6 +172,7 @@ class MonitorCog(commands.Cog):
             for pk in finished_pks:
                 self._scheduled_games.pop(pk, None)
                 self._nh_alerted.pop(pk, None)
+                self._nh_broken_posted.discard(pk)
                 # HR state intentionally kept — _hr_posted is a set and harmless;
                 # _hr_pending entries expire naturally via VIDEO_WAIT_MAX_CYCLES.
             if finished_pks:
@@ -274,6 +277,60 @@ class MonitorCog(commands.Cog):
             for k in labels
         )
         return header + "\n" + "\n".join(fmt_row(r) for r in pitchers)
+
+    async def _delayed_nh_alert(self, channel, feed: dict, game_pk: int) -> None:
+        await asyncio.sleep(NH_ALERT_DELAY)
+        await self._post_nh_alert(channel, feed, game_pk)
+
+    async def _delayed_nh_broken_alert(self, channel, feed: dict, was_perfect: bool) -> None:
+        await asyncio.sleep(NH_ALERT_DELAY)
+        await self._post_nh_broken_alert(channel, feed, was_perfect)
+
+    async def _post_nh_broken_alert(self, channel, feed: dict, was_perfect: bool) -> None:
+        game_data = feed.get("gameData", {})
+        live_data = feed.get("liveData", {})
+        linescore = live_data.get("linescore", {})
+
+        away_abbr = game_data.get("teams", {}).get("away", {}).get("abbreviation", "???")
+        home_abbr = game_data.get("teams", {}).get("home", {}).get("abbreviation", "???")
+
+        # Find the first hit of the game — that's the NH-breaking play
+        all_plays = live_data.get("plays", {}).get("allPlays", [])
+        hit_play = None
+        for play in all_plays:
+            if play.get("result", {}).get("eventType") in ("single", "double", "triple", "home_run"):
+                hit_play = play
+                break
+
+        if not hit_play:
+            return
+
+        about   = hit_play.get("about", {})
+        inning  = about.get("inning", 0)
+        is_top  = about.get("halfInning", "top") == "top"
+        desc    = hit_play.get("result", {}).get("description", "")
+
+        # The hitting team is whoever is batting when the hit occurs
+        hitting_abbr  = away_abbr if is_top else home_abbr
+        pitching_abbr = home_abbr if is_top else away_abbr
+
+        away_score = linescore.get("teams", {}).get("away", {}).get("runs", 0)
+        home_score = linescore.get("teams", {}).get("home", {}).get("runs", 0)
+        score_line = f"{away_abbr} {away_score} — {home_abbr} {home_score}"
+
+        alert_word = "perfect game" if was_perfect else "no-hitter"
+        title = f"💔 {pitching_abbr}'s {alert_word} is over"
+
+        embed = discord.Embed(title=title, color=discord.Color.blue())
+        embed.add_field(name="Score",  value=score_line,                    inline=True)
+        embed.add_field(name="Inning", value=_inning_label(inning, is_top), inline=True)
+        if desc:
+            embed.add_field(name="Play", value=desc, inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to post NH broken alert: {e}")
 
     async def _post_nh_alert(self, channel, feed: dict, game_pk: int) -> None:
         game_data  = feed.get("gameData", {})
@@ -416,11 +473,16 @@ class MonitorCog(commands.Cog):
         if is_pg or is_nh:
             # Post once per inning transition
             alert_key = (inning, "final" if is_final else is_top)
-            if self._nh_alerted.get(game_pk) != alert_key:
-                await self._post_nh_alert(channel, feed, game_pk)
-                self._nh_alerted[game_pk] = alert_key
+            stored = self._nh_alerted.get(game_pk)
+            if stored is None or stored["key"] != alert_key:
+                asyncio.create_task(self._delayed_nh_alert(channel, feed, game_pk))
+                self._nh_alerted[game_pk] = {"key": alert_key, "perfect": is_pg}
         else:
-            # Flag was cleared (hit allowed) — clean up tracker
+            # Flag was cleared — post break-up alert if we were tracking this game
+            if game_pk in self._nh_alerted and game_pk not in self._nh_broken_posted:
+                was_perfect = self._nh_alerted[game_pk].get("perfect", False)
+                self._nh_broken_posted.add(game_pk)
+                asyncio.create_task(self._delayed_nh_broken_alert(channel, feed, was_perfect))
             self._nh_alerted.pop(game_pk, None)
 
         # ── Home runs ≥ threshold ────────────────────────────────────────────
@@ -600,6 +662,62 @@ class MonitorCog(commands.Cog):
     async def before_monitor_loop(self) -> None:
         await self.bot.wait_until_ready()
         print("[monitor] bot ready — monitor loop started")
+
+    @commands.command(name="nh_test")
+    async def nh_test(self, ctx, perfect: str = "no"):
+        """Test NH alerts with mock data. Usage: !nh_test [perfect]"""
+        is_perfect = perfect.lower() in ("yes", "perfect", "pg", "true")
+        mock_feed = {
+            "gameData": {
+                "flags": {"noHitter": True, "perfectGame": is_perfect},
+                "status": {"abstractGameState": "Live"},
+                "teams": {
+                    "away": {"abbreviation": "NYY"},
+                    "home": {"abbreviation": "WSH"},
+                },
+            },
+            "liveData": {
+                "linescore": {
+                    "currentInning": 7,
+                    "isTopInning": False,
+                    "outs": 2,
+                    "teams": {
+                        "away": {"runs": 0, "hits": 0},
+                        "home": {"runs": 3, "hits": 7},
+                    },
+                },
+                "boxscore": {
+                    "teams": {
+                        "home": {
+                            "pitchers": [700001],
+                            "players": {
+                                "ID700001": {
+                                    "person": {"fullName": "MacKenzie Gore"},
+                                    "stats": {"pitching": {"inningsPitched": "6.2", "baseOnBalls": 1, "strikeOuts": 8, "pitchesThrown": 98}},
+                                }
+                            },
+                        }
+                    }
+                },
+                "plays": {
+                    "allPlays": [
+                        {
+                            "result": {"eventType": "single", "event": "Single", "description": "Gleyber Torres singles on a line drive to left field."},
+                            "matchup": {"batter": {"fullName": "Gleyber Torres"}, "pitcher": {"fullName": "MacKenzie Gore"}},
+                            "about": {"inning": 8, "halfInning": "top", "atBatIndex": 24},
+                        }
+                    ]
+                },
+            },
+        }
+
+        await ctx.message.delete()
+        # In-progress alert (no delay)
+        await self._post_nh_alert(ctx.channel, mock_feed, 0)
+        # Broken-up alert (no delay)
+        mock_feed["gameData"]["flags"]["noHitter"] = False
+        mock_feed["gameData"]["flags"]["perfectGame"] = False
+        await self._post_nh_broken_alert(ctx.channel, mock_feed, is_perfect)
 
 
 async def setup(bot: commands.Bot) -> None:
