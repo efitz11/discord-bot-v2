@@ -299,7 +299,7 @@ class MonitorCog(commands.Cog):
         ab_state  = game_data.get("status", {}).get("abstractGameState", "")
         is_final  = ab_state == "Final"
 
-        alert_word = "PERFECT GAME" if is_perfect else "NO-HITTER"
+        alert_word = "P*RFECT GAME" if is_perfect else "NO-H*TTER"
         tense      = "THREW A" if is_final else "IS THROWING A"
         title      = f"🚨 {pitching_abbr} {tense} {alert_word}! 🚨"
 
@@ -333,9 +333,8 @@ class MonitorCog(commands.Cog):
             title=title,
             color=discord.Color.gold() if is_perfect else discord.Color.red(),
         )
-        embed.add_field(name="Matchup", value=f"**{away_abbr} @ {home_abbr}**", inline=True)
-        embed.add_field(name="Score",   value=score_line,                        inline=True)
-        embed.add_field(name="Inning",  value=inning_desc,                       inline=True)
+        embed.add_field(name="Score",  value=score_line, inline=True)
+        embed.add_field(name="Inning", value=inning_desc, inline=True)
         if pitchers:
             table = self._build_nh_pitcher_table(pitchers)
             embed.add_field(name="Pitchers", value=f"```\n{table}\n```", inline=False)
