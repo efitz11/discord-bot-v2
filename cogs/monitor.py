@@ -427,8 +427,12 @@ class MonitorCog(commands.Cog):
         if la:
             parts.append(f"{la}° LA")
 
+        away       = hr.get("away", "")
+        home       = hr.get("home", "")
+        matchup    = f"{away}@{home}" if away and home else ""
+
         desc_fmt = desc.replace(batter, f"**{batter}**", 1)
-        body = f"**{inning}:** With **{pitcher}** pitching, {desc_fmt}"
+        body = f"{matchup}\n**{inning}:** With **{pitcher}** pitching, {desc_fmt}" if matchup else f"**{inning}:** With **{pitcher}** pitching, {desc_fmt}"
         if parts:
             body += f"\n> *{' | '.join(parts)}*"
         if video_url:
@@ -554,6 +558,8 @@ class MonitorCog(commands.Cog):
                 "batter_team":  batter_team,
                 "pitcher":      pitcher,
                 "pitcher_team": pitcher_team,
+                "away":         away_abbr,
+                "home":         home_abbr,
                 "dist":         dist,
                 "ev":           ev,
                 "la":           la,
