@@ -416,8 +416,12 @@ class MonitorCog(commands.Cog):
         video_url  = hr.get("video_url", "")
         video_blurb = hr.get("video_blurb", "Watch")
 
+        away    = hr.get("away", "")
+        home    = hr.get("home", "")
+        matchup = f"{away}@{home}" if away and home else team
+
         num_str = f" (#{hr_num})" if hr_num else ""
-        title   = f"💣 {team} — {batter}{num_str} | {dist} ft"
+        title   = f"💣 {matchup} — ({team}) {batter}{num_str} | {dist} ft"
 
         parts = []
         if pitch_type and pitch_spd:
@@ -427,12 +431,8 @@ class MonitorCog(commands.Cog):
         if la:
             parts.append(f"{la}° LA")
 
-        away       = hr.get("away", "")
-        home       = hr.get("home", "")
-        matchup    = f"{away}@{home}" if away and home else ""
-
         desc_fmt = desc.replace(batter, f"**{batter}**", 1)
-        body = f"{matchup}\n**{inning}:** With **{pitcher}** pitching, {desc_fmt}" if matchup else f"**{inning}:** With **{pitcher}** pitching, {desc_fmt}"
+        body = f"**{inning}:** With **{pitcher}** pitching, {desc_fmt}"
         if parts:
             body += f"\n> *{' | '.join(parts)}*"
         if video_url:
