@@ -724,11 +724,23 @@ class MonitorCog(commands.Cog):
                 },
                 "plays": {
                     "allPlays": [
+                        # Home team (WSH) hits earlier in the game — these should NOT be reported as the breaking play
+                        {
+                            "result": {"eventType": "single", "event": "Single", "description": "CJ Abrams singles on a ground ball to second base."},
+                            "matchup": {"batter": {"fullName": "CJ Abrams"}, "pitcher": {"fullName": "Gerrit Cole"}},
+                            "about": {"inning": 2, "halfInning": "bottom", "atBatIndex": 5},
+                        },
+                        {
+                            "result": {"eventType": "home_run", "event": "Home Run", "description": "Jesse Winker homers (3) on a fly ball to left field."},
+                            "matchup": {"batter": {"fullName": "Jesse Winker"}, "pitcher": {"fullName": "Gerrit Cole"}},
+                            "about": {"inning": 4, "halfInning": "bottom", "atBatIndex": 13},
+                        },
+                        # Away team (NYY) breaks the NH in the 8th — this is the correct play
                         {
                             "result": {"eventType": "single", "event": "Single", "description": "Gleyber Torres singles on a line drive to left field."},
                             "matchup": {"batter": {"fullName": "Gleyber Torres"}, "pitcher": {"fullName": "MacKenzie Gore"}},
                             "about": {"inning": 8, "halfInning": "top", "atBatIndex": 24},
-                        }
+                        },
                     ]
                 },
             },
