@@ -282,11 +282,11 @@ class MonitorCog(commands.Cog):
         await asyncio.sleep(NH_ALERT_DELAY)
         await self._post_nh_alert(channel, feed, game_pk)
 
-    async def _delayed_nh_broken_alert(self, channel, feed: dict, was_perfect: bool) -> None:
+    async def _delayed_nh_broken_alert(self, channel, feed: dict, was_perfect: bool, pitching_abbr: str = None) -> None:
         await asyncio.sleep(NH_ALERT_DELAY)
-        await self._post_nh_broken_alert(channel, feed, was_perfect)
+        await self._post_nh_broken_alert(channel, feed, was_perfect, pitching_abbr)
 
-    async def _post_nh_broken_alert(self, channel, feed: dict, was_perfect: bool) -> None:
+    async def _post_nh_broken_alert(self, channel, feed: dict, was_perfect: bool, pitching_abbr: str = None) -> None:
         game_data = feed.get("gameData", {})
         live_data = feed.get("liveData", {})
         linescore = live_data.get("linescore", {})
@@ -294,25 +294,34 @@ class MonitorCog(commands.Cog):
         away_abbr = game_data.get("teams", {}).get("away", {}).get("abbreviation", "???")
         home_abbr = game_data.get("teams", {}).get("home", {}).get("abbreviation", "???")
 
-        # Find the first hit of the game — that's the NH-breaking play
+        # The team being no-hit bats in "top" if pitching team is home, "bottom" if away.
+        # We need this to skip hits by the pitching team (who bats in the other half).
+        if pitching_abbr == home_abbr:
+            hitting_half = "top"
+        elif pitching_abbr == away_abbr:
+            hitting_half = "bottom"
+        else:
+            hitting_half = None  # unknown — fall back to first hit by either team
+
+        # Find the first hit by the team that was being no-hit
         all_plays = live_data.get("plays", {}).get("allPlays", [])
         hit_play = None
         for play in all_plays:
             if play.get("result", {}).get("eventType") in ("single", "double", "triple", "home_run"):
-                hit_play = play
-                break
+                if hitting_half is None or play.get("about", {}).get("halfInning") == hitting_half:
+                    hit_play = play
+                    break
 
         if not hit_play:
             return
 
-        about   = hit_play.get("about", {})
-        inning  = about.get("inning", 0)
-        is_top  = about.get("halfInning", "top") == "top"
-        desc    = hit_play.get("result", {}).get("description", "")
+        about  = hit_play.get("about", {})
+        inning = about.get("inning", 0)
+        is_top = about.get("halfInning", "top") == "top"
+        desc   = hit_play.get("result", {}).get("description", "")
 
-        # The hitting team is whoever is batting when the hit occurs
-        hitting_abbr  = away_abbr if is_top else home_abbr
-        pitching_abbr = home_abbr if is_top else away_abbr
+        if not pitching_abbr:
+            pitching_abbr = home_abbr if is_top else away_abbr
 
         away_score = linescore.get("teams", {}).get("away", {}).get("runs", 0)
         home_score = linescore.get("teams", {}).get("home", {}).get("runs", 0)
@@ -478,15 +487,23 @@ class MonitorCog(commands.Cog):
             # Post once per inning transition
             alert_key = (inning, "final" if is_final else is_top)
             stored = self._nh_alerted.get(game_pk)
+
+            # Determine which team is throwing the NH so break-up alerts find the right hit
+            nh_away_abbr = game_data.get("teams", {}).get("away", {}).get("abbreviation", "???")
+            nh_home_abbr = game_data.get("teams", {}).get("home", {}).get("abbreviation", "???")
+            away_hits    = linescore.get("teams", {}).get("away", {}).get("hits", 0)
+            nh_pitching  = nh_home_abbr if away_hits == 0 else nh_away_abbr
+
             if stored is None or stored["key"] != alert_key:
                 asyncio.create_task(self._delayed_nh_alert(channel, feed, game_pk))
-                self._nh_alerted[game_pk] = {"key": alert_key, "perfect": is_pg}
+                self._nh_alerted[game_pk] = {"key": alert_key, "perfect": is_pg, "pitching_abbr": nh_pitching}
         else:
             # Flag was cleared — post break-up alert if we were tracking this game
             if game_pk in self._nh_alerted and game_pk not in self._nh_broken_posted:
-                was_perfect = self._nh_alerted[game_pk].get("perfect", False)
+                was_perfect   = self._nh_alerted[game_pk].get("perfect", False)
+                pitching_abbr = self._nh_alerted[game_pk].get("pitching_abbr")
                 self._nh_broken_posted.add(game_pk)
-                asyncio.create_task(self._delayed_nh_broken_alert(channel, feed, was_perfect))
+                asyncio.create_task(self._delayed_nh_broken_alert(channel, feed, was_perfect, pitching_abbr))
             self._nh_alerted.pop(game_pk, None)
 
         # ── Home runs ≥ threshold ────────────────────────────────────────────
@@ -724,6 +741,34 @@ class MonitorCog(commands.Cog):
         mock_feed["gameData"]["flags"]["noHitter"] = False
         mock_feed["gameData"]["flags"]["perfectGame"] = False
         await self._post_nh_broken_alert(ctx.channel, mock_feed, is_perfect)
+
+
+    @commands.command(name="hr_test")
+    async def hr_test(self, ctx):
+        """Test HR alert with mock data. Usage: !hr_test"""
+        mock_hr = {
+            "batter":      "Mickey Moniak",
+            "batter_team": "COL",
+            "pitcher":     "Corbin Burnes",
+            "pitcher_team": "ATH",
+            "away":        "ATH",
+            "home":        "COL",
+            "dist":        438,
+            "ev":          112.4,
+            "la":          28,
+            "pitch_type":  "Four-Seam Fastball",
+            "pitch_speed": 95.2,
+            "rbi":         2,
+            "num":         11,
+            "inning":      "bot 5",
+            "desc":        "Mickey Moniak homers (11) on a fly ball to left center field. Charlie Blackmon scores.",
+            "play_id":     None,
+            "game_pk":     0,
+            "video_url":   "",
+            "video_blurb": "",
+        }
+        await ctx.message.delete()
+        await self._post_hr_alert(ctx.channel, mock_hr)
 
 
 async def setup(bot: commands.Bot) -> None:
