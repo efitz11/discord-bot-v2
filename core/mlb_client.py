@@ -540,10 +540,10 @@ class PlayerPercentiles:
             "bb_percent":               "BB %",
             "whiff_percent":            "Whiff %",
             "chase_percent":            "Chase %",
-            "sprint_speed":             "Sprint Speed",
-            "oaa":                      "Range (OAA)",
+            "sprint_speed":             "Sprint",
+            "oaa":                      "OAA",
             "framing":                  "Framing",
-            "runner_run_value":         "Baserunning",
+            "runner_run_value":         "BsR",
             "fielding_run_value":       "Fielding",
             "batting_run_value":        "Batting",
             "launch_angle_avg":         "Avg LA",
@@ -572,41 +572,39 @@ class PlayerPercentiles:
         stat_lookup = {row['stat']: row for row in self.percentiles}
         assigned_stats = set()
 
-        # pad stat names to the length of the longest name
-        padding = max(len(v) for v in display_names.values())
-
-        def build_section(rows):
-            # rows: list of (name, val, raw)
-            if not rows:
-                return None
-            max_len = max(len(r[0]) for r in rows)
-            lines = []
-            for name, val, raw in rows:
-                padded = name.ljust(max_len)
-                lines.append(f"{padded}  {get_bar(val)}  {val:>2}  ({raw})")
-            return "```\n" + "\n".join(lines) + "\n```"
-
+        # collect all sections first so we can compute a shared name width
+        sections = []
         for cat_name, targets in category_list:
             rows = []
             for stat_name in targets:
                 if stat_name in stat_lookup:
                     row = stat_lookup[stat_name]
-                    name = display_names.get(stat_name, stat_name.replace("_", " ").title()).rjust(padding)
+                    name = display_names.get(stat_name, stat_name.replace("_", " ").title())
                     rows.append((name, row['value'], row['raw']))
                     assigned_stats.add(stat_name)
-            content = build_section(rows)
-            if content:
-                embed.add_field(name=cat_name, value=content, inline=False)
+            if rows:
+                sections.append((cat_name, rows))
 
         other_rows = []
         for row in self.percentiles:
             if row['stat'] not in assigned_stats:
                 stat_name = row['stat']
-                name = display_names.get(stat_name, stat_name.replace("_", " ").title()).rjust(padding)
+                name = display_names.get(stat_name, stat_name.replace("_", " ").title())
                 other_rows.append((name, row['value'], row['raw']))
-        content = build_section(other_rows)
-        if content:
-            embed.add_field(name="Other", value=content, inline=False)
+        if other_rows:
+            sections.append(("Other", other_rows))
+
+        all_rows = [r for _, rows in sections for r in rows]
+        padding = max(len(r[0]) for r in all_rows) if all_rows else 0
+
+        def build_section(rows):
+            lines = []
+            for name, val, raw in rows:
+                lines.append(f"{name.rjust(padding)}  {get_bar(val)}  {val:>2}  ({raw})")
+            return "```\n" + "\n".join(lines) + "\n```"
+
+        for cat_name, rows in sections:
+            embed.add_field(name=cat_name, value=build_section(rows), inline=False)
 
 @dataclass
 class StandingsGroup:
