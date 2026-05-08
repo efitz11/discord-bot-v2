@@ -2,7 +2,7 @@
 
 A Discord bot for MLB and MiLB fans, built on the MLB Stats API and Baseball Savant (Statcast). All commands use Discord slash commands with autocomplete for player and team search.
 
-## Commands
+## Baseball Commands
 
 ### /mlb
 
@@ -39,15 +39,6 @@ A Discord bot for MLB and MiLB fans, built on the MLB Stats API and Baseball Sav
 | `line` | Stat line for a minor league player on a given date |
 | `abs` | At-bats and video highlights for a minor league player |
 
-### /weather and /radar
-
-These commands are disabled by default and must be opted in via `.env` (see Setup).
-
-| Command | Description |
-|---|---|
-| `weather` | Current conditions and today's forecast (morning/noon/evening/night) for a location |
-| `radar` | Weather radar map image for a location |
-
 ### /savant
 
 | Command | Description |
@@ -59,6 +50,15 @@ These commands are disabled by default and must be opted in via `.env` (see Setu
 | `leaders` | Statcast leaderboards (exit velocity, barrel %, sprint speed, OAA, etc.) |
 | `pitches` | Pitch counts by inning, recent pitches, and pitch mix for a pitcher |
 | `zoneplot` | Hitting zone heatmap for a batter |
+
+## Extended Commands
+
+Disabled by default. Enable by setting `EXTENDED_COMMANDS=true` in `.env` (no API keys required).
+
+| Command | Description |
+|---|---|
+| `/weather` | Current conditions and today's forecast (morning/noon/evening/night) for a location |
+| `/radar` | Weather radar map image for a location |
 
 ## Setup
 
