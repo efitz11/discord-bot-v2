@@ -11,7 +11,9 @@ A Discord bot for MLB and MiLB fans, built on the MLB Stats API and Baseball Sav
 | `line` | Stat line for a player on a given date (or today) |
 | `abs` | At-bats and video highlights for a player on a given date |
 | `plot` | Pitch plot for a specific at-bat |
-| `sp` | Scoring plays for a team's game |
+| `game plays` | Play-by-play for a team's batting side of an inning, with video links |
+| `game scoringplays` | Scoring plays for a team's game |
+| `game linescore` | Inning-by-inning linescore for a team's game |
 | `pace` | Projected 162-game season totals for a player |
 | `highlights` | Video highlights for a player or team |
 | `standings` | Division, league, or wildcard standings |
@@ -36,6 +38,15 @@ A Discord bot for MLB and MiLB fans, built on the MLB Stats API and Baseball Sav
 | `stats` | Season or career stats for a minor league player |
 | `line` | Stat line for a minor league player on a given date |
 | `abs` | At-bats and video highlights for a minor league player |
+
+### /weather and /radar
+
+These commands are disabled by default and must be opted in via `.env` (see Setup).
+
+| Command | Description |
+|---|---|
+| `weather` | Current conditions and today's forecast (morning/noon/evening/night) for a location |
+| `radar` | Weather radar map image for a location |
 
 ### /savant
 
@@ -71,6 +82,9 @@ Create a `.env` file in the project root:
 
 ```
 DISCORD_TOKEN=your_bot_token_here
+
+# Optional: enable /weather and /radar commands (no API key required)
+EXTENDED_COMMANDS=true
 ```
 
 ### Run
