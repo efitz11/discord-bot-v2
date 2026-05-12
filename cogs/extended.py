@@ -27,6 +27,23 @@ def _lat_lon_to_pixel(lat: float, lon: float, zoom: int) -> tuple[float, float]:
     return gx, gy
 
 
+def _desc_to_icon(d: str) -> str:
+    d = d.lower()
+    if "thunder" in d:
+        return "⛈️"
+    elif "snow" in d or "blizzard" in d:
+        return "❄️"
+    elif "rain" in d or "drizzle" in d or "shower" in d:
+        return "🌧️"
+    elif "overcast" in d or "cloudy" in d:
+        return "☁️"
+    elif "partly" in d or "mist" in d or "fog" in d:
+        return "⛅"
+    elif "sunny" in d or "clear" in d:
+        return "☀️"
+    return "🌡️"
+
+
 class ExtendedSlash(commands.Cog):
 
     def __init__(self, bot):
@@ -90,23 +107,7 @@ class ExtendedSlash(commands.Cog):
         visibility = current.get("visibility", "?")
         precip = current.get("precipInches", "0.0")
 
-        def desc_to_icon(d):
-            d = d.lower()
-            if "thunder" in d:
-                return "⛈️"
-            elif "snow" in d or "blizzard" in d:
-                return "❄️"
-            elif "rain" in d or "drizzle" in d or "shower" in d:
-                return "🌧️"
-            elif "overcast" in d or "cloudy" in d:
-                return "☁️"
-            elif "partly" in d or "mist" in d or "fog" in d:
-                return "⛅"
-            elif "sunny" in d or "clear" in d:
-                return "☀️"
-            return "🌡️"
-
-        icon = desc_to_icon(desc)
+        icon = _desc_to_icon(desc)
 
         wind_str = f"{wind_mph} mph {wind_dir}".strip()
 
@@ -129,11 +130,76 @@ class ExtendedSlash(commands.Cog):
             h = hourly_by_time.get(time_key)
             if h:
                 h_desc = h.get("weatherDesc", [{}])[0].get("value", "")
-                h_icon = desc_to_icon(h_desc)
+                h_icon = _desc_to_icon(h_desc)
                 h_temp = h.get("tempF", "?")
                 forecast_parts.append(f"`{label:<7}` {h_icon} {h_desc} · {h_temp}°F")
         if forecast_parts:
             embed.add_field(name="Today's Forecast", value="\n".join(forecast_parts), inline=False)
+
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="forecast", description="3-day weather forecast for a location")
+    @app_commands.describe(location="City, zip code, or address (e.g. Washington DC, 20001)")
+    async def forecast(self, interaction: discord.Interaction, location: str):
+        await interaction.response.defer()
+
+        session = await self.bot.mlb_client.get_session()
+
+        is_us_zip = location.strip().replace('-', '').isdigit() and len(location.strip()) in (5, 9)
+        geo_bias = "countrycodes=us" if is_us_zip else "viewbox=-125,24,-66,50&bounded=0"
+        geo_url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(location)}&format=json&limit=1&{geo_bias}"
+        try:
+            async with session.get(geo_url, headers={"User-Agent": "discord-bot/1.0"}) as resp:
+                geo_data = await resp.json() if resp.status == 200 else []
+            if geo_data:
+                wttr_query = urllib.parse.quote(f"{geo_data[0]['lat']},{geo_data[0]['lon']}")
+            else:
+                wttr_query = urllib.parse.quote(location)
+        except Exception:
+            wttr_query = urllib.parse.quote(location)
+
+        url = f"https://wttr.in/{wttr_query}?format=j1"
+        try:
+            async with session.get(url, headers={"User-Agent": "discord-bot/1.0"}) as resp:
+                if resp.status != 200:
+                    await interaction.followup.send(f"Could not fetch forecast for **{location}**.")
+                    return
+                data = await resp.json(content_type=None)
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching forecast: {e}")
+            return
+
+        area = data.get("nearest_area", [{}])[0]
+        area_name = area.get("areaName", [{}])[0].get("value", location)
+        region    = area.get("region", [{}])[0].get("value", "")
+        country   = area.get("country", [{}])[0].get("value", "")
+        location_str = area_name
+        if region and region != area_name:
+            location_str += f", {region}"
+        if country and country not in ("United States of America", ""):
+            location_str += f", {country}"
+
+        days = data.get("weather", [])
+        embed = discord.Embed(title=f"📅 3-Day Forecast — {location_str}", color=discord.Color.blue())
+
+        for i, day in enumerate(days[:3]):
+            if i == 0:
+                day_label = "Today"
+            elif i == 1:
+                day_label = "Tomorrow"
+            else:
+                try:
+                    day_label = datetime.strptime(day.get("date", ""), "%Y-%m-%d").strftime("%A")
+                except Exception:
+                    day_label = day.get("date", f"Day {i+1}")
+
+            max_f  = day.get("maxtempF", "?")
+            min_f  = day.get("mintempF", "?")
+
+            desc = day.get("hourly", [{}])[4].get("weatherDesc", [{}])[0].get("value", "")
+            icon = _desc_to_icon(desc)
+            value = f"{icon} {desc}\nHigh **{max_f}°F** · Low **{min_f}°F**"
+            embed.add_field(name=day_label, value=value, inline=False)
 
         await interaction.followup.send(embed=embed)
 
