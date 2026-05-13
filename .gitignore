@@ -25,4 +25,5 @@ ehthumbs.dbscratch/
 # Runtime state
 hr_posted.json
 nh_state.json
+summary_state.json
 CLAUDE.md

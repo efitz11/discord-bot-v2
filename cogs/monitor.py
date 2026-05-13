@@ -39,6 +39,7 @@ HR_PARKS_THRESHOLD    = 5                  # Alert if HR would only be a HR in â
 HR_XBA_THRESHOLD      = 0.200             # Alert if xBA is below this value
 HR_STATE_FILE         = "hr_posted.json"   # Persists posted HR keys across restarts
 NH_STATE_FILE         = "nh_state.json"    # Persists NH alert state across restarts
+SUMMARY_STATE_FILE    = "summary_state.json"  # Persists morning summary posted date across restarts
 VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
 NH_ALERT_DELAY        = 15                  # Seconds to delay NH alerts (stream spoiler protection)
 
@@ -100,6 +101,7 @@ class MonitorCog(commands.Cog):
 
         self._load_hr_state()
         self._load_nh_state()
+        self._load_summary_state()
         self.monitor_loop.start()
 
     def cog_unload(self):
@@ -123,6 +125,21 @@ class MonitorCog(commands.Cog):
                 json.dump(list(self._hr_posted), f)
         except Exception as e:
             print(f"[monitor] failed to save HR state: {e}")
+
+    def _load_summary_state(self) -> None:
+        try:
+            with open(SUMMARY_STATE_FILE) as f:
+                self._summary_posted_date = json.load(f).get("date")
+            print(f"[monitor] loaded summary state: last posted {self._summary_posted_date}")
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._summary_posted_date = None
+
+    def _save_summary_state(self) -> None:
+        try:
+            with open(SUMMARY_STATE_FILE, "w") as f:
+                json.dump({"date": self._summary_posted_date}, f)
+        except Exception as e:
+            print(f"[monitor] failed to save summary state: {e}")
 
     def _load_nh_state(self) -> None:
         try:
@@ -958,6 +975,7 @@ class MonitorCog(commands.Cog):
             # Morning performance summary at 8am ET
             if now_et.hour >= 8 and self._summary_posted_date != today_str:
                 self._summary_posted_date = today_str
+                self._save_summary_state()
                 ch = await self._get_alert_channel()
                 if ch:
                     asyncio.create_task(self._post_morning_summary(ch))
