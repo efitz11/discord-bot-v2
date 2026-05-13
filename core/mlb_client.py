@@ -1016,6 +1016,7 @@ class PlayerGameLogData:
 @dataclass
 class BullpenData:
     team_name: str
+    team_abbrev: str
     past_dates: List[str]
     bullpen: List[dict]
     starters: List[dict]
@@ -1036,7 +1037,7 @@ class BullpenData:
 
         pitcher_name = row.get('name', '')
 
-        if ({'name': pitcher_name, 'team': self.team_name} in pitcher_bad):
+        if ({'name': pitcher_name, 'team': self.team_abbrev.lower()} in pitcher_bad):
             return "💩"
         
         # 3 in a row
@@ -1113,7 +1114,7 @@ class BullpenData:
                 output.append(format_row(row))
 
         legend = "\nLegend: 🟢 Fresh | 🟡 Used | 🔴 Tired | 💀 Gassed"
-        if (self.team_name == "wsh"):
+        if (self.team_abbrev.lower() == "wsh"):
             legend += " | 💩 Bad"
         output.append(legend)
 
@@ -3686,6 +3687,7 @@ class MLBClient:
 
         return BullpenData(
             team_name=team_info.get('team', {}).get('name', 'Unknown Team'),
+            team_abbrev=team_info.get('team', {}).get('abbreviation', ''),
             past_dates=short_dates,
             bullpen=bullpen_data,
             starters=starters
