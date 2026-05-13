@@ -1033,6 +1033,11 @@ class BullpenData:
         day_before = counts[-2]
         day_3 = counts[-3]
         total_3 = yest + day_before + day_3
+
+        pitcher_name = row.get('name', '')
+
+        if ({'name': pitcher_name, 'team': self.team_name} in pitcher_bad):
+            return "💩"
         
         # 3 in a row
         if yest > 0 and day_before > 0 and day_3 > 0:
@@ -1057,8 +1062,8 @@ class BullpenData:
         for r in all_rows:
             r['status'] = self._get_status(r)
             
-        # Group by status (Fresh -> Used -> Tired -> Gassed)
-        status_order = {"🟢": 0, "🟡": 1, "🔴": 2, "💀": 3}
+        # Group by status (Fresh -> Used -> Tired -> Gassed -> Bad)
+        status_order = {"🟢": 0, "🟡": 1, "🔴": 2, "💀": 3, "💩": 4}
         self.bullpen.sort(key=lambda x: status_order.get(x.get('status', ''), 99))
         self.starters.sort(key=lambda x: status_order.get(x.get('status', ''), 99))
 
@@ -1108,6 +1113,8 @@ class BullpenData:
                 output.append(format_row(row))
 
         legend = "\nLegend: 🟢 Fresh | 🟡 Used | 🔴 Tired | 💀 Gassed"
+        if (self.team_name == "wsh"):
+            legend += " | 💩 Bad"
         output.append(legend)
 
         if not self.bullpen and not self.starters:
@@ -4146,3 +4153,8 @@ class MLBClient:
         transactions.sort(key=lambda t: t.get('date', ''))
         return {'player': player, 'year': year, 'transactions': transactions}
 
+pitcher_bad = [{
+    'name': 'Parker', 'team': 'wsh'
+}, {
+    'name': 'Littell', 'team': 'wsh'
+}]

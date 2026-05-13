@@ -12,6 +12,7 @@ def test_display():
         # Harvey: [0, 24, 18, 0] -> yest=0, day_before=18, day_3=24. Total=42. Status: Used (Yellow)
         {"name": "Law", "t": "R", "era": "4.56", "4/8": "10", "4/9": "12", "4/10": "15", "4/11": "20"}, # Gassed (4 in a row)
         {"name": "Rainey", "t": "R", "era": "6.12", "4/8": "", "4/9": "", "4/10": "", "4/11": "35"}, # Tired (35 yest)
+        {"name": "Littell", "t": "R", "era": "10.50", "4/8": "", "4/9": "", "4/10": "", "4/11": "2"}, # Bad
     ]
     starters = [
         {"name": "Irvin", "t": "R", "era": "3.88", "4/8": "95", "4/9": "", "4/10": "", "4/11": ""},
