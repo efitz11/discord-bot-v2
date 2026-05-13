@@ -62,6 +62,11 @@ def _parse_game_time(game_date_str: str):
         return None
 
 
+def _last_name(full_name: str) -> str:
+    parts = full_name.split(" ", 1)
+    return parts[1] if len(parts) == 2 else full_name
+
+
 def _inning_label(inning: int, is_top: bool) -> str:
     half = "Top" if is_top else "Bot"
     n = inning if inning <= 20 else inning % 10
@@ -91,6 +96,7 @@ class MonitorCog(commands.Cog):
         self._hr_pending: dict = {}  # {hr_key: {"cycles_waited": int, "data": dict}}
         self._hr_posted: set = set() # hr_keys already posted
         self._hr_clear_date = None   # date string for which we've done the 6am clear
+        self._summary_posted_date = None  # date string for which we've posted the morning summary
 
         self._load_hr_state()
         self._load_nh_state()
@@ -291,6 +297,58 @@ class MonitorCog(commands.Cog):
     # ─────────────────────────────────────────────
     # Alert builders
     # ─────────────────────────────────────────────
+
+    async def _post_morning_summary(self, channel, date_str: str = None) -> None:
+        """Fetch yesterday's top performances and post a morning summary embed."""
+        print("[monitor] fetching morning performance summary...")
+        try:
+            data = await self.bot.mlb_client.get_daily_top_performances(date_str)
+        except Exception as e:
+            print(f"[monitor] morning summary error: {e}")
+            return
+
+        if not data or (not data["hitters"] and not data["pitchers"]):
+            print("[monitor] morning summary: no performances to post")
+            return
+
+        date_obj = datetime.strptime(data["date"], "%Y-%m-%d")
+        date_label = date_obj.strftime("%B ") + str(date_obj.day)
+
+        embed = discord.Embed(
+            title=f"⭐ Top Performances — {date_label}",
+            color=discord.Color.gold(),
+        )
+
+        if data["hitters"]:
+            name_w = max(len(_last_name(h["name"])) for h in data["hitters"])
+            lines = []
+            for h in data["hitters"]:
+                name = _last_name(h["name"])
+                lines.append(f"{h['team']:<3}  {name:<{name_w}}  {h['summary']}")
+            embed.add_field(
+                name="🏏 Hitters",
+                value="```\n" + "\n".join(lines) + "\n```",
+                inline=False,
+            )
+
+        if data["pitchers"]:
+            name_w = max(len(_last_name(p["name"])) for p in data["pitchers"])
+            lines = []
+            for p in data["pitchers"]:
+                name = _last_name(p["name"])
+                gs = int(p["score"])
+                lines.append(f"{p['team']:<3}  {name:<{name_w}}  {p['summary']}  (GS {gs})")
+            embed.add_field(
+                name="⚾ Pitchers",
+                value="```\n" + "\n".join(lines) + "\n```",
+                inline=False,
+            )
+
+        try:
+            await channel.send(embed=embed)
+            print(f"[monitor] posted morning summary for {data['date']}")
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to post morning summary: {e}")
 
     def _build_nh_pitcher_table(self, pitchers: list) -> str:
         if not pitchers:
@@ -897,6 +955,13 @@ class MonitorCog(commands.Cog):
                 self._hr_clear_date = today_str
                 print("[monitor] 6am ET — HR posted state cleared")
 
+            # Morning performance summary at 8am ET
+            if now_et.hour >= 8 and self._summary_posted_date != today_str:
+                self._summary_posted_date = today_str
+                ch = await self._get_alert_channel()
+                if ch:
+                    asyncio.create_task(self._post_morning_summary(ch))
+
             # Sleep cheaply when no games are live or imminent
             if not self._any_game_active_or_imminent():
                 return
@@ -1056,6 +1121,12 @@ class MonitorCog(commands.Cog):
         mock_feed["gameData"]["flags"]["perfectGame"] = False
         await self._post_nh_broken_alert(ctx.channel, mock_feed, is_perfect, pitching_abbr=pitching_abbr)
 
+
+    @commands.command(name="summary_test")
+    async def summary_test(self, ctx, date: str = None):
+        """Test the morning performance summary. Usage: !summary_test [YYYY-MM-DD]"""
+        await ctx.message.delete()
+        await self._post_morning_summary(ctx.channel, date)
 
     @commands.command(name="hr_test")
     async def hr_test(self, ctx):
