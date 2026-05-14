@@ -97,7 +97,8 @@ class MonitorCog(commands.Cog):
         self._hr_pending: dict = {}  # {hr_key: {"cycles_waited": int, "data": dict}}
         self._hr_posted: set = set() # hr_keys already posted
         self._hr_clear_date = None   # date string for which we've done the 6am clear
-        self._summary_posted_date = None  # date string for which we've posted the morning summary
+        self._summary_posted_date = None       # date string for which we've posted the morning summary
+        self._milb_summary_posted_date = None  # date string for which we've posted the MiLB affiliate summary
 
         self._load_hr_state()
         self._load_nh_state()
@@ -129,15 +130,18 @@ class MonitorCog(commands.Cog):
     def _load_summary_state(self) -> None:
         try:
             with open(SUMMARY_STATE_FILE) as f:
-                self._summary_posted_date = json.load(f).get("date")
-            print(f"[monitor] loaded summary state: last posted {self._summary_posted_date}")
+                state = json.load(f)
+            self._summary_posted_date = state.get("date")
+            self._milb_summary_posted_date = state.get("milb_date")
+            print(f"[monitor] loaded summary state: mlb={self._summary_posted_date} milb={self._milb_summary_posted_date}")
         except (FileNotFoundError, json.JSONDecodeError):
             self._summary_posted_date = None
+            self._milb_summary_posted_date = None
 
     def _save_summary_state(self) -> None:
         try:
             with open(SUMMARY_STATE_FILE, "w") as f:
-                json.dump({"date": self._summary_posted_date}, f)
+                json.dump({"date": self._summary_posted_date, "milb_date": self._milb_summary_posted_date}, f)
         except Exception as e:
             print(f"[monitor] failed to save summary state: {e}")
 
@@ -366,6 +370,58 @@ class MonitorCog(commands.Cog):
             print(f"[monitor] posted morning summary for {data['date']}")
         except discord.HTTPException as e:
             print(f"[monitor] failed to post morning summary: {e}")
+
+    async def _post_milb_affiliate_summary(self, channel, data: dict) -> None:
+        """Post top performances across FAVORITE_TEAM's MiLB affiliates."""
+        print("[monitor] posting MiLB affiliate summary...")
+
+        if not data or (not data["hitters"] and not data["pitchers"]):
+            print("[monitor] MiLB affiliate summary: no performances to post")
+            return
+
+        date_obj = datetime.strptime(data["date"], "%Y-%m-%d")
+        date_label = date_obj.strftime("%B ") + str(date_obj.day)
+        fav = getattr(self.bot, "favorite_team_full", None) or getattr(self.bot, "favorite_team", "")
+
+        embed = discord.Embed(
+            title=f"⭐ {fav} Affiliates — {date_label}",
+            color=discord.Color.blue(),
+        )
+
+        if data["hitters"]:
+            name_w  = max(len(_last_name(h["name"])) for h in data["hitters"])
+            level_w = max(len(h.get("level", "")) for h in data["hitters"])
+            lines = []
+            for h in data["hitters"]:
+                name  = _last_name(h["name"])
+                level = h.get("level", "")
+                lines.append(f"{level:<{level_w}}  {h['team']:<3}  {name:<{name_w}}  {h['summary']}")
+            embed.add_field(
+                name="🏏 Hitters",
+                value="```\n" + "\n".join(lines) + "\n```",
+                inline=False,
+            )
+
+        if data["pitchers"]:
+            name_w  = max(len(_last_name(p["name"])) for p in data["pitchers"])
+            level_w = max(len(p.get("level", "")) for p in data["pitchers"])
+            lines = []
+            for p in data["pitchers"]:
+                name  = _last_name(p["name"])
+                level = p.get("level", "")
+                gs    = int(p["score"])
+                lines.append(f"{level:<{level_w}}  {p['team']:<3}  {name:<{name_w}}  {p['summary']}  (GS {gs})")
+            embed.add_field(
+                name="⚾ Pitchers",
+                value="```\n" + "\n".join(lines) + "\n```",
+                inline=False,
+            )
+
+        try:
+            await channel.send(embed=embed)
+            print(f"[monitor] posted MiLB affiliate summary for {data['date']}")
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to post MiLB affiliate summary: {e}")
 
     def _build_nh_pitcher_table(self, pitchers: list) -> str:
         if not pitchers:
@@ -980,6 +1036,20 @@ class MonitorCog(commands.Cog):
                 if ch:
                     asyncio.create_task(self._post_morning_summary(ch))
 
+            # MiLB affiliate summary — post once all affiliate games for today are Final
+            fav_team = getattr(self.bot, "favorite_team", None)
+            if fav_team and now_et.hour >= 12 and self._milb_summary_posted_date != today_str:
+                try:
+                    milb_data = await self.bot.mlb_client.get_milb_affiliate_top_performances(today_str, fav_team)
+                    if milb_data is not None:
+                        self._milb_summary_posted_date = today_str
+                        self._save_summary_state()
+                        ch = await self._get_alert_channel()
+                        if ch:
+                            asyncio.create_task(self._post_milb_affiliate_summary(ch, milb_data))
+                except Exception as e:
+                    print(f"[monitor] MiLB affiliate summary check error: {e}")
+
             # Sleep cheaply when no games are live or imminent
             if not self._any_game_active_or_imminent():
                 return
@@ -1145,6 +1215,23 @@ class MonitorCog(commands.Cog):
         """Test the morning performance summary. Usage: !summary_test [YYYY-MM-DD]"""
         await ctx.message.delete()
         await self._post_morning_summary(ctx.channel, date)
+
+    @commands.command(name="milb_summary_test")
+    async def milb_summary_test(self, ctx, date: str = None):
+        """Test the MiLB affiliate summary. Usage: !milb_summary_test [YYYY-MM-DD]"""
+        await ctx.message.delete()
+        fav_team = getattr(self.bot, "favorite_team", None)
+        if not fav_team:
+            await ctx.channel.send("No FAVORITE_TEAM configured.")
+            return
+        if date is None:
+            et_now = _et_now()
+            date = (et_now - timedelta(days=1)).strftime("%Y-%m-%d")
+        data = await self.bot.mlb_client.get_milb_affiliate_top_performances(date, fav_team)
+        if data is None:
+            await ctx.channel.send(f"No completed affiliate games found for {date}.")
+            return
+        await self._post_milb_affiliate_summary(ctx.channel, data)
 
     @commands.command(name="hr_test")
     async def hr_test(self, ctx):
