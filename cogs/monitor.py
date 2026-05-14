@@ -121,9 +121,11 @@ class MonitorCog(commands.Cog):
             self._hr_posted = set()
 
     def _save_hr_state(self) -> None:
+        tmp = HR_STATE_FILE + ".tmp"
         try:
-            with open(HR_STATE_FILE, "w") as f:
+            with open(tmp, "w") as f:
                 json.dump(list(self._hr_posted), f)
+            os.replace(tmp, HR_STATE_FILE)
         except Exception as e:
             print(f"[monitor] failed to save HR state: {e}")
 
@@ -139,9 +141,11 @@ class MonitorCog(commands.Cog):
             self._milb_summary_posted_date = None
 
     def _save_summary_state(self) -> None:
+        tmp = SUMMARY_STATE_FILE + ".tmp"
         try:
-            with open(SUMMARY_STATE_FILE, "w") as f:
+            with open(tmp, "w") as f:
                 json.dump({"date": self._summary_posted_date, "milb_date": self._milb_summary_posted_date}, f)
+            os.replace(tmp, SUMMARY_STATE_FILE)
         except Exception as e:
             print(f"[monitor] failed to save summary state: {e}")
 
@@ -169,8 +173,10 @@ class MonitorCog(commands.Cog):
                 },
                 "nh_broken_posted": list(self._nh_broken_posted),
             }
-            with open(NH_STATE_FILE, "w") as f:
+            tmp = NH_STATE_FILE + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump(data, f)
+            os.replace(tmp, NH_STATE_FILE)
         except Exception as e:
             print(f"[monitor] failed to save NH state: {e}")
 
