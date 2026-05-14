@@ -2559,8 +2559,10 @@ class MLBClient:
             async with session.get(f"{self.BASE_URL}/people/{pid}?hydrate=currentTeam") as resp:
                 data = await resp.json()
                 person = data.get('people', [{}])[0]
-                team_info = person.get('currentTeam', {})
-                team_abbrev = team_info.get('abbreviation', '')
+                team_id = person.get('currentTeam', {}).get('id')
+                if team_id:
+                    abbrevs = await self.get_team_abbrevs()
+                    team_abbrev = abbrevs.get(team_id, '')
         except:
             pass
 
