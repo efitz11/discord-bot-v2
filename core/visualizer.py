@@ -1,8 +1,147 @@
 import io
 import colorsys
 from PIL import Image, ImageDraw, ImageFont
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import os
+
+_FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
+
+
+def _dv(name: str, size: int) -> ImageFont.FreeTypeFont:
+    try:
+        return ImageFont.truetype(_FONT_DIR + name, size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _pct_color(pct: int) -> Tuple[int, int, int]:
+    """Map a 0-100 percentile to a red→gray→blue color matching Savant's palette."""
+    if pct >= 70: return (29, 125, 212)
+    if pct >= 55: return (100, 175, 230)
+    if pct >= 45: return (150, 150, 165)
+    if pct >= 30: return (225, 130, 60)
+    return (200, 48, 48)
+
+
+def generate_compare_percentiles_image(
+    p1_name: str, p2_name: str,
+    p1_full: str, p2_full: str,
+    year_str: str, stat_type: str,
+    sections: list,
+) -> io.BytesIO:
+    """Render a side-by-side percentile comparison chart styled after Baseball Savant."""
+
+    # ── Layout ──────────────────────────────────────────────────
+    W        = 760
+    PAD      = 18
+    VAL_W    = 34    # fixed-width column for the percentile number
+    CTR_W    = 164   # center column for the stat label
+    BAR_W    = (W - 2 * PAD - 2 * VAL_W - CTR_W) // 2   # ≈ 245 px per bar
+
+    TITLE_H  = 52
+    NAMES_H  = 38
+    CAT_H    = 34
+    ROW_H    = 31
+    FOOTER_H = 30
+
+    n_rows = sum(len(rows) for _, rows in sections)
+    n_cats = len(sections)
+    total_h = TITLE_H + NAMES_H + n_cats * CAT_H + n_rows * ROW_H + FOOTER_H + PAD
+
+    # ── Colors ──────────────────────────────────────────────────
+    BG       = (16, 18, 27)
+    CAT_BG   = (26, 30, 48)
+    ROW_ALT  = (20, 23, 35)
+    TRACK    = (34, 38, 56)
+    TEXT     = (224, 224, 235)
+    DIM      = (110, 115, 140)
+    P1_COL   = (100, 180, 255)   # blue  — left player
+    P2_COL   = (255, 145, 85)    # orange — right player
+
+    # ── Fonts ───────────────────────────────────────────────────
+    f_title = _dv("DejaVuSans-Bold.ttf", 17)
+    f_bold  = _dv("DejaVuSans-Bold.ttf", 13)
+    f_reg   = _dv("DejaVuSans.ttf",      13)
+    f_small = _dv("DejaVuSans.ttf",      11)
+    f_val   = _dv("DejaVuSans-Bold.ttf", 12)
+
+    img  = Image.new("RGB", (W, total_h), BG)
+    draw = ImageDraw.Draw(img)
+
+    # ── X anchors ───────────────────────────────────────────────
+    # [PAD][VAL_W][BAR_W][CTR_W][BAR_W][VAL_W][PAD]
+    xv1  = PAD                        # left edge of P1 value column
+    xb1  = xv1 + VAL_W               # left edge of P1 bar track
+    xctr = xb1 + BAR_W               # left edge of center label (= right edge of P1 bar)
+    xb2  = xctr + CTR_W              # left edge of P2 bar track
+    xv2  = xb2 + BAR_W              # left edge of P2 value column
+
+    y = PAD // 2
+
+    # ── Title ───────────────────────────────────────────────────
+    draw.text((W // 2, y + TITLE_H // 2), f"{year_str} Percentile Comparison",
+              font=f_title, fill=TEXT, anchor="mm")
+    y += TITLE_H
+
+    # ── Player name header ──────────────────────────────────────
+    draw.text((xb1, y + NAMES_H // 2), p1_name, font=f_bold, fill=P1_COL, anchor="lm")
+    draw.text((W // 2,  y + NAMES_H // 2), "vs",      font=f_reg,  fill=DIM,    anchor="mm")
+    draw.text((xv2 + VAL_W - 2, y + NAMES_H // 2), p2_name, font=f_bold, fill=P2_COL, anchor="rm")
+    y += NAMES_H
+
+    # ── Sections ─────────────────────────────────────────────────
+    for cat_name, rows in sections:
+        draw.rectangle([PAD, y, W - PAD, y + CAT_H], fill=CAT_BG)
+        draw.text((W // 2, y + CAT_H // 2), cat_name.upper(),
+                  font=f_bold, fill=(180, 185, 215), anchor="mm")
+        y += CAT_H
+
+        for j, (label, v1, v2, *_) in enumerate(rows):
+            # row tint
+            if j % 2 == 0:
+                draw.rectangle([PAD, y, W - PAD, y + ROW_H], fill=ROW_ALT)
+
+            bar_top    = y + 5
+            bar_bottom = y + ROW_H - 5
+
+            # bar tracks
+            draw.rounded_rectangle([xb1,  bar_top, xctr - 1, bar_bottom], radius=3, fill=TRACK)
+            draw.rounded_rectangle([xb2,  bar_top, xv2  - 1, bar_bottom], radius=3, fill=TRACK)
+
+            # Bar shows the percentile difference on the winning player's side
+            diff = (v1 or 0) - (v2 or 0)
+            if diff != 0:
+                blen = max(1, round(abs(diff) / 100 * BAR_W))
+                if diff > 0:
+                    draw.rounded_rectangle([xctr - blen, bar_top, xctr - 1, bar_bottom],
+                                           radius=3, fill=P1_COL)
+                else:
+                    draw.rounded_rectangle([xb2, bar_top, xb2 + blen, bar_bottom],
+                                           radius=3, fill=P2_COL)
+
+            # percentile values
+            col1 = _pct_color(v1) if v1 else DIM
+            col2 = _pct_color(v2) if v2 else DIM
+            draw.text((xv1 + VAL_W - 3, y + ROW_H // 2), str(v1) if v1 else "—",
+                      font=f_val, fill=col1, anchor="rm")
+            draw.text((xv2 + 3, y + ROW_H // 2), str(v2) if v2 else "—",
+                      font=f_val, fill=col2, anchor="lm")
+
+            # stat label (centered in center column)
+            draw.text(((xctr + xb2) // 2, y + ROW_H // 2), label,
+                      font=f_reg, fill=TEXT, anchor="mm")
+
+            y += ROW_H
+
+    # ── Footer ──────────────────────────────────────────────────
+    draw.text((W // 2, y + FOOTER_H // 2),
+              f"{p1_full}  ·  {p2_full}  ·  {stat_type} percentiles",
+              font=f_small, fill=DIM, anchor="mm")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
 
 # Define colors based on result
 COLORS = {

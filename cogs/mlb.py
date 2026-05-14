@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot, generate_zone_plot
+from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image
 import io
 import asyncio
 import discord
@@ -680,22 +680,6 @@ class MLBSlash(commands.Cog):
         p2_lookup = {row['stat']: row for row in p2_data.percentiles}
         all_stats = set(p1_lookup) | set(p2_lookup)
 
-        BAR_WIDTH = 10  # blocks per side, full bar = 100pt gap
-
-        def make_bars(v1, v2):
-            # filled blocks = how much of the 100pt scale the gap covers
-            diff = v1 - v2
-            filled = round(abs(diff) / 10)
-            bar = "█" * filled + "░" * (BAR_WIDTH - filled)
-            if diff > 0:
-                # p1 wins: bar on the left, right is empty
-                return bar[::-1], "░" * BAR_WIDTH
-            elif diff < 0:
-                # p2 wins: left is empty, bar on the right
-                return "░" * BAR_WIDTH, bar
-            else:
-                return "░" * BAR_WIDTH, "░" * BAR_WIDTH
-
         def build_section(stat_names):
             rows = []
             for stat in stat_names:
@@ -704,8 +688,7 @@ class MLBSlash(commands.Cog):
                 label = display_names.get(stat, stat.replace("_", " ").title())
                 v1 = p1_lookup[stat]['value'] if stat in p1_lookup else 0
                 v2 = p2_lookup[stat]['value'] if stat in p2_lookup else 0
-                left_bar, right_bar = make_bars(v1, v2)
-                rows.append((label, v1, v2, left_bar, right_bar))
+                rows.append((label, v1, v2))
             return rows
 
         p1_name = p1_data.player_name.split()[-1]  # last name for brevity
@@ -730,27 +713,13 @@ class MLBSlash(commands.Cog):
             return
 
         year_str = p1_data.year
-        embed = discord.Embed(
-            title=f"{year_str} Percentile Comparison",
-            color=discord.Color.blurple()
+        buf = generate_compare_percentiles_image(
+            p1_name, p2_name,
+            p1_data.player_name, p2_data.player_name,
+            year_str, stat_type,
+            sections,
         )
-
-        # Compute label width once across all sections so bars align vertically
-        label_w = max(len(r[0]) for _, rows in sections for r in rows)
-        data_row_w = 3 + 2 + BAR_WIDTH + 2 + label_w + 2 + BAR_WIDTH + 2 + 3
-        p1_section = f"{p1_name:>3}  {'':>{BAR_WIDTH}}  {'':^{label_w}}  {'':>{BAR_WIDTH}}  "
-        p2_start = data_row_w - len(p2_name)
-        header = p1_section[:p2_start].ljust(p2_start) + p2_name
-
-        for cat_name, rows in sections:
-            lines = [header]
-            for label, v1, v2, left_bar, right_bar in rows:
-                centered = label.center(label_w)
-                lines.append(f"{v1:>3}  {left_bar}  {centered}  {right_bar}  {v2:>3}")
-            embed.add_field(name=cat_name, value=f"```\n" + "\n".join(lines) + "\n```", inline=False)
-
-        embed.set_footer(text=f"{p1_data.player_name} (left)  vs  {p2_data.player_name} (right) — {year_str} {stat_type} percentiles")
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(file=discord.File(buf, filename="percentile_comparison.png"))
 
     @compare_percentiles.autocomplete('player1')
     async def compare_p1_autocomplete(self, interaction: discord.Interaction, current: str):
