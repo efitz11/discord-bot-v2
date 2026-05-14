@@ -4282,6 +4282,148 @@ class MLBClient:
             "pitchers": pitchers[:3],
         }
 
+    async def get_milb_affiliate_top_performances(self, date_str: str, fav_team_abbrev: str) -> Optional[dict]:
+        """Return top hitter/pitcher performances for a team's MiLB affiliates on date_str.
+
+        Returns None if any affiliate game is still in progress or no games are scheduled.
+        Returns {'date': str, 'hitters': [...], 'pitchers': [...]} when all games are Final.
+        Each entry has: name, team, level, score, summary.
+        """
+        session = await self.get_session()
+        milb_teams = await self.get_milb_teams()
+
+        affiliate_ids = [t['id'] for t in milb_teams if t.get('parent_abbrev', '').upper() == fav_team_abbrev.upper()]
+        if not affiliate_ids:
+            return None
+
+        _level_abbrev = {"Triple-A": "AAA", "Double-A": "AA", "High-A": "A+", "Single-A": "A", "Rookie": "Rk"}
+        level_map = {t['id']: _level_abbrev.get(t.get('level', ''), t.get('level', '')) for t in milb_teams}
+        team_level_map: dict = {}
+
+        team_id_param = ','.join(str(i) for i in affiliate_ids)
+        url = (f"{self.BASE_URL}/schedule?sportId=11,12,13,14,15"
+               f"&teamId={team_id_param}&date={date_str}&hydrate=team")
+
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                return None
+            sched = await resp.json()
+
+        game_infos = []
+        for date_obj in sched.get('dates', []):
+            for g in date_obj.get('games', []):
+                if g.get('status', {}).get('abstractGameState') != 'Final':
+                    return None  # A game is still in progress
+                pk = g.get('gamePk')
+                away_team = g['teams']['away']['team']
+                home_team = g['teams']['home']['team']
+                away_abbr = away_team.get('abbreviation', '???')
+                home_abbr = home_team.get('abbreviation', '???')
+                if away_team.get('id') in level_map:
+                    team_level_map[away_abbr] = level_map[away_team['id']]
+                if home_team.get('id') in level_map:
+                    team_level_map[home_abbr] = level_map[home_team['id']]
+                game_infos.append((pk, away_abbr, home_abbr))
+
+        if not game_infos:
+            return None
+
+        async def _fetch_box(pk):
+            try:
+                async with session.get(f"{self.BASE_URL}/game/{pk}/boxscore") as r:
+                    return await r.json() if r.status == 200 else None
+            except Exception:
+                return None
+
+        boxes = await asyncio.gather(*(_fetch_box(pk) for pk, _, _ in game_infos))
+
+        hitters = []
+        pitchers = []
+
+        for (pk, away_abbr, home_abbr), box in zip(game_infos, boxes):
+            if box is None:
+                continue
+            for side, team_abbr, opp_abbr in [("away", away_abbr, home_abbr), ("home", home_abbr, away_abbr)]:
+                team_data = box.get("teams", {}).get(side, {})
+                players = team_data.get("players", {})
+                level = team_level_map.get(team_abbr, "")
+
+                for batter_id in team_data.get("batters", []):
+                    p_data = players.get(f"ID{batter_id}", {})
+                    b = p_data.get("stats", {}).get("batting", {})
+                    if not b or b.get("atBats", 0) == 0:
+                        continue
+
+                    ab      = b.get("atBats", 0)
+                    hits    = b.get("hits", 0)
+                    doubles = b.get("doubles", 0)
+                    triples = b.get("triples", 0)
+                    hr      = b.get("homeRuns", 0)
+                    singles = max(0, hits - doubles - triples - hr)
+                    rbi     = b.get("rbi", 0)
+                    runs    = b.get("runs", 0)
+                    bb      = b.get("baseOnBalls", 0)
+                    sb      = b.get("stolenBases", 0)
+
+                    score = hr*4 + triples*2 + doubles*1.5 + singles*0.5 + rbi*1 + runs*0.5 + bb*0.25 + sb*1
+
+                    parts = [f"{hits}-{ab}"]
+                    if hr:      parts.append(f"{hr} HR")
+                    if triples: parts.append(f"{triples} 3B")
+                    if doubles: parts.append(f"{doubles} 2B")
+                    if rbi:     parts.append(f"{rbi} RBI")
+                    if runs:    parts.append(f"{runs} R")
+                    if bb:      parts.append(f"{bb} BB")
+                    if sb:      parts.append(f"{sb} SB")
+
+                    hitters.append({
+                        "name":    p_data.get("person", {}).get("fullName", "Unknown"),
+                        "team":    team_abbr,
+                        "level":   level,
+                        "score":   score,
+                        "summary": ", ".join(parts),
+                    })
+
+                for pitcher_id in team_data.get("pitchers", []):
+                    p_data = players.get(f"ID{pitcher_id}", {})
+                    p = p_data.get("stats", {}).get("pitching", {})
+                    if not p:
+                        continue
+
+                    ip_str = str(p.get("inningsPitched", "0"))
+                    try:
+                        ip_parts = ip_str.split(".")
+                        outs = int(ip_parts[0]) * 3 + (int(ip_parts[1]) if len(ip_parts) > 1 else 0)
+                    except (ValueError, IndexError):
+                        outs = 0
+
+                    if outs < 15:  # 5 IP minimum
+                        continue
+
+                    h  = p.get("hits", 0)
+                    er = p.get("earnedRuns", 0)
+                    bb = p.get("baseOnBalls", 0)
+                    k  = p.get("strikeOuts", 0)
+
+                    game_score = 50 + outs + k - 2*h - 4*er - bb
+
+                    pitchers.append({
+                        "name":    p_data.get("person", {}).get("fullName", "Unknown"),
+                        "team":    team_abbr,
+                        "level":   level,
+                        "score":   game_score,
+                        "summary": f"{ip_str} IP, {er} ER, {k} K, {bb} BB",
+                    })
+
+        hitters.sort(key=lambda x: x["score"], reverse=True)
+        pitchers.sort(key=lambda x: x["score"], reverse=True)
+
+        return {
+            "date":     date_str,
+            "hitters":  hitters[:7],
+            "pitchers": pitchers[:3],
+        }
+
 
 pitcher_bad = [{
     'name': 'Parker', 'team': 'wsh'
