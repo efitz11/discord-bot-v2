@@ -713,13 +713,20 @@ class MLBSlash(commands.Cog):
             return
 
         year_str = p1_data.year
+        p1_label = f"{p1_data.player_name} ({p1_data.team_abbrev})"
+        p2_label = f"{p2_data.player_name} ({p2_data.team_abbrev})"
         buf = generate_compare_percentiles_image(
-            p1_name, p2_name,
-            p1_data.player_name, p2_data.player_name,
+            p1_label, p2_label,
             year_str, stat_type,
             sections,
         )
-        await interaction.followup.send(file=discord.File(buf, filename="percentile_comparison.png"))
+        embed = discord.Embed(
+            title=f"{p1_data.player_name} vs {p2_data.player_name} percentile comparison ({year_str})",
+            color=discord.Color.blurple(),
+        )
+        embed.set_image(url="attachment://percentile_comparison.png")
+        embed.set_footer(text="Bars show the relative difference in percentiles between the two players. Longer bar = larger gap.")
+        await interaction.followup.send(embed=embed, file=discord.File(buf, filename="percentile_comparison.png"))
 
     @compare_percentiles.autocomplete('player1')
     async def compare_p1_autocomplete(self, interaction: discord.Interaction, current: str):

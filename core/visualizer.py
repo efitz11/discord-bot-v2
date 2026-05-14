@@ -24,8 +24,7 @@ def _pct_color(pct: int) -> Tuple[int, int, int]:
 
 
 def generate_compare_percentiles_image(
-    p1_name: str, p2_name: str,
-    p1_full: str, p2_full: str,
+    p1_label: str, p2_label: str,
     year_str: str, stat_type: str,
     sections: list,
 ) -> io.BytesIO:
@@ -42,11 +41,10 @@ def generate_compare_percentiles_image(
     NAMES_H  = 38
     CAT_H    = 34
     ROW_H    = 31
-    FOOTER_H = 30
 
     n_rows = sum(len(rows) for _, rows in sections)
     n_cats = len(sections)
-    total_h = TITLE_H + NAMES_H + n_cats * CAT_H + n_rows * ROW_H + FOOTER_H + PAD
+    total_h = TITLE_H + NAMES_H + n_cats * CAT_H + n_rows * ROW_H + PAD
 
     # ── Colors ──────────────────────────────────────────────────
     BG       = (16, 18, 27)
@@ -84,9 +82,9 @@ def generate_compare_percentiles_image(
     y += TITLE_H
 
     # ── Player name header ──────────────────────────────────────
-    draw.text((xb1, y + NAMES_H // 2), p1_name, font=f_bold, fill=P1_COL, anchor="lm")
-    draw.text((W // 2,  y + NAMES_H // 2), "vs",      font=f_reg,  fill=DIM,    anchor="mm")
-    draw.text((xv2 + VAL_W - 2, y + NAMES_H // 2), p2_name, font=f_bold, fill=P2_COL, anchor="rm")
+    draw.text((xb1, y + NAMES_H // 2), p1_label, font=f_bold, fill=P1_COL, anchor="lm")
+    draw.text((W // 2,  y + NAMES_H // 2), "vs",       font=f_reg,  fill=DIM,    anchor="mm")
+    draw.text((xv2 + VAL_W - 2, y + NAMES_H // 2), p2_label, font=f_bold, fill=P2_COL, anchor="rm")
     y += NAMES_H
 
     # ── Sections ─────────────────────────────────────────────────
@@ -132,11 +130,6 @@ def generate_compare_percentiles_image(
                       font=f_reg, fill=TEXT, anchor="mm")
 
             y += ROW_H
-
-    # ── Footer ──────────────────────────────────────────────────
-    draw.text((W // 2, y + FOOTER_H // 2),
-              f"{p1_full}  ·  {p2_full}  ·  {stat_type} percentiles",
-              font=f_small, fill=DIM, anchor="mm")
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
