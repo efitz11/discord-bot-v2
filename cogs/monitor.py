@@ -37,9 +37,10 @@ HR_DISTANCE_THRESHOLD = 420                 # Feet — minimum projected distanc
 HR_ALWAYS_ALERT_TEAM  = os.getenv("HR_ALERT_TEAM", "").upper() or None  # Always alert for this team's HRs regardless of distance
 HR_PARKS_THRESHOLD    = 5                  # Alert if HR would only be a HR in ≤ this many parks
 HR_XBA_THRESHOLD      = 0.200             # Alert if xBA is below this value
-HR_STATE_FILE         = "hr_posted.json"   # Persists posted HR keys across restarts
-NH_STATE_FILE         = "nh_state.json"    # Persists NH alert state across restarts
-SUMMARY_STATE_FILE    = "summary_state.json"  # Persists morning summary posted date across restarts
+_STATE_DIR            = os.getenv("STATE_DIR", ".")
+HR_STATE_FILE         = os.path.join(_STATE_DIR, "hr_posted.json")
+NH_STATE_FILE         = os.path.join(_STATE_DIR, "nh_state.json")
+SUMMARY_STATE_FILE    = os.path.join(_STATE_DIR, "summary_state.json")
 VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
 NH_ALERT_DELAY        = 15                  # Seconds to delay NH alerts (stream spoiler protection)
 
