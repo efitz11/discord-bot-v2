@@ -3073,7 +3073,6 @@ class MLBClient:
         team_abbrev = team_data.get('team', {}).get('abbreviation', '')
 
         # Parse batters
-        batting_order = team_data.get('battingOrder', [])
         all_batters = team_data.get('batters', [])
         batting_rows = []
         order_pos = 0  # tracks position in the lineup (1-9)
@@ -3090,7 +3089,8 @@ class MLBClient:
             positions = p_data.get('allPositions', [])
             pos = "-".join(p.get('abbreviation', '') for p in positions) if positions else p_data.get('position', {}).get('abbreviation', '')
 
-            is_starter = batter_id in batting_order
+            # ones digit of battingOrder == '0' → original starter; anything else → substitute
+            is_starter = str(p_data.get('battingOrder', '')).endswith('0')
             if is_starter:
                 order_pos += 1
                 display_name = name
@@ -3117,7 +3117,7 @@ class MLBClient:
                 # Include remaining non-starters that follow
                 remaining_idx = all_batters.index(batter_id) + 1
                 for rem_id in all_batters[remaining_idx:]:
-                    if rem_id in batting_order:
+                    if str(players.get(f'ID{rem_id}', {}).get('battingOrder', '')).endswith('0'):
                         break  # shouldn't happen, but safety
                     rem_data = players.get(f'ID{rem_id}', {})
                     rem_stats = rem_data.get('stats', {}).get('batting', {})
@@ -3242,7 +3242,6 @@ class MLBClient:
         team_name = team_data.get('team', {}).get('name', '')
         team_abbrev = team_data.get('team', {}).get('abbreviation', '')
 
-        batting_order = team_data.get('battingOrder', [])
         all_batters = team_data.get('batters', [])
         batting_rows = []
         order_pos = 0
@@ -3256,7 +3255,7 @@ class MLBClient:
             name = p_data.get('person', {}).get('boxscoreName', 'Unknown')
             positions = p_data.get('allPositions', [])
             pos = "-".join(p.get('abbreviation', '') for p in positions) if positions else p_data.get('position', {}).get('abbreviation', '')
-            is_starter = batter_id in batting_order
+            is_starter = str(p_data.get('battingOrder', '')).endswith('0')
             if is_starter:
                 order_pos += 1
                 display_name = name
