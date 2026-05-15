@@ -100,6 +100,7 @@ class MonitorCog(commands.Cog):
         self._hr_clear_date = None   # date string for which we've done the 6am clear
         self._summary_posted_date = None       # date string for which we've posted the morning summary
         self._milb_summary_posted_date = None  # date string for which we've posted the MiLB affiliate summary
+        self._milb_ready_since: "datetime | None" = None  # when all MLB+MiLB games first went Final
 
         self._load_hr_state()
         self._load_nh_state()
@@ -1026,6 +1027,7 @@ class MonitorCog(commands.Cog):
                 is_new_day = self._schedule_date is not None and self._schedule_date != today_str
                 await self._refresh_schedule(prune_finished=is_new_day)
                 if is_new_day:
+                    self._milb_ready_since = None
                     print("[monitor] new calendar day — schedule merged, finished games pruned")
 
             # Clear HR state at 6am ET each day
@@ -1033,6 +1035,7 @@ class MonitorCog(commands.Cog):
                 self._hr_posted.clear()
                 self._save_hr_state()
                 self._hr_clear_date = today_str
+                self._milb_ready_since = None
                 print("[monitor] 6am ET — HR posted state cleared")
 
             # Morning performance summary at 8am ET
@@ -1043,17 +1046,31 @@ class MonitorCog(commands.Cog):
                 if ch:
                     asyncio.create_task(self._post_morning_summary(ch))
 
-            # MiLB affiliate summary — post once all affiliate games for today are Final
+            # MiLB affiliate summary — post 5 min after all affiliate games AND the
+            # MLB club's game are Final.
             fav_team = getattr(self.bot, "favorite_team", None)
             if fav_team and now_et.hour >= 12 and self._milb_summary_posted_date != today_str:
                 try:
                     milb_data = await self.bot.mlb_client.get_milb_affiliate_top_performances(today_str, fav_team)
                     if milb_data is not None:
-                        self._milb_summary_posted_date = today_str
-                        self._save_summary_state()
-                        ch = await self._get_alert_channel()
-                        if ch:
-                            asyncio.create_task(self._post_milb_affiliate_summary(ch, milb_data))
+                        # Also require the MLB club's game (if any) to be Final
+                        fav_upper = fav_team.upper()
+                        mlb_game_done = all(
+                            info.get("abstract_state") == "Final"
+                            for info in self._scheduled_games.values()
+                            if info.get("away", "").upper() == fav_upper
+                            or info.get("home", "").upper() == fav_upper
+                        )
+                        if mlb_game_done:
+                            if self._milb_ready_since is None:
+                                self._milb_ready_since = now_et
+                                print(f"[monitor] all affiliate+MLB games Final — will post MiLB summary in 5 min")
+                            elif (now_et - self._milb_ready_since) >= timedelta(minutes=5):
+                                self._milb_summary_posted_date = today_str
+                                self._save_summary_state()
+                                ch = await self._get_alert_channel()
+                                if ch:
+                                    asyncio.create_task(self._post_milb_affiliate_summary(ch, milb_data))
                 except Exception as e:
                     print(f"[monitor] MiLB affiliate summary check error: {e}")
 
