@@ -4156,6 +4156,56 @@ class MLBClient:
         transactions.sort(key=lambda t: t.get('date', ''))
         return {'player': player, 'year': year, 'transactions': transactions}
 
+    async def get_rolling_xwoba(self, player_id_or_name: str) -> Optional[dict]:
+        """Fetch rolling xwOBA data from Savant for a batter.
+
+        Returns {'player_name': str, 'team_abbrev': str, 'windows': {50: [...], 100: [...], 250: [...]}}
+        where each list is [{'date': 'YYYY-MM-DD', 'xwoba': float}, ...] in chronological order.
+        Returns None if the player is not found or has no data.
+        """
+        session = await self.get_session()
+        resolved = await self.resolve_player(player_id_or_name)
+        if not resolved:
+            return None
+        pid = resolved['id']
+
+        team_abbrev = ""
+        try:
+            async with session.get(f"{self.BASE_URL}/people/{pid}?hydrate=currentTeam") as resp:
+                pdata = (await resp.json()).get('people', [{}])[0]
+                team_id = pdata.get('currentTeam', {}).get('id')
+                if team_id:
+                    abbrevs = await self.get_team_abbrevs()
+                    team_abbrev = abbrevs.get(team_id, '')
+        except Exception:
+            pass
+
+        url = f"https://baseballsavant.mlb.com/player-services/rolling-thumb?playerId={pid}&playerType=Y"
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+
+        def parse_window(entries):
+            pts = []
+            for e in entries:
+                try:
+                    pts.append({'date': e['max_game_date'][:10], 'xwoba': float(e['xwoba'])})
+                except (KeyError, ValueError):
+                    continue
+            pts.reverse()  # API returns newest-first; flip to chronological
+            return pts
+
+        windows = {
+            50:  parse_window(data.get('plate50',  [])),
+            100: parse_window(data.get('plate100', [])),
+            250: parse_window(data.get('plate250', [])),
+        }
+        if not any(windows.values()):
+            return None
+
+        return {'player_name': resolved['name'], 'team_abbrev': team_abbrev, 'windows': windows}
+
     async def get_daily_top_performances(self, date_str: str = None) -> Optional[dict]:
         """Return top hitter and pitcher performances for a given date (default: yesterday ET).
 

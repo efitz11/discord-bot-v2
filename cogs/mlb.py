@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image
+from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image, generate_rolling_xwoba_chart
 import io
 import asyncio
 import discord
@@ -734,6 +734,47 @@ class MLBSlash(commands.Cog):
 
     @compare_percentiles.autocomplete('player2')
     async def compare_p2_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
+    @savant.command(name="chart", description="Chart a player's rolling Statcast stats")
+    @app_commands.describe(player="Player name", type="Chart type", window="Rolling window size (default: 100 PAs)")
+    @app_commands.choices(
+        type=[app_commands.Choice(name="Rolling xwOBA", value="rolling_xwoba")],
+        window=[
+            app_commands.Choice(name="50 PAs",  value=50),
+            app_commands.Choice(name="100 PAs", value=100),
+            app_commands.Choice(name="250 PAs", value=250),
+        ],
+    )
+    async def savant_chart(self, interaction: discord.Interaction, player: str, type: app_commands.Choice[str], window: app_commands.Choice[int] = None):
+        await interaction.response.defer()
+        win = window.value if window else 100
+
+        if type.value == "rolling_xwoba":
+            data = await self.bot.mlb_client.get_rolling_xwoba(player)
+            if not data:
+                await interaction.followup.send(f"No Savant rolling data found for **{player}**.")
+                return
+
+            points = data['windows'].get(win, [])
+            if not points:
+                await interaction.followup.send(f"Not enough plate appearances for a {win}-PA rolling window yet.")
+                return
+
+            buf = generate_rolling_xwoba_chart(points, data['player_name'], data['team_abbrev'], win)
+            start = points[0]['date']
+            end   = points[-1]['date']
+            label = f"{data['player_name']} ({data['team_abbrev']})" if data['team_abbrev'] else data['player_name']
+            embed = discord.Embed(
+                title=f"{label} — {win} PA Rolling xwOBA",
+                color=discord.Color.red(),
+            )
+            embed.set_image(url="attachment://rolling_xwoba.png")
+            embed.set_footer(text=f"{start} → {end}")
+            await interaction.followup.send(embed=embed, file=discord.File(buf, filename="rolling_xwoba.png"))
+
+    @savant_chart.autocomplete('player')
+    async def savant_chart_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
 
