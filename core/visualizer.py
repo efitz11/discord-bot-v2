@@ -3,6 +3,7 @@ import colorsys
 from PIL import Image, ImageDraw, ImageFont
 from typing import List, Optional, Tuple
 import os
+import math
 
 _FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 
@@ -480,5 +481,113 @@ def generate_zone_plot(data: dict) -> io.BytesIO:
 
     buf = io.BytesIO()
     img.save(buf, format='PNG')
+    buf.seek(0)
+    return buf
+
+
+def generate_rolling_xwoba_chart(
+    points: list,
+    player_name: str,
+    team_abbrev: str,
+    window: int,
+    lg_avg: float = 0.315,
+) -> io.BytesIO:
+    """Render a rolling xwOBA line chart styled after Baseball Savant.
+
+    points: chronologically ordered list of {'date': str, 'xwoba': float}
+    """
+    W, H = 720, 360
+    PAD_T  = 62
+    PAD_B  = 32
+    PAD_L  = 58
+    PAD_R  = 72   # room for "LG AVG" label
+
+    plot_w = W - PAD_L - PAD_R
+    plot_h = H - PAD_T - PAD_B
+
+    # Y range — snap to nice bounds around the data
+    raw_vals = [p['xwoba'] for p in points]
+    lo = max(0.100, math.floor((min(raw_vals) - 0.05) * 10) / 10)
+    hi = min(0.700, math.ceil( (max(raw_vals) + 0.05) * 10) / 10)
+    # Always include lg_avg in range
+    lo = min(lo, math.floor((lg_avg - 0.05) * 10) / 10)
+    hi = max(hi, math.ceil( (lg_avg + 0.05) * 10) / 10)
+
+    # ── Colors ──────────────────────────────────────────────────
+    BG          = (255, 255, 255)
+    PLAYER_COL  = (210, 35, 35)     # Savant red
+    AVG_COL     = (80, 80, 80)
+    GRID_COL    = (210, 210, 210)
+    TEXT_COL    = (40, 40, 40)
+    DIM_COL     = (130, 130, 130)
+    CYAN_DOT    = (80, 190, 200)    # decorative dots under title
+
+    # ── Fonts ───────────────────────────────────────────────────
+    f_bold  = _dv("DejaVuSans-Bold.ttf", 15)
+    f_reg   = _dv("DejaVuSans.ttf",      15)
+    f_axis  = _dv("DejaVuSans.ttf",      11)
+    f_label = _dv("DejaVuSans.ttf",      10)
+
+    img  = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    # ── Coordinate helpers ───────────────────────────────────────
+    n = len(points)
+
+    def xp(i):
+        return PAD_L + (i / max(n - 1, 1)) * plot_w
+
+    def yp(v):
+        return PAD_T + plot_h - ((v - lo) / (hi - lo)) * plot_h
+
+    # ── Title ────────────────────────────────────────────────────
+    bold_part = f"{window} PAs"
+    rest_part = " Rolling xwOBA"
+    bb = draw.textbbox((0, 0), bold_part, font=f_bold)
+    bold_w = bb[2] - bb[0]
+    rb = draw.textbbox((0, 0), rest_part, font=f_reg)
+    rest_w = rb[2] - rb[0]
+    tx = (W - bold_w - rest_w) // 2
+    ty = 12
+    draw.text((tx,            ty), bold_part, font=f_bold, fill=TEXT_COL)
+    draw.text((tx + bold_w,   ty), rest_part, font=f_reg,  fill=TEXT_COL)
+
+    # Decorative cyan dots under title
+    dot_y  = ty + 24
+    dot_r  = 3
+    dot_gap = 10
+    n_dots = 9
+    dot_start = W // 2 - (n_dots * dot_gap) // 2
+    for di in range(n_dots):
+        cx = dot_start + di * dot_gap
+        draw.ellipse([cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r], fill=CYAN_DOT)
+
+    # ── Grid lines ───────────────────────────────────────────────
+    grid_vals = [v / 100 for v in range(int(lo * 100), int(hi * 100) + 1, 10)]
+    for gv in grid_vals:
+        y = yp(gv)
+        # Dashed line
+        x = PAD_L
+        while x < PAD_L + plot_w:
+            draw.line([(x, y), (min(x + 6, PAD_L + plot_w), y)], fill=GRID_COL, width=1)
+            x += 11
+        # Y-axis label
+        draw.text((PAD_L - 6, y), f"{gv:.3f}", font=f_axis, fill=DIM_COL, anchor="rm")
+
+    # ── League average dashed line ────────────────────────────────
+    ly = yp(lg_avg)
+    x = PAD_L
+    while x < PAD_L + plot_w:
+        draw.line([(x, ly), (min(x + 10, PAD_L + plot_w), ly)], fill=AVG_COL, width=1)
+        x += 16
+    draw.text((PAD_L + plot_w + 6, ly), "LG AVG", font=f_label, fill=AVG_COL, anchor="lm")
+
+    # ── Player line ───────────────────────────────────────────────
+    if n > 1:
+        line_pts = [(xp(i), yp(p['xwoba'])) for i, p in enumerate(points)]
+        draw.line(line_pts, fill=PLAYER_COL, width=2)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
     buf.seek(0)
     return buf
