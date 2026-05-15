@@ -90,6 +90,10 @@ class MonitorCog(commands.Cog):
         self._scheduled_games: dict = {}
         self._schedule_date = None   # YYYY-MM-DD string of the schedule we fetched
 
+        # MiLB affiliate games: {game_pk: {"start_et", "away", "home", "abstract_state", "level"}}
+        self._milb_scheduled_games: dict = {}
+        self._milb_schedule_date = None
+
         # No-hitter tracking — loaded from disk so restarts don't lose state
         self._nh_alerted: dict = {}
         self._nh_broken_posted: set = set()
@@ -257,6 +261,70 @@ class MonitorCog(commands.Cog):
         self._schedule_date = today_str
         print(f"[monitor] refreshed schedule for {today_str} — tracking {len(self._scheduled_games)} game(s)")
 
+    async def _refresh_milb_schedule(self) -> None:
+        """Fetch today's MiLB affiliate schedule and merge into _milb_scheduled_games."""
+        now_et = _et_now()
+        today_str = now_et.strftime("%Y-%m-%d")
+        fav_team = getattr(self.bot, "favorite_team", None)
+        if not fav_team:
+            return
+
+        client = self.bot.mlb_client
+        session = await client.get_session()
+        milb_teams = await client.get_milb_teams()
+
+        _level_abbrev = {"Triple-A": "AAA", "Double-A": "AA", "High-A": "A+", "Single-A": "A", "Rookie": "Rk"}
+        affiliate_ids = {t['id']: _level_abbrev.get(t.get('level', ''), t.get('level', ''))
+                         for t in milb_teams if t.get('parent_abbrev', '').upper() == fav_team.upper()}
+        if not affiliate_ids:
+            return
+
+        team_id_param = ','.join(str(i) for i in affiliate_ids)
+        url = (f"{client.BASE_URL}/schedule?sportId=11,12,13,14,15"
+               f"&teamId={team_id_param}&date={today_str}&hydrate=team")
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return
+                sched = await resp.json()
+        except Exception as e:
+            print(f"[monitor] MiLB schedule fetch error: {e}")
+            return
+
+        new_games = {}
+        for date_obj in sched.get('dates', []):
+            for g in date_obj.get('games', []):
+                pk = g.get('gamePk')
+                if not pk:
+                    continue
+                away_team = g['teams']['away']['team']
+                home_team = g['teams']['home']['team']
+                away_id = away_team.get('id')
+                home_id = home_team.get('id')
+                level = affiliate_ids.get(away_id) or affiliate_ids.get(home_id, '')
+                new_games[pk] = {
+                    "start_et":      _parse_game_time(g.get("gameDate", "")),
+                    "away":          away_team.get("abbreviation", "???"),
+                    "home":          home_team.get("abbreviation", "???"),
+                    "abstract_state": g.get("status", {}).get("abstractGameState", "Preview"),
+                    "level":         level,
+                }
+
+        for pk, info in new_games.items():
+            if pk not in self._milb_scheduled_games:
+                self._milb_scheduled_games[pk] = info
+            else:
+                self._milb_scheduled_games[pk]["abstract_state"] = info["abstract_state"]
+
+        # Prune games that are Final
+        done = [pk for pk, info in self._milb_scheduled_games.items()
+                if info.get("abstract_state") == "Final" and pk not in new_games]
+        for pk in done:
+            self._milb_scheduled_games.pop(pk, None)
+
+        self._milb_schedule_date = today_str
+        print(f"[monitor] refreshed MiLB schedule for {today_str} — tracking {len(self._milb_scheduled_games)} affiliate game(s)")
+
     def _any_game_active_or_imminent(self) -> bool:
         """Return True if we should be in active-polling mode.
 
@@ -277,6 +345,17 @@ class MonitorCog(commands.Cog):
             start = info.get("start_et")
             if start is None:
                 return True  # Unknown start time — keep polling
+            if now_et >= start - wakeup:
+                return True
+        for pk, info in self._milb_scheduled_games.items():
+            state = info.get("abstract_state", "")
+            if state == "Final":
+                continue
+            if state == "Live":
+                return True
+            start = info.get("start_et")
+            if start is None:
+                return True
             if now_et >= start - wakeup:
                 return True
         return False
@@ -796,6 +875,188 @@ class MonitorCog(commands.Cog):
         except discord.HTTPException as e:
             print(f"[monitor] failed to post HR alert: {e}")
 
+    async def _post_milb_hr_alert(self, channel, hr: dict) -> None:
+        batter     = hr["batter"]
+        team       = hr["batter_team"]
+        pitcher    = hr["pitcher"]
+        level      = hr.get("level", "MiLB")
+        dist       = hr.get("dist", 0)
+        ev         = hr.get("ev", 0)
+        la         = hr.get("la", 0)
+        pitch_type = hr.get("pitch_type", "")
+        pitch_spd  = hr.get("pitch_speed", 0.0)
+        inning     = hr.get("inning", "").title()
+        hr_num     = hr.get("num", 0)
+        desc       = hr.get("desc", "")
+        video_url  = hr.get("video_url", "")
+        video_blurb = hr.get("video_blurb", "Watch")
+
+        away    = hr.get("away", "")
+        home    = hr.get("home", "")
+        matchup = f"{away}@{home}" if away and home else team
+        num_str = f" (#{hr_num})" if hr_num else ""
+
+        title = f"💣 {level} {matchup} — ({team}) {batter}{num_str}"
+
+        pitch_parts = []
+        if pitch_type and pitch_spd:
+            pitch_parts.append(f"{pitch_spd:.1f} mph {pitch_type}")
+
+        hit_parts = []
+        if ev:
+            hit_parts.append(f"{ev:.1f} mph EV")
+        if la:
+            hit_parts.append(f"{la}° LA")
+        if dist:
+            hit_parts.append(f"{dist} ft")
+
+        desc_fmt = desc.replace(batter, f"**{batter}**", 1)
+        body = f"**{inning}:** With **{pitcher}** pitching, {desc_fmt}"
+        if pitch_parts:
+            body += f"\n> *{' | '.join(pitch_parts)}*"
+        if hit_parts:
+            body += f"\n> *{' | '.join(hit_parts)}*"
+        if video_url:
+            body += f"\n> [🎥 **{video_blurb or 'Watch'}**]({video_url})"
+
+        embed = discord.Embed(title=title, description=body, color=discord.Color.orange())
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to post MiLB HR alert: {e}")
+
+    async def _process_milb_game(self, game_pk: int, channel) -> None:
+        """Check a MiLB affiliate game for new HRs and post alerts."""
+        feed = await self._fetch_live_feed(game_pk)
+        if not feed:
+            return
+
+        ab_state = feed.get("gameData", {}).get("status", {}).get("abstractGameState", "Preview")
+        if ab_state == "Preview":
+            return
+
+        live_data  = feed.get("liveData", {})
+        all_plays  = live_data.get("plays", {}).get("allPlays", [])
+        sched_info = self._milb_scheduled_games.get(game_pk, {})
+        away_abbr  = sched_info.get("away", "???")
+        home_abbr  = sched_info.get("home", "???")
+        level      = sched_info.get("level", "MiLB")
+
+        for play in all_plays:
+            if play.get("result", {}).get("eventType") != "home_run":
+                continue
+
+            about      = play.get("about", {})
+            at_bat_idx = about.get("atBatIndex", 0)
+            hr_key     = f"{game_pk}_{at_bat_idx}"
+
+            if hr_key in self._hr_posted:
+                continue
+
+            end_time_str = about.get("endTime", "")
+            if end_time_str:
+                try:
+                    end_time = datetime.strptime(end_time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - end_time).total_seconds() > 600:
+                        self._hr_posted.add(hr_key)
+                        continue
+                except Exception:
+                    pass
+
+            dist = ev = la = 0
+            pitch_type = pitch_spd = ""
+            play_id = None
+            for event in play.get("playEvents", []):
+                if event.get("details", {}).get("isInPlay") and "hitData" in event:
+                    hd         = event["hitData"]
+                    dist       = int(hd.get("totalDistance") or 0)
+                    ev         = float(hd.get("launchSpeed") or 0)
+                    la         = int(hd.get("launchAngle") or 0)
+                    pitch_type = event.get("details", {}).get("type", {}).get("description", "")
+                    pitch_spd  = float(event.get("pitchData", {}).get("startSpeed") or 0)
+                    play_id    = event.get("playId")
+                    break
+
+            batter  = play.get("matchup", {}).get("batter", {}).get("fullName", "Unknown")
+            pitcher = play.get("matchup", {}).get("pitcher", {}).get("fullName", "Unknown")
+            desc    = play.get("result", {}).get("description", "")
+            half    = about.get("halfInning", "top")
+            inn_num = about.get("inning", 0)
+            batter_team = home_abbr if half == "bottom" else away_abbr
+
+            hr_num = 0
+            for keyword in ("grand slam", "home run", "homers"):
+                if keyword in desc:
+                    m = re.search(r'\((\d+)\)', desc[desc.index(keyword):])
+                    if m:
+                        hr_num = int(m.group(1))
+                    break
+
+            hr_data = {
+                "batter":       batter,
+                "batter_team":  batter_team,
+                "pitcher":      pitcher,
+                "away":         away_abbr,
+                "home":         home_abbr,
+                "level":        level,
+                "dist":         dist,
+                "ev":           ev,
+                "la":           la,
+                "pitch_type":   pitch_type,
+                "pitch_speed":  pitch_spd,
+                "num":          hr_num,
+                "inning":       f"{'bot' if half == 'bottom' else 'top'} {inn_num}",
+                "desc":         desc,
+                "play_id":      play_id,
+                "game_pk":      game_pk,
+                "video_url":    "",
+                "video_blurb":  "",
+            }
+
+            if hr_key not in self._hr_pending:
+                self._hr_pending[hr_key] = {"cycles_waited": 0, "data": hr_data, "milb": True}
+
+        pending_here = {
+            k: v for k, v in self._hr_pending.items()
+            if v["data"]["game_pk"] == game_pk and v.get("milb")
+        }
+        if not pending_here:
+            return
+
+        content_data = await self._fetch_content(game_pk)
+        content_dict = {}
+        for item in content_data.get("highlights", {}).get("highlights", {}).get("items", []):
+            if "guid" in item:
+                for pb in item.get("playbacks", []):
+                    if pb.get("name") == "mp4Avc":
+                        content_dict[item["guid"]] = {
+                            "url":   pb["url"],
+                            "blurb": item.get("headline", item.get("blurb", "")),
+                        }
+                        break
+
+        for hr_key, pending in list(pending_here.items()):
+            if hr_key in self._hr_posted:
+                continue
+            hr      = pending["data"]
+            play_id = hr.get("play_id")
+            cycles  = pending["cycles_waited"]
+
+            if play_id and play_id in content_dict:
+                hr["video_url"]   = content_dict[play_id]["url"]
+                hr["video_blurb"] = content_dict[play_id]["blurb"]
+                video_found = True
+            else:
+                video_found = False
+
+            if video_found or cycles >= VIDEO_WAIT_MAX_CYCLES:
+                await self._post_milb_hr_alert(channel, hr)
+                self._hr_posted.add(hr_key)
+                self._save_hr_state()
+                del self._hr_pending[hr_key]
+            else:
+                self._hr_pending[hr_key]["cycles_waited"] += 1
+
     # ─────────────────────────────────────────────
     # Per-game processing
     # ─────────────────────────────────────────────
@@ -964,7 +1225,7 @@ class MonitorCog(commands.Cog):
         # ── Resolve videos for this game's pending HRs ───────────────────────
         pending_here = {
             k: v for k, v in self._hr_pending.items()
-            if v["data"]["game_pk"] == game_pk
+            if v["data"]["game_pk"] == game_pk and not v.get("milb")
         }
         if not pending_here:
             return
@@ -1028,7 +1289,11 @@ class MonitorCog(commands.Cog):
                 await self._refresh_schedule(prune_finished=is_new_day)
                 if is_new_day:
                     self._milb_ready_since = None
+                    self._milb_scheduled_games.clear()
                     print("[monitor] new calendar day — schedule merged, finished games pruned")
+
+            if self._milb_schedule_date != today_str:
+                await self._refresh_milb_schedule()
 
             # Clear HR state at 6am ET each day
             if now_et.hour >= 6 and self._hr_clear_date != today_str:
@@ -1083,9 +1348,10 @@ class MonitorCog(commands.Cog):
                 print(f"[monitor] alert channel not found (ALERT_CHANNEL_ID={getattr(self.bot, 'alert_channel_id', None) or ALERT_CHANNEL_ID})")
                 return
 
-            # Process all games concurrently
+            # Process all games concurrently (MLB + MiLB affiliates)
             await asyncio.gather(
                 *(self._process_game(pk, channel) for pk in self._scheduled_games),
+                *(self._process_milb_game(pk, channel) for pk in self._milb_scheduled_games),
                 return_exceptions=True,
             )
 
