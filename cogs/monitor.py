@@ -888,8 +888,6 @@ class MonitorCog(commands.Cog):
         inning     = hr.get("inning", "").title()
         hr_num     = hr.get("num", 0)
         desc       = hr.get("desc", "")
-        video_url  = hr.get("video_url", "")
-        video_blurb = hr.get("video_blurb", "Watch")
 
         away    = hr.get("away", "")
         home    = hr.get("home", "")
@@ -916,8 +914,6 @@ class MonitorCog(commands.Cog):
             body += f"\n> *{' | '.join(pitch_parts)}*"
         if hit_parts:
             body += f"\n> *{' | '.join(hit_parts)}*"
-        if video_url:
-            body += f"\n> [🎥 **{video_blurb or 'Watch'}**]({video_url})"
 
         embed = discord.Embed(title=title, description=body, color=discord.Color.orange())
         try:
@@ -965,7 +961,6 @@ class MonitorCog(commands.Cog):
 
             dist = ev = la = 0
             pitch_type = pitch_spd = ""
-            play_id = None
             for event in play.get("playEvents", []):
                 if event.get("details", {}).get("isInPlay") and "hitData" in event:
                     hd         = event["hitData"]
@@ -974,7 +969,6 @@ class MonitorCog(commands.Cog):
                     la         = int(hd.get("launchAngle") or 0)
                     pitch_type = event.get("details", {}).get("type", {}).get("description", "")
                     pitch_spd  = float(event.get("pitchData", {}).get("startSpeed") or 0)
-                    play_id    = event.get("playId")
                     break
 
             batter  = play.get("matchup", {}).get("batter", {}).get("fullName", "Unknown")
@@ -1007,55 +1001,13 @@ class MonitorCog(commands.Cog):
                 "num":          hr_num,
                 "inning":       f"{'bot' if half == 'bottom' else 'top'} {inn_num}",
                 "desc":         desc,
-                "play_id":      play_id,
                 "game_pk":      game_pk,
-                "video_url":    "",
-                "video_blurb":  "",
             }
 
-            if hr_key not in self._hr_pending:
-                self._hr_pending[hr_key] = {"cycles_waited": 0, "data": hr_data, "milb": True}
-
-        pending_here = {
-            k: v for k, v in self._hr_pending.items()
-            if v["data"]["game_pk"] == game_pk and v.get("milb")
-        }
-        if not pending_here:
-            return
-
-        content_data = await self._fetch_content(game_pk)
-        content_dict = {}
-        for item in content_data.get("highlights", {}).get("highlights", {}).get("items", []):
-            if "guid" in item:
-                for pb in item.get("playbacks", []):
-                    if pb.get("name") == "mp4Avc":
-                        content_dict[item["guid"]] = {
-                            "url":   pb["url"],
-                            "blurb": item.get("headline", item.get("blurb", "")),
-                        }
-                        break
-
-        for hr_key, pending in list(pending_here.items()):
-            if hr_key in self._hr_posted:
-                continue
-            hr      = pending["data"]
-            play_id = hr.get("play_id")
-            cycles  = pending["cycles_waited"]
-
-            if play_id and play_id in content_dict:
-                hr["video_url"]   = content_dict[play_id]["url"]
-                hr["video_blurb"] = content_dict[play_id]["blurb"]
-                video_found = True
-            else:
-                video_found = False
-
-            if video_found or cycles >= VIDEO_WAIT_MAX_CYCLES:
-                await self._post_milb_hr_alert(channel, hr)
+            if hr_key not in self._hr_posted:
+                await self._post_milb_hr_alert(channel, hr_data)
                 self._hr_posted.add(hr_key)
                 self._save_hr_state()
-                del self._hr_pending[hr_key]
-            else:
-                self._hr_pending[hr_key]["cycles_waited"] += 1
 
     # ─────────────────────────────────────────────
     # Per-game processing
