@@ -1877,9 +1877,6 @@ class MLBSlash(commands.Cog):
             for game in games:
                 name = game_name(game)
                 value = f"```python\n{game.format_score_line()}\n```"
-                last_play = game.format_last_play()
-                if last_play:
-                    value += f"\n{last_play}"
 
                 # Discord limits embeds to 25 fields and 6000 total characters
                 if len(current_embed.fields) >= 25 or len(current_embed) + len(name) + len(value) > 5900:
