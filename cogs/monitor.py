@@ -301,13 +301,17 @@ class MonitorCog(commands.Cog):
                 home_team = g['teams']['home']['team']
                 away_id = away_team.get('id')
                 home_id = home_team.get('id')
+                away_abbr = away_team.get("abbreviation", "???")
+                home_abbr = home_team.get("abbreviation", "???")
                 level = affiliate_ids.get(away_id) or affiliate_ids.get(home_id, '')
+                affiliate_abbr = away_abbr if away_id in affiliate_ids else home_abbr
                 new_games[pk] = {
-                    "start_et":      _parse_game_time(g.get("gameDate", "")),
-                    "away":          away_team.get("abbreviation", "???"),
-                    "home":          home_team.get("abbreviation", "???"),
+                    "start_et":       _parse_game_time(g.get("gameDate", "")),
+                    "away":           away_abbr,
+                    "home":           home_abbr,
                     "abstract_state": g.get("status", {}).get("abstractGameState", "Preview"),
-                    "level":         level,
+                    "level":          level,
+                    "affiliate":      affiliate_abbr,
                 }
 
         for pk, info in new_games.items():
@@ -933,10 +937,11 @@ class MonitorCog(commands.Cog):
 
         live_data  = feed.get("liveData", {})
         all_plays  = live_data.get("plays", {}).get("allPlays", [])
-        sched_info = self._milb_scheduled_games.get(game_pk, {})
-        away_abbr  = sched_info.get("away", "???")
-        home_abbr  = sched_info.get("home", "???")
-        level      = sched_info.get("level", "MiLB")
+        sched_info     = self._milb_scheduled_games.get(game_pk, {})
+        away_abbr      = sched_info.get("away", "???")
+        home_abbr      = sched_info.get("home", "???")
+        level          = sched_info.get("level", "MiLB")
+        affiliate_abbr = sched_info.get("affiliate", "")
 
         for play in all_plays:
             if play.get("result", {}).get("eventType") != "home_run":
@@ -977,6 +982,9 @@ class MonitorCog(commands.Cog):
             half    = about.get("halfInning", "top")
             inn_num = about.get("inning", 0)
             batter_team = home_abbr if half == "bottom" else away_abbr
+            if affiliate_abbr and batter_team != affiliate_abbr:
+                self._hr_posted.add(hr_key)  # mark so we don't recheck each poll
+                continue
 
             hr_num = 0
             for keyword in ("grand slam", "home run", "homers"):
