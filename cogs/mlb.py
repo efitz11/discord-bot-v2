@@ -1,6 +1,7 @@
 from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image, generate_rolling_xwoba_chart
 import io
 import asyncio
+import dataclasses
 import discord
 from typing import List, Optional, Union, Dict
 
@@ -1227,12 +1228,7 @@ class MLBSlash(commands.Cog):
         return await self.player_autocomplete(interaction, current)
 
 
-    @mlb.command(name="splits", description="Get a player's stat splits for a season")
-    @app_commands.describe(player="The player to search for")
-    @app_commands.describe(split="The stat split to view")
-    @app_commands.describe(year="Season year (default: current year)")
-    @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
-    @app_commands.choices(split=[
+    _split_choices = [
         app_commands.Choice(name="vs Left", value="vl"),
         app_commands.Choice(name="vs Right", value="vr"),
         app_commands.Choice(name="Home", value="h"),
@@ -1251,15 +1247,61 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="August", value="8"),
         app_commands.Choice(name="September", value="9"),
         app_commands.Choice(name="October", value="10"),
-    ])
+    ]
+
+    @mlb.command(name="splits", description="Get a player's stat splits for a season")
+    @app_commands.describe(player="The player to search for")
+    @app_commands.describe(split="The stat split to view")
+    @app_commands.describe(split2="Optional second split to display alongside the first")
+    @app_commands.describe(year="Season year (default: current year)")
+    @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
+    @app_commands.choices(split=_split_choices)
+    @app_commands.choices(split2=_split_choices)
     @app_commands.choices(stat_type=[
         app_commands.Choice(name="Hitting", value="hitting"),
         app_commands.Choice(name="Pitching", value="pitching"),
     ])
-    async def splits(self, interaction: discord.Interaction, player: str, split: app_commands.Choice[str], year: str = None, stat_type: app_commands.Choice[str] = None):
+    async def splits(self, interaction: discord.Interaction, player: str, split: app_commands.Choice[str], split2: app_commands.Choice[str] = None, year: str = None, stat_type: app_commands.Choice[str] = None):
         await interaction.response.defer()
 
         s_type = stat_type.value if stat_type else None
+
+        if split2:
+            results = await asyncio.gather(
+                self.bot.mlb_client.get_player_splits(player, split.value, year=year, stat_type=s_type),
+                self.bot.mlb_client.get_player_splits(player, split2.value, year=year, stat_type=s_type),
+            )
+            r1, r2 = results
+            if not r1 or not r2:
+                await interaction.followup.send("Could not find stats for that player.")
+                return
+            s1, s2 = r1[0], r2[0]
+            if s1.info_message:
+                await interaction.followup.send(s1.info_message)
+                return
+            if s2.info_message:
+                await interaction.followup.send(s2.info_message)
+                return
+            _split_short = {
+                "vl": "vL", "vr": "vR", "h": "Home", "a": "Away",
+                "d": "Day", "n": "Night", "risp": "RISP",
+                "preas": "PreAS", "posas": "PostAS", "all_months": "Month",
+                "3": "Mar", "4": "Apr", "5": "May", "6": "Jun",
+                "7": "Jul", "8": "Aug", "9": "Sep", "10": "Oct",
+            }
+            label1 = "Month by Month" if split.value == "all_months" else split.name
+            label2 = "Month by Month" if split2.value == "all_months" else split2.name
+            row1 = dict(s1.stats[0]); row1['split'] = _split_short.get(split.value, split.name)
+            row2 = dict(s2.stats[0]); row2['split'] = _split_short.get(split2.value, split2.name)
+            combined = dataclasses.replace(s1, stats=[row1, row2])
+            embed = discord.Embed(color=discord.Color.blue())
+            embed.title = f"{s1.years} {label1} / {label2} {s1.stat_type.capitalize()} — {s1.player_name} ({s1.team_abbrev})"
+            embed.description = f"{s1.info_line}\n\n```python\n{combined.format_discord_code_block()}\n```"
+            if s1.headshot_url:
+                embed.set_thumbnail(url=s1.headshot_url)
+            await interaction.followup.send(embed=embed)
+            return
+
         result_list = await self.bot.mlb_client.get_player_splits(player, split.value, year=year, stat_type=s_type)
 
         if not result_list:
