@@ -1030,6 +1030,9 @@ class MonitorCog(commands.Cog):
         live_data = feed.get("liveData", {})
         ab_state  = game_data.get("status", {}).get("abstractGameState", "Preview")
 
+        if game_pk in self._scheduled_games:
+            self._scheduled_games[game_pk]["abstract_state"] = ab_state
+
         if ab_state == "Preview":
             return  # Game hasn't started
 
