@@ -789,6 +789,12 @@ class PlayerSeasonStats:
                     'gamesFinished':'GF', 'inningsPitched':'IP', 'strikeOuts':'SO', 'baseOnBalls':'BB', 'homeRuns':'HR', 'era':'ERA', 'whip':'WHIP', 'hits':'H', 'runs':'R', 'earnedRuns':'ER', 
                     'strikeoutsPer9Inn':'K/9', 'walksPer9Inn':'BB/9', 'strikeoutWalkRatio':'K/BB', 'avg':'AVG'}
 
+        has_split_col = any('split' in s for s in self.stats)
+        if has_split_col:
+            for labels in labels_list:
+                labels.insert(0, 'split')
+            repl['split'] = ''
+
         if len(self.stats) == 1:
             for labels in labels_list:
                 if 'season' in labels: labels.remove('season')
@@ -796,8 +802,10 @@ class PlayerSeasonStats:
         elif len(self.stats) > 1:
             all_seasons_same = all(s.get('season') == self.stats[0].get('season') for s in self.stats)
             for labels in labels_list:
-                if all_seasons_same and 'season' in labels: 
+                if all_seasons_same and 'season' in labels:
                     labels.remove('season')
+                if has_split_col and 'team' in labels:
+                    labels.remove('team')
 
         blocks = []
         for labels in labels_list:
@@ -4205,6 +4213,7 @@ class MLBClient:
             return None
 
         return {'player_name': resolved['name'], 'team_abbrev': team_abbrev, 'windows': windows}
+
 
     async def get_daily_top_performances(self, date_str: str = None) -> Optional[dict]:
         """Return top hitter and pitcher performances for a given date (default: yesterday ET).
