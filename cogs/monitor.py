@@ -827,7 +827,12 @@ class MonitorCog(commands.Cog):
 
         away    = hr.get("away", "")
         home    = hr.get("home", "")
-        matchup = f"{away}@{home}" if away and home else team
+        if away and home:
+            away_score = hr.get("away_score", 0)
+            home_score = hr.get("home_score", 0)
+            matchup = f"{away} {away_score} @ {home} {home_score}"
+        else:
+            matchup = team
 
         num_str = f" (#{hr_num})" if hr_num else ""
 
@@ -895,7 +900,12 @@ class MonitorCog(commands.Cog):
 
         away    = hr.get("away", "")
         home    = hr.get("home", "")
-        matchup = f"{away}@{home}" if away and home else team
+        if away and home:
+            away_score = hr.get("away_score", 0)
+            home_score = hr.get("home_score", 0)
+            matchup = f"{away} {away_score} @ {home} {home_score}"
+        else:
+            matchup = team
         num_str = f" (#{hr_num})" if hr_num else ""
 
         title = f"💣 {level} {matchup} — ({team}) {batter}{num_str}"
@@ -935,13 +945,16 @@ class MonitorCog(commands.Cog):
         if ab_state == "Preview":
             return
 
-        live_data  = feed.get("liveData", {})
-        all_plays  = live_data.get("plays", {}).get("allPlays", [])
+        live_data      = feed.get("liveData", {})
+        all_plays      = live_data.get("plays", {}).get("allPlays", [])
         sched_info     = self._milb_scheduled_games.get(game_pk, {})
         away_abbr      = sched_info.get("away", "???")
         home_abbr      = sched_info.get("home", "???")
         level          = sched_info.get("level", "MiLB")
         affiliate_abbr = sched_info.get("affiliate", "")
+        milb_linescore = live_data.get("linescore", {}).get("teams", {})
+        milb_away_runs = milb_linescore.get("away", {}).get("runs", 0)
+        milb_home_runs = milb_linescore.get("home", {}).get("runs", 0)
 
         for play in all_plays:
             if play.get("result", {}).get("eventType") != "home_run":
@@ -1000,6 +1013,8 @@ class MonitorCog(commands.Cog):
                 "pitcher":      pitcher,
                 "away":         away_abbr,
                 "home":         home_abbr,
+                "away_score":   milb_away_runs,
+                "home_score":   milb_home_runs,
                 "level":        level,
                 "dist":         dist,
                 "ev":           ev,
@@ -1098,10 +1113,13 @@ class MonitorCog(commands.Cog):
                 self._save_nh_state()
 
         # ── Home runs ≥ threshold ────────────────────────────────────────────
-        all_plays = live_data.get("plays", {}).get("allPlays", [])
+        all_plays  = live_data.get("plays", {}).get("allPlays", [])
         sched_info = self._scheduled_games.get(game_pk, {})
         away_abbr  = sched_info.get("away", "???")
         home_abbr  = sched_info.get("home", "???")
+        hr_linescore  = live_data.get("linescore", {}).get("teams", {})
+        hr_away_runs  = hr_linescore.get("away", {}).get("runs", 0)
+        hr_home_runs  = hr_linescore.get("home", {}).get("runs", 0)
 
         for play in all_plays:
             if play.get("result", {}).get("eventType") != "home_run":
@@ -1165,6 +1183,8 @@ class MonitorCog(commands.Cog):
                 "pitcher_team": pitcher_team,
                 "away":         away_abbr,
                 "home":         home_abbr,
+                "away_score":   hr_away_runs,
+                "home_score":   hr_home_runs,
                 "dist":         dist,
                 "ev":           ev,
                 "la":           la,

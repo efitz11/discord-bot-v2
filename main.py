@@ -21,7 +21,6 @@ class ModernNatsBot(commands.Bot):
         self.favorite_team_full = None       # e.g. "Washington Nationals"
         self.favorite_team_affiliates = []   # lowercase full names of MiLB affiliate teams
         self.favorite_team_milb_pins = []    # raw dicts for MiLB score autocomplete pins
-
     async def _load_team_config(self):
         """Fetch favorite team name and MiLB affiliates from the MLB API."""
         session = await self.mlb_client.get_session()
