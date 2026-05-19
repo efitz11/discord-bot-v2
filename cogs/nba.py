@@ -3,14 +3,14 @@ from discord import Interaction
 from cogs.basketball import BasketballCog
 
 
-class WNBACog(BasketballCog):
-    SLUG  = "wnba"
-    SPORT = "WNBA"
+class NBACog(BasketballCog):
+    SLUG  = "nba"
+    SPORT = "NBA"
 
-    wnba = app_commands.Group(name="wnba", description="WNBA scores and info")
+    nba = app_commands.Group(name="nba", description="NBA scores and info")
 
-    @wnba.command(name="score", description="Get today's score for a WNBA team")
-    @app_commands.describe(team="WNBA team")
+    @nba.command(name="score", description="Get today's score for an NBA team")
+    @app_commands.describe(team="NBA team")
     async def score(self, interaction: Interaction, team: str):
         await self._score_impl(interaction, team)
 
@@ -20,4 +20,4 @@ class WNBACog(BasketballCog):
 
 
 async def setup(bot):
-    await bot.add_cog(WNBACog(bot))
+    await bot.add_cog(NBACog(bot))
