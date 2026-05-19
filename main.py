@@ -67,6 +67,14 @@ class ModernNatsBot(commands.Bot):
         if os.getenv("EXTENDED_COMMANDS", "").lower() in ("1", "true", "yes"):
             await self.load_extension('cogs.extended')
             print("Extended commands enabled.")
+
+        if os.getenv("WNBA", "").lower() in ("1", "true", "yes"):
+            await self.load_extension('cogs.wnba')
+            print("WNBA commands enabled.")
+
+        if os.getenv("NBA", "").lower() in ("1", "true", "yes"):
+            await self.load_extension('cogs.nba')
+            print("NBA commands enabled.")
         
         # Sync slash commands in the background so startup isn't blocked
         async def _sync():
