@@ -9,9 +9,9 @@ class NHLCog(HockeyCog):
     nhl = app_commands.Group(name="nhl", description="NHL scores and info")
 
     @nhl.command(name="score", description="Get today's score for an NHL team")
-    @app_commands.describe(team="NHL team")
-    async def score(self, interaction: Interaction, team: str):
-        await self._score_impl(interaction, team)
+    @app_commands.describe(team="NHL team", date="Date (e.g. yesterday, -1, 5/19, 5/19/26)")
+    async def score(self, interaction: Interaction, team: str, date: str = None):
+        await self._score_impl(interaction, team, date)
 
     @score.autocomplete("team")
     async def team_autocomplete(self, interaction: Interaction, current: str):
