@@ -1,6 +1,6 @@
 # MLB Discord Bot
 
-A Discord bot for MLB and MiLB fans, built on the MLB Stats API and Baseball Savant (Statcast). All commands use Discord slash commands with autocomplete for player and team search.
+A Discord bot for MLB, MiLB, NBA, WNBA, and NHL fans. Baseball data comes from the MLB Stats API and Baseball Savant (Statcast). NBA/WNBA/NHL data comes from the ESPN API (no key required). All commands use Discord slash commands with autocomplete.
 
 ## Baseball Commands
 
@@ -21,7 +21,8 @@ A Discord bot for MLB and MiLB fans, built on the MLB Stats API and Baseball Sav
 | `stats` | Season or career stats for a player |
 | `last` | Stats over a player's last N games |
 | `compare` | Side-by-side stat comparison for multiple players |
-| `score` | Today's scores or a specific team's game |
+| `score` | Today's scores or a specific team's game (supports date arg) |
+| `splits` | Platoon/home-away/month splits for a batter or pitcher; use `split2` to compare two splits side-by-side |
 | `box` | Box score for a team's game today |
 | `bullpen` | Bullpen availability and recent pitch counts for a team |
 | `leaders` | MLB player stat leaderboards |
@@ -50,6 +51,34 @@ A Discord bot for MLB and MiLB fans, built on the MLB Stats API and Baseball Sav
 | `leaders` | Statcast leaderboards (exit velocity, barrel %, sprint speed, OAA, etc.) |
 | `pitches` | Pitch counts by inning, recent pitches, and pitch mix for a pitcher |
 | `zoneplot` | Hitting zone heatmap for a batter |
+
+## Sports Score Commands
+
+Each sport is disabled by default. Enable individually in `.env` (no API keys required). All support a `date` argument (e.g. `yesterday`, `-1`, `5/19`, `5/19/26`).
+
+### /nba
+
+| Command | Description |
+|---|---|
+| `score <team>` | Live linescore, status, and top performers for an NBA team's game. Use `ALL` for all games. |
+
+Enable with `NBA=true` in `.env`.
+
+### /wnba
+
+| Command | Description |
+|---|---|
+| `score <team>` | Live linescore, status, and top performers for a WNBA team's game. Use `ALL` for all games. |
+
+Enable with `WNBA=true` in `.env`.
+
+### /nhl
+
+| Command | Description |
+|---|---|
+| `score <team>` | Live linescore, status, and top performers for an NHL team's game. Use `ALL` for all games. |
+
+Enable with `NHL=true` in `.env`.
 
 ## Extended Commands
 
@@ -83,9 +112,6 @@ Create a `.env` file in the project root:
 ```
 DISCORD_TOKEN=your_bot_token_here
 
-# Optional: enable /weather and /radar commands (no API key required)
-EXTENDED_COMMANDS=true
-
 # Optional: favorite team — floats this team's players to the top of autocomplete
 FAVORITE_TEAM=WSH
 
@@ -95,6 +121,14 @@ HR_ALERT_TEAM=WSH
 
 # Optional: Discord channel ID for live game alerts (no-hitters, HR alerts)
 ALERT_CHANNEL_ID=123456789012345678
+
+# Optional: enable /weather and /radar commands (no API key required)
+EXTENDED_COMMANDS=true
+
+# Optional: enable NBA/WNBA/NHL score commands (ESPN API, no key required)
+NBA=true
+WNBA=true
+NHL=true
 ```
 
 ### Run
