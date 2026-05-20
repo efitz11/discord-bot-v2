@@ -3,6 +3,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from datetime import datetime, timedelta
+from core.utils import parse_date
 
 ET_OFFSET = timedelta(hours=4)
 
@@ -34,7 +35,7 @@ def _format_linescore(away_abbr, away_qs, home_abbr, home_qs, away_total, home_t
     tot_w    = max(len("T"), len(away_tot), len(home_tot))
     q_widths = [max(len(lbl), len(av), len(hv)) for lbl, av, hv in zip(period_labels, away_vals, home_vals)]
     abbr_w   = max(len(away_abbr), len(home_abbr))
-    sep      = "  "
+    sep      = " "
 
     def fmt_row(abbr, tot, vals):
         return abbr.ljust(abbr_w) + sep + tot.rjust(tot_w) + " | " + sep.join(v.rjust(w) for v, w in zip(vals, q_widths))
@@ -171,11 +172,14 @@ class ESPNCog(commands.Cog):
 
         return result
 
-    async def _score_impl(self, interaction: discord.Interaction, team: str):
+    async def _score_impl(self, interaction: discord.Interaction, team: str, date: str = None):
         await interaction.response.defer()
 
+        date_str = parse_date(date)
+        params   = {"dates": date_str.replace("-", "")} if date_str else {}
+
         session = await self.bot.mlb_client.get_session()
-        async with session.get(self._scoreboard_url) as resp:
+        async with session.get(self._scoreboard_url, params=params) as resp:
             data = await resp.json()
 
         events     = data.get("events", [])
@@ -192,7 +196,8 @@ class ESPNCog(commands.Cog):
             ]
 
         if not games:
-            msg = "No games today." if all_games else f"No game today for **{team_upper}**."
+            when = date_str or "today"
+            msg  = f"No games on {when}." if all_games else f"No game on {when} for **{team_upper}**."
             await interaction.followup.send(msg)
             return
 
@@ -208,8 +213,13 @@ class ESPNCog(commands.Cog):
                 blocks.append(f"**{p['away_abbr']} @ {p['home_abbr']} | {p['status_str']}**\n```\n{table}\n```")
 
             color = discord.Color.orange() if any_live else discord.Color.blue()
+            if date_str:
+                d = datetime.strptime(date_str, "%Y-%m-%d")
+            else:
+                d = datetime.utcnow() - ET_OFFSET
+            date_label = d.strftime("%A, %B %-d, %Y")
             await interaction.followup.send(embed=discord.Embed(
-                title=f"Today's {self.SPORT} Scores",
+                title=f"{self.SPORT} Scores — {date_label}",
                 description="\n".join(blocks),
                 color=color,
             ))
