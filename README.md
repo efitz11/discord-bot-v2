@@ -87,7 +87,7 @@ Disabled by default. Enable by setting `EXTENDED_COMMANDS=true` in `.env` (no AP
 | Command | Description |
 |---|---|
 | `/weather` | Current conditions and today's forecast (morning/noon/evening/night) for a location |
-| `/radar` | Weather radar map image for a location |
+| `/radar` | Weather radar map image for a location (location is optional; defaults to `RADAR_DEFAULT_LOCATION`) |
 
 ## Setup
 
@@ -124,6 +124,9 @@ ALERT_CHANNEL_ID=123456789012345678
 
 # Optional: enable /weather and /radar commands (no API key required)
 EXTENDED_COMMANDS=true
+
+# Optional: default location for /radar when none is specified
+RADAR_DEFAULT_LOCATION=Nationals Park
 
 # Optional: enable NBA/WNBA/NHL score commands (ESPN API, no key required)
 NBA=true
