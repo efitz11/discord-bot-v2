@@ -1,6 +1,6 @@
 # MLB Discord Bot
 
-A Discord bot for MLB, MiLB, NBA, WNBA, and NHL fans. Baseball data comes from the MLB Stats API and Baseball Savant (Statcast). NBA/WNBA/NHL data comes from the ESPN API (no key required). All commands use Discord slash commands with autocomplete.
+A Discord bot for baseball (but also all sports) fans. Baseball data comes from the MLB Stats API and Baseball Savant (Statcast). NBA/WNBA/NHL data comes from the ESPN API. All commands use Discord slash commands with autocomplete.
 
 ## Baseball Commands
 
