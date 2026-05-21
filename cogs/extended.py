@@ -1,6 +1,7 @@
 import io
 import math
 import asyncio
+import os
 import urllib.parse
 from datetime import datetime
 import aiohttp
@@ -203,10 +204,13 @@ class ExtendedSlash(commands.Cog):
 
         await interaction.followup.send(embed=embed)
 
-    @app_commands.command(name="radar", description="Show a weather radar map for a location")
-    @app_commands.describe(location="City, zip code, or address (e.g. Washington DC, 20001)")
-    async def radar(self, interaction: discord.Interaction, location: str):
+    @app_commands.command(name="radar", description="Show a weather radar map for a location (default: Nationals Park)")
+    @app_commands.describe(location="City, zip code, or address (e.g. Washington DC, 20001); omit for default")
+    async def radar(self, interaction: discord.Interaction, location: str = None):
         await interaction.response.defer()
+
+        if not location:
+            location = os.getenv("RADAR_DEFAULT_LOCATION", "Nationals Park")
 
         session = await self.bot.mlb_client.get_session()
 
