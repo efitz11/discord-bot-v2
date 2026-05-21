@@ -3251,6 +3251,10 @@ class MLBClient:
         team_abbrev = team_data.get('team', {}).get('abbreviation', '')
 
         all_batters = team_data.get('batters', [])
+        batting_order = {
+            bid for bid in all_batters
+            if str(players.get(f'ID{bid}', {}).get('battingOrder', '')).endswith('0')
+        }
         batting_rows = []
         order_pos = 0
 
