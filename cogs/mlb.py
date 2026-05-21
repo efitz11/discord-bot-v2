@@ -1008,11 +1008,13 @@ class MLBSlash(commands.Cog):
                     )
 
             label = "Top EV" if is_final else "Last 5 batted balls"
+            savant_url = f"https://baseballsavant.mlb.com/gamefeed?gamePk={feed['game_pk']}"
             title = f"{'🏁' if is_final else '🔴'} {away} @ {home} — {label}"
             desc = ""
             if scoreboard_lines:
                 desc += f"```python\n{chr(10).join(scoreboard_lines)}\n```\n"
             desc += f"```python\n{chr(10).join(lines)}\n```"
+            desc += f"\n[Baseball Savant ↗]({savant_url})"
             embed = discord.Embed(title=title, description=desc, color=discord.Color.red())
             await interaction.followup.send(embed=embed)
 
@@ -1059,9 +1061,10 @@ class MLBSlash(commands.Cog):
                     f"{pks:>3}"
                 )
 
+            savant_url = f"https://baseballsavant.mlb.com/gamefeed?gamePk={feed['game_pk']}"
             embed = discord.Embed(
                 title=f"Statcast: {player_name} ({feed['away']} @ {feed['home']})",
-                description=f"```python\n{chr(10).join(lines)}\n```",
+                description=f"```python\n{chr(10).join(lines)}\n```\n[Baseball Savant ↗]({savant_url})",
                 color=discord.Color.red()
             )
             await interaction.followup.send(embed=embed)
