@@ -908,7 +908,7 @@ class MonitorCog(commands.Cog):
             matchup = team
         num_str = f" (#{hr_num})" if hr_num else ""
 
-        title = f"💣 {level} {matchup} — ({team}) {batter}{num_str}"
+        title = f"💣 ({level}) {matchup} — ({team}) {batter}{num_str}"
 
         pitch_parts = []
         if pitch_type and pitch_spd:
@@ -1505,6 +1505,31 @@ class MonitorCog(commands.Cog):
             await ctx.channel.send(f"No completed affiliate games found for {date}.")
             return
         await self._post_milb_affiliate_summary(ctx.channel, data)
+
+    @commands.command(name="milb_hr_test")
+    async def milb_hr_test(self, ctx):
+        """Test MiLB HR alert with mock data. Usage: !milb_hr_test"""
+        mock_hr = {
+            "batter":      "James Wood",
+            "batter_team": "WIL",
+            "pitcher":     "Jake Cousins",
+            "pitcher_team": "BOW",
+            "away":        "WIL",
+            "home":        "BOW",
+            "away_score":  3,
+            "home_score":  2,
+            "level":       "A+",
+            "dist":        412,
+            "ev":          108.2,
+            "la":          32,
+            "pitch_type":  "Curveball",
+            "pitch_speed": 78.4,
+            "num":         5,
+            "inning":      "top 4",
+            "desc":        "James Wood homers (5) on a fly ball to right center field.",
+        }
+        await ctx.message.delete()
+        await self._post_milb_hr_alert(ctx.channel, mock_hr)
 
     @commands.command(name="hr_test")
     async def hr_test(self, ctx):
