@@ -1639,7 +1639,7 @@ class MLBSlash(commands.Cog):
         # Build pinned entries from configured favorite team (if any)
         raw_pins = getattr(self.bot, 'favorite_team_milb_pins', [])
         PINNED = [app_commands.Choice(name=p['name'], value=p['value']) for p in raw_pins]
-        PINNED_VALUES = {c.value for c in PINNED}
+        pinned_ids = {int(c.value) for c in PINNED if c.value.isdigit()}
 
         if not query:
             choices = list(PINNED)
@@ -1649,13 +1649,13 @@ class MLBSlash(commands.Cog):
         async with session.get(f"{self.bot.mlb_client.BASE_URL}/teams?sportId=1") as resp:
             mlb_data = await resp.json()
         for t in mlb_data.get('teams', []):
-            abbrev = t.get('abbreviation', '')
-            if abbrev in PINNED_VALUES:
+            if t['id'] in pinned_ids:
                 continue
+            abbrev = t.get('abbreviation', '')
             name = t.get('name', '')
             team_name = t.get('teamName', name)
             if not query or query in abbrev.lower() or query in name.lower():
-                choices.append(app_commands.Choice(name=f"{abbrev} — {team_name} (All Affiliates)", value=abbrev))
+                choices.append(app_commands.Choice(name=f"{abbrev} — {team_name} (All Affiliates)", value=str(t['id'])))
             if len(choices) >= 15:
                 break
 
@@ -1664,13 +1664,13 @@ class MLBSlash(commands.Cog):
             async with session.get(f"{self.bot.mlb_client.BASE_URL}/teams?sportIds=11,12,13,14,15&season={season}") as resp:
                 milb_data = await resp.json()
             for t in milb_data.get('teams', []):
-                abbrev = t.get('abbreviation', '')
-                if abbrev in PINNED_VALUES:
+                if t['id'] in pinned_ids:
                     continue
+                abbrev = t.get('abbreviation', '')
                 name = t.get('name', '')
                 sport = t.get('sport', {}).get('name', '')
                 if not query or query in abbrev.lower() or query in name.lower():
-                    choices.append(app_commands.Choice(name=f"{abbrev} — {name} ({sport})", value=abbrev))
+                    choices.append(app_commands.Choice(name=f"{abbrev} — {name} ({sport})", value=str(t['id'])))
                 if len(choices) >= 25:
                     break
 
