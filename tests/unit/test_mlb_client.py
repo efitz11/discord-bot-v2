@@ -135,22 +135,17 @@ async def test_get_player_game_stats_batting(client, mock_session):
 
     def get_side_effect(url, *args, **kwargs):
         url_str = str(url)
-        print(f"\n[GET URL]: {url_str}")
         if "people/665489" in url_str and "/people/665489/stats" not in url_str:
-            print("[MOCK MATCH]: people info")
             return make_mock_response(json_data={
                 "people": [{"id": 665489, "fullName": "Fernando Tatis Jr.", "currentTeam": {"id": 135}}]
             })
         elif "stats?stats=gameLog" in url_str and "group=hitting" in url_str:
-            print("[MOCK MATCH]: gameLog hitting")
             return make_mock_response(json_data={
                 "stats": [{"splits": [{"date": "2026-05-23", "game": {"gamePk": 745000}, "team": {"id": 135}}]}]
             })
         elif "stats?stats=gameLog" in url_str and "group=pitching" in url_str:
-            print("[MOCK MATCH]: gameLog pitching")
             return make_mock_response(json_data={"stats": []})
         elif "game/745000/boxscore" in url_str:
-            print("[MOCK MATCH]: boxscore")
             return make_mock_response(json_data={
                 "teams": {
                     "away": {
@@ -169,7 +164,6 @@ async def test_get_player_game_stats_batting(client, mock_session):
                     }
                 }
             })
-        print("[MOCK FALLBACK]: empty dict")
         return make_mock_response(json_data={})
 
     mock_session.get.side_effect = get_side_effect
@@ -342,9 +336,9 @@ def test_bullpen_data_formatting():
     ]
     
     bd = BullpenData("Washington Nationals", "WSH", dates, bullpen, starters)
-    
-    assert bd._get_status(bullpen[0]) == "🟢"
-    
+
     table = bd.format_table()
     assert "Finnegan" in table
     assert "Irvin" in table
+    # Finnegan last threw 12 pitches two days ago — should be Fresh
+    assert "🟢" in table

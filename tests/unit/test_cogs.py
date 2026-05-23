@@ -119,7 +119,7 @@ async def test_compare_percentiles_command(cog, mock_bot):
     assert "embed" in kwargs
     assert "file" in kwargs
     assert isinstance(kwargs["file"], discord.File)
-    assert kwargs["file"]._filename == "percentile_comparison.png"
+    assert kwargs["file"].filename == "percentile_comparison.png"
 
 
 @pytest.mark.asyncio
@@ -317,3 +317,191 @@ async def test_score_command_all(cog, mock_bot):
     assert len(fields) == 2
     assert "WSH @ ATL" in fields[0].name
     assert "NYY @ BOS" in fields[1].name
+
+
+@pytest.mark.asyncio
+async def test_score_command_live_filter(cog, mock_bot):
+    live_game = MagicMock(spec=Game)
+    live_game.abstract_state = "Live"
+    live_game.status = "In Progress"
+    live_game.away = MagicMock()
+    live_game.away.abbreviation = "NYY"
+    live_game.home = MagicMock()
+    live_game.home.abbreviation = "BOS"
+    live_game.format_score_line.return_value = "NYY 1 @ BOS 3 (Live)"
+    live_game.format_last_play.return_value = ""
+
+    final_game = MagicMock(spec=Game)
+    final_game.abstract_state = "Final"
+    final_game.status = "Final"
+    final_game.inning = 9
+    final_game.away = MagicMock()
+    final_game.away.abbreviation = "WSH"
+    final_game.home = MagicMock()
+    final_game.home.abbreviation = "ATL"
+    final_game.format_score_line.return_value = "WSH 4 @ ATL 2 (Final)"
+    final_game.format_last_play.return_value = ""
+
+    mock_bot.mlb_client.get_todays_games.return_value = [live_game, final_game]
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.score.callback(cog, mock_interaction, team="all", date=None, live=True, division=None)
+
+    # One live game after filtering → single-game embed path
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "embed" in kwargs
+    assert "NYY @ BOS" in kwargs["embed"].title
+
+
+@pytest.mark.asyncio
+async def test_score_command_live_no_games(cog, mock_bot):
+    final_game = MagicMock(spec=Game)
+    final_game.abstract_state = "Final"
+
+    mock_bot.mlb_client.get_todays_games.return_value = [final_game]
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.score.callback(cog, mock_interaction, team="all", date=None, live=True, division=None)
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert args[0] == "No live games right now."
+
+
+# --- None / empty return paths ---
+
+@pytest.mark.asyncio
+async def test_line_command_no_stats(cog, mock_bot):
+    mock_bot.mlb_client.get_player_game_stats.return_value = []
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.line.callback(cog, mock_interaction, player="nobody", date=None)
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "Could not find stats" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_line_command_pitcher_only(cog, mock_bot):
+    mock_stats = MagicMock(spec=PlayerGameStats)
+    mock_stats.player_name = "Gerrit Cole"
+    mock_stats.player_id = 543037
+    mock_stats.date = "2026-05-23"
+    mock_stats.team_abbrev = "NYY"
+    mock_stats.opp_abbrev = "BOS"
+    mock_stats.is_home = False
+    mock_stats.headshot_url = None
+    mock_stats.batting_stats = None
+    mock_stats.pitching_stats = {"IP": "6.0", "H": 3, "R": 1, "ER": 1, "BB": 1, "SO": 8}
+    mock_stats.info_message = None
+    mock_stats.format_discord_code_block.return_value = "IP   H  R ER BB SO\n6.0  3  1  1  1  8"
+
+    mock_bot.mlb_client.get_player_game_stats.return_value = [mock_stats]
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.line.callback(cog, mock_interaction, player="543037", date="today")
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "embed" in kwargs
+    # Pitcher-only: no PlayerAbsView button
+    assert "view" not in kwargs
+    embed = kwargs["embed"]
+    assert "Gerrit Cole" in embed.title
+    assert "IP   H  R ER" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_percentiles_command_no_data(cog, mock_bot):
+    mock_bot.mlb_client.get_player_percentiles.return_value = None
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.percentiles.callback(cog, mock_interaction, player="nobody", year=None)
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "No savant data found" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_compare_percentiles_no_data_p1(cog, mock_bot):
+    mock_bot.mlb_client.get_player_percentiles.side_effect = [None, MagicMock()]
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.compare_percentiles.callback(cog, mock_interaction, player1="nobody", player2="Judge", year=None)
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "No Savant data found" in args[0]
+    assert "nobody" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_bullpen_command_no_data(cog, mock_bot):
+    mock_bot.mlb_client.get_bullpen.return_value = None
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.bullpen.callback(cog, mock_interaction, team="xyz")
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "Could not find bullpen data" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_standings_command_no_data(cog, mock_bot):
+    mock_bot.mlb_client.get_standings.return_value = []
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    choice = discord.app_commands.Choice(name="NL East", value="NL East")
+    await cog.standings.callback(cog, mock_interaction, query=choice)
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "Could not find matching standings" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_box_score_command_no_data(cog, mock_bot):
+    mock_bot.mlb_client.get_box_score.return_value = None
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.box_score.callback(cog, mock_interaction, team="xyz")
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "Could not find a game" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_matchup_command_no_data(cog, mock_bot):
+    mock_bot.mlb_client.get_matchup.return_value = None
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.matchup.callback(cog, mock_interaction, team="nats", pitcher="Nobody")
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "No career matchup data found" in args[0]
