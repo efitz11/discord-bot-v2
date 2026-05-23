@@ -170,3 +170,70 @@ async def test_standings_command(cog, mock_bot):
     assert len(embeds) == 1
     assert embeds[0].title == "NL East"
     assert "WSH  10  5  .667" in embeds[0].description
+
+
+from core.mlb_client import BatterVsPitcher
+
+@pytest.mark.asyncio
+async def test_box_score_command(cog, mock_bot):
+    mock_box = MagicMock(spec=BoxScoreData)
+    mock_box.title = "Washington Nationals 4, Atlanta Braves 2"
+    mock_box.team_name = "Washington Nationals"
+    mock_box.team_abbrev = "WSH"
+    mock_box.format_batting.return_value = "Tatis Jr. RF  4  1  2  2  0  1"
+    mock_box.format_pitching.return_value = "Finnegan S  1.0  0  0  0  0  1"
+    mock_box.team_notes = None
+    mock_box.game_info = None
+
+    mock_bot.mlb_client.get_box_score.return_value = mock_box
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.box_score.callback(cog, mock_interaction, team="nats")
+
+    mock_interaction.response.defer.assert_called_once()
+    mock_bot.mlb_client.get_box_score.assert_called_once_with(team_query="nats", date=None)
+    
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "embed" in kwargs
+    embed = kwargs["embed"]
+    assert embed.title == "Washington Nationals 4, Atlanta Braves 2"
+    assert "Tatis Jr." in embed.description
+
+
+@pytest.mark.asyncio
+async def test_matchup_command(cog, mock_bot):
+    m1 = MagicMock(spec=BatterVsPitcher)
+    m1.batter_name = "Fernando Tatis Jr."
+    m1.pa = 10
+    m1.avg = ".300"
+    m1.ops = ".950"
+    m1.hr = 2
+    m1.so = 1
+    m1.h = 3
+    m1.d = 1
+    m1.t = 0
+    m1.bb = 1
+    m1.hbp = 0
+    
+    mock_bot.mlb_client.get_matchup.return_value = {
+        'pitcher': "Gerrit Cole",
+        'matchups': [m1]
+    }
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.matchup.callback(cog, mock_interaction, team="nats", pitcher="Cole")
+
+    mock_interaction.response.defer.assert_called_once()
+    mock_bot.mlb_client.get_matchup.assert_called_once_with("nats", "Cole")
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "embed" in kwargs
+    embed = kwargs["embed"]
+    assert embed.title == "⚔️ Matchup: NATS vs Gerrit Cole"
+    assert "Fernando Tatis" in embed.description
