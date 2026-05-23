@@ -105,6 +105,7 @@ class MonitorCog(commands.Cog):
         self._summary_posted_date = None       # date string for which we've posted the morning summary
         self._milb_summary_posted_date = None  # date string for which we've posted the MiLB affiliate summary
         self._milb_ready_since: "datetime | None" = None  # when all MLB+MiLB games first went Final
+        self._game_errors_alerted: set = set()            # game_pks that have already raised error alerts today
 
         self._load_hr_state()
         self._load_nh_state()
@@ -1279,6 +1280,7 @@ class MonitorCog(commands.Cog):
                 if is_new_day:
                     self._milb_ready_since = None
                     self._milb_scheduled_games.clear()
+                    self._game_errors_alerted.clear()
                     print("[monitor] new calendar day — schedule merged, finished games pruned")
 
             if self._milb_schedule_date != today_str:
@@ -1338,11 +1340,44 @@ class MonitorCog(commands.Cog):
                 return
 
             # Process all games concurrently (MLB + MiLB affiliates)
-            await asyncio.gather(
-                *(self._process_game(pk, channel) for pk in self._scheduled_games),
-                *(self._process_milb_game(pk, channel) for pk in self._milb_scheduled_games),
-                return_exceptions=True,
-            )
+            mlb_pks = list(self._scheduled_games.keys())
+            milb_pks = list(self._milb_scheduled_games.keys())
+            
+            tasks = [self._process_game(pk, channel) for pk in mlb_pks] + \
+                    [self._process_milb_game(pk, channel) for pk in milb_pks]
+            
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Pair tasks with labels to identify failures
+                labels = []
+                pks = []
+                for pk in mlb_pks:
+                    info = self._scheduled_games[pk]
+                    labels.append(f"MLB game {info.get('away', '???')} @ {info.get('home', '???')} (PK: {pk})")
+                    pks.append(pk)
+                for pk in milb_pks:
+                    info = self._milb_scheduled_games[pk]
+                    labels.append(f"MiLB {info.get('level', 'AAA')} game {info.get('away', '???')} @ {info.get('home', '???')} (PK: {pk})")
+                    pks.append(pk)
+                
+                for pk, label, res in zip(pks, labels, results):
+                    if isinstance(res, Exception):
+                        import traceback
+                        # Log to systemd / console
+                        print(f"[monitor] Error processing {label}: {res}")
+                        traceback.print_exception(type(res), res, res.__traceback__)
+                        
+                        # Warn in Discord channel once per game per session
+                        if pk not in self._game_errors_alerted:
+                            self._game_errors_alerted.add(pk)
+                            try:
+                                await channel.send(
+                                    f"⚠️ **[monitor] Error processing {label}:** `{res.__class__.__name__}: {res}`\n"
+                                    f"Check bot logs for the full traceback."
+                                )
+                            except Exception as discord_err:
+                                print(f"[monitor] Failed to send error alert to Discord: {discord_err}")
 
         except Exception as e:
             print(f"[monitor] unhandled error: {e}")
