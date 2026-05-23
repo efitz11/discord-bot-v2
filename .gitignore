@@ -5,12 +5,14 @@ __pycache__/
 
 # Virtual Environments
 venv/
+test_venv/
 env/
 ENV/
 
 # Secrets and Configuration
 .env
 .claude
+.antigravitycli/
 
 # VS Code
 .vscode/
