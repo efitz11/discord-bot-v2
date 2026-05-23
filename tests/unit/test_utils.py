@@ -1,5 +1,6 @@
 import pytest
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from core.utils import parse_date
 
 def test_parse_date_none_and_empty():
@@ -8,7 +9,7 @@ def test_parse_date_none_and_empty():
     assert parse_date("   ") is None
 
 def test_parse_date_keywords():
-    now = datetime.utcnow() - timedelta(hours=5)
+    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
     today_str = now.strftime("%Y-%m-%d")
     yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -19,7 +20,7 @@ def test_parse_date_keywords():
     assert parse_date("tomorrow") == tomorrow_str
 
 def test_parse_date_relative_offsets():
-    now = datetime.utcnow() - timedelta(hours=5)
+    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
     
     plus_two = (now + timedelta(days=2)).strftime("%Y-%m-%d")
     minus_five = (now - timedelta(days=5)).strftime("%Y-%m-%d")
@@ -32,7 +33,7 @@ def test_parse_date_relative_offsets():
     assert parse_date("-") is None
 
 def test_parse_date_absolute_formats():
-    now = datetime.utcnow() - timedelta(hours=5)
+    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
     current_year = now.year
     
     # Slash formatting
