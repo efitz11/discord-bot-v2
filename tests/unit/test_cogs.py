@@ -237,3 +237,83 @@ async def test_matchup_command(cog, mock_bot):
     embed = kwargs["embed"]
     assert embed.title == "⚔️ Matchup: NATS vs Gerrit Cole"
     assert "Fernando Tatis" in embed.description
+
+
+from core.mlb_client import Game
+
+@pytest.mark.asyncio
+async def test_score_command_single(cog, mock_bot):
+    mock_game = MagicMock(spec=Game)
+    mock_game.abstract_state = "Live"
+    mock_game.status = "In Progress"
+    mock_game.away = MagicMock()
+    mock_game.away.abbreviation = "WSH"
+    mock_game.home = MagicMock()
+    mock_game.home.abbreviation = "ATL"
+    mock_game.format_score_line.return_value = "WSH 4 @ ATL 2 (Live)"
+    mock_game.format_last_play.return_value = "Tatis Jr. struck out."
+
+    mock_bot.mlb_client.get_todays_games.return_value = [mock_game]
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.score.callback(cog, mock_interaction, team="nats", date=None, live=False, division=None)
+
+    mock_interaction.response.defer.assert_called_once()
+    mock_bot.mlb_client.get_todays_games.assert_called_once_with(team_query="nats", date=None)
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "embed" in kwargs
+    embed = kwargs["embed"]
+    assert "WSH @ ATL" in embed.title
+    assert "In Progress" in embed.title
+    assert "WSH 4 @ ATL 2 (Live)" in embed.description
+    assert "Tatis Jr. struck out." in embed.description
+
+
+@pytest.mark.asyncio
+async def test_score_command_all(cog, mock_bot):
+    g1 = MagicMock(spec=Game)
+    g1.abstract_state = "Final"
+    g1.status = "Final"
+    g1.inning = 9
+    g1.away = MagicMock()
+    g1.away.abbreviation = "WSH"
+    g1.home = MagicMock()
+    g1.home.abbreviation = "ATL"
+    g1.format_score_line.return_value = "WSH 4 @ ATL 2 (Final)"
+    g1.format_last_play.return_value = ""
+
+    g2 = MagicMock(spec=Game)
+    g2.abstract_state = "Live"
+    g2.status = "In Progress"
+    g2.away = MagicMock()
+    g2.away.abbreviation = "NYY"
+    g2.home = MagicMock()
+    g2.home.abbreviation = "BOS"
+    g2.format_score_line.return_value = "NYY 1 @ BOS 5 (Live)"
+    g2.format_last_play.return_value = ""
+
+    mock_bot.mlb_client.get_todays_games.return_value = [g1, g2]
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.score.callback(cog, mock_interaction, team="all", date=None, live=False, division=None)
+
+    mock_interaction.response.defer.assert_called_once()
+    mock_bot.mlb_client.get_todays_games.assert_called_once_with(team_query=None, date=None)
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "embeds" in kwargs
+    embeds = kwargs["embeds"]
+    assert len(embeds) == 1
+    assert embeds[0].title == "MLB Scores"
+    
+    fields = embeds[0].fields
+    assert len(fields) == 2
+    assert "WSH @ ATL" in fields[0].name
+    assert "NYY @ BOS" in fields[1].name
