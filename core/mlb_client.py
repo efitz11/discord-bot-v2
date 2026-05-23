@@ -4143,24 +4143,6 @@ class MLBClient:
             'cells': cells,
         }
 
-    async def get_team_id(self, query: str) -> Optional[int]:
-        session = await self.get_session()
-        url = f"{self.BASE_URL}/teams?sportId=1"
-        try:
-            async with session.get(url) as resp:
-                data = await resp.json()
-                query = query.lower()
-                teams = data.get('teams', [])
-                for team in teams:
-                    if query == team.get('abbreviation', '').lower():
-                        return team['id']
-                for team in teams:
-                    if query in team['name'].lower():
-                        return team['id']
-        except:
-            pass
-        return None
-
     async def get_player_transactions(self, player_id_or_name: str, year: int = None) -> Optional[dict]:
         """Fetch all transactions for a player in a given year."""
         player = await self.resolve_player(player_id_or_name)
