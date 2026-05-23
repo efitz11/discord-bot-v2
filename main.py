@@ -40,10 +40,11 @@ class ModernNatsBot(commands.Bot):
             affiliates = [t for t in milb_teams if t.get('parent_abbrev', '').upper() == self.favorite_team]
             self.favorite_team_affiliates = [t['name'].lower() for t in affiliates]
             if self.favorite_team_full:
-                self.favorite_team_milb_pins = [
-                    {'name': f"{self.favorite_team} — {self.favorite_team_full} (All Affiliates)", 'value': self.favorite_team}
-                ] + [
-                    {'name': f"{t['abbreviation']} — {t['name']} ({t['level']})", 'value': t['abbreviation']}
+                org_id = affiliates[0]['parent_id'] if affiliates else None
+                self.favorite_team_milb_pins = ([
+                    {'name': f"{self.favorite_team} — {self.favorite_team_full} (All Affiliates)", 'value': str(org_id)}
+                ] if org_id else []) + [
+                    {'name': f"{t['abbreviation']} — {t['name']} ({t['level']})", 'value': str(t['id'])}
                     for t in affiliates
                 ]
         except Exception as e:

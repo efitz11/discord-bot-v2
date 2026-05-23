@@ -3813,7 +3813,7 @@ class MLBClient:
         }
 
     async def get_milb_games(self, team_query: str, date: str = None, level_filter: str = None):
-        """Fetch MiLB games for a team_query (MLB org abbrev → affiliates, or MiLB team name/abbrev).
+        """Fetch MiLB games for a team_query (org:{id}, team:{id}, or name/abbrev fallback).
         Returns (List[Game], label_str)."""
         session = await self.get_session()
         season = str(datetime.now().year)
@@ -3826,32 +3826,48 @@ class MLBClient:
         mlb_teams = mlb_data.get('teams', [])
         milb_teams = milb_data.get('teams', [])
 
-        query = team_query.strip().lower()
-        mlb_match = next(
-            (t for t in mlb_teams if query == t.get('abbreviation', '').lower()
-             or query in t.get('name', '').lower()
-             or query in t.get('teamName', '').lower()),
-            None
-        )
-
-        if mlb_match:
-            org_id = mlb_match['id']
-            label = f"{mlb_match.get('teamName', mlb_match['name'])} Affiliates"
-            affiliate_ids = [t['id'] for t in milb_teams if t.get('parentOrgId') == org_id]
-            if not affiliate_ids:
-                return [], label
-            team_id_param = ','.join(str(i) for i in affiliate_ids)
+        if team_query.isdigit():
+            team_id = int(team_query)
+            mlb_match = next((t for t in mlb_teams if t['id'] == team_id), None)
+            if mlb_match:
+                label = f"{mlb_match.get('teamName', mlb_match['name'])} Affiliates"
+                affiliate_ids = [t['id'] for t in milb_teams if t.get('parentOrgId') == team_id]
+                if not affiliate_ids:
+                    return [], label
+                team_id_param = ','.join(str(i) for i in affiliate_ids)
+            else:
+                milb_match = next((t for t in milb_teams if t['id'] == team_id), None)
+                if not milb_match:
+                    return [], ""
+                label = milb_match['name']
+                team_id_param = str(team_id)
         else:
-            milb_match = next(
-                (t for t in milb_teams if query == t.get('abbreviation', '').lower()
+            query = team_query.strip().lower()
+            mlb_match = next(
+                (t for t in mlb_teams if query == t.get('abbreviation', '').lower()
                  or query in t.get('name', '').lower()
                  or query in t.get('teamName', '').lower()),
                 None
             )
-            if not milb_match:
-                return [], ""
-            label = milb_match['name']
-            team_id_param = str(milb_match['id'])
+
+            if mlb_match:
+                org_id = mlb_match['id']
+                label = f"{mlb_match.get('teamName', mlb_match['name'])} Affiliates"
+                affiliate_ids = [t['id'] for t in milb_teams if t.get('parentOrgId') == org_id]
+                if not affiliate_ids:
+                    return [], label
+                team_id_param = ','.join(str(i) for i in affiliate_ids)
+            else:
+                milb_match = next(
+                    (t for t in milb_teams if query == t.get('abbreviation', '').lower()
+                     or query in t.get('name', '').lower()
+                     or query in t.get('teamName', '').lower()),
+                    None
+                )
+                if not milb_match:
+                    return [], ""
+                label = milb_match['name']
+                team_id_param = str(milb_match['id'])
 
         url = (f"{self.BASE_URL}/schedule?sportId=11,12,13,14,15"
                f"&teamId={team_id_param}"
