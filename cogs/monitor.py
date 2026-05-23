@@ -121,8 +121,14 @@ class MonitorCog(commands.Cog):
     def _load_hr_state(self) -> None:
         try:
             with open(HR_STATE_FILE) as f:
-                self._hr_posted = set(json.load(f))
-            print(f"[monitor] loaded {len(self._hr_posted)} posted HR key(s) from disk")
+                data = json.load(f)
+            if isinstance(data, list):
+                self._hr_posted = set(data)
+                self._hr_clear_date = None
+            else:
+                self._hr_posted = set(data.get("posted", []))
+                self._hr_clear_date = data.get("clear_date")
+            print(f"[monitor] loaded {len(self._hr_posted)} posted HR key(s) from disk (clear_date={self._hr_clear_date})")
         except (FileNotFoundError, json.JSONDecodeError):
             self._hr_posted = set()
 
@@ -130,7 +136,7 @@ class MonitorCog(commands.Cog):
         tmp = HR_STATE_FILE + ".tmp"
         try:
             with open(tmp, "w") as f:
-                json.dump(list(self._hr_posted), f)
+                json.dump({"posted": list(self._hr_posted), "clear_date": self._hr_clear_date}, f)
             os.replace(tmp, HR_STATE_FILE)
         except Exception as e:
             print(f"[monitor] failed to save HR state: {e}")
@@ -1281,8 +1287,8 @@ class MonitorCog(commands.Cog):
             # Clear HR state at 6am ET each day
             if now_et.hour >= 6 and self._hr_clear_date != today_str:
                 self._hr_posted.clear()
-                self._save_hr_state()
                 self._hr_clear_date = today_str
+                self._save_hr_state()
                 self._milb_ready_since = None
                 print("[monitor] 6am ET — HR posted state cleared")
 
