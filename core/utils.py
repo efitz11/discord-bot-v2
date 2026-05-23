@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 
 def parse_date(date_str: str) -> str | None:
     """Parse a user-supplied date string into YYYY-MM-DD (ET baseline). Returns None if blank/invalid."""
-    now = datetime.utcnow() - timedelta(hours=5)
+    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
     if not date_str:
         return None
 

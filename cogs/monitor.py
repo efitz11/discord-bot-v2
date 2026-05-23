@@ -22,6 +22,7 @@ import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import discord
 from discord.ext import commands, tasks
@@ -49,8 +50,8 @@ NH_ALERT_DELAY        = 15                  # Seconds to delay NH alerts (stream
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _et_now() -> datetime:
-    """Return the current time in US/Eastern (UTC-4 during baseball season)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=4)
+    """Return the current time in US/Eastern (UTC-4/UTC-5 dynamically)."""
+    return datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
 
 
 def _parse_game_time(game_date_str: str):
@@ -58,8 +59,8 @@ def _parse_game_time(game_date_str: str):
     if not game_date_str:
         return None
     try:
-        dt_utc = datetime.strptime(game_date_str, "%Y-%m-%dT%H:%M:%SZ")
-        return dt_utc - timedelta(hours=4)
+        dt_utc = datetime.strptime(game_date_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        return dt_utc.astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
     except ValueError:
         return None
 
