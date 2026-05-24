@@ -249,8 +249,10 @@ async def test_score_command_single(cog, mock_bot):
     mock_game.status = "In Progress"
     mock_game.away = MagicMock()
     mock_game.away.abbreviation = "WSH"
+    mock_game.away.name = "Washington Nationals"
     mock_game.home = MagicMock()
     mock_game.home.abbreviation = "ATL"
+    mock_game.home.name = "Atlanta Braves"
     mock_game.format_score_line.return_value = "WSH 4 @ ATL 2 (Live)"
     mock_game.format_last_play.return_value = "Tatis Jr. struck out."
 
@@ -269,7 +271,7 @@ async def test_score_command_single(cog, mock_bot):
     args, kwargs = mock_interaction.followup.send.call_args
     assert "embed" in kwargs
     embed = kwargs["embed"]
-    assert "WSH @ ATL" in embed.title
+    assert "Washington Nationals @ Atlanta Braves" in embed.title
     assert "In Progress" in embed.title
     assert "WSH 4 @ ATL 2 (Live)" in embed.description
     assert "Tatis Jr. struck out." in embed.description
@@ -329,8 +331,10 @@ async def test_score_command_live_filter(cog, mock_bot):
     live_game.status = "In Progress"
     live_game.away = MagicMock()
     live_game.away.abbreviation = "NYY"
+    live_game.away.name = "New York Yankees"
     live_game.home = MagicMock()
     live_game.home.abbreviation = "BOS"
+    live_game.home.name = "Boston Red Sox"
     live_game.format_score_line.return_value = "NYY 1 @ BOS 3 (Live)"
     live_game.format_last_play.return_value = ""
 
@@ -357,7 +361,7 @@ async def test_score_command_live_filter(cog, mock_bot):
     # One live game after filtering → single-game embed path
     args, kwargs = mock_interaction.followup.send.call_args
     assert "embed" in kwargs
-    assert "NYY @ BOS" in kwargs["embed"].title
+    assert "New York Yankees @ Boston Red Sox" in kwargs["embed"].title
 
 
 @pytest.mark.asyncio
@@ -369,8 +373,10 @@ async def test_score_command_single_with_performers(cog, mock_bot):
     mock_game.inning = 9
     mock_game.away = MagicMock()
     mock_game.away.abbreviation = "WSH"
+    mock_game.away.name = "Washington Nationals"
     mock_game.home = MagicMock()
     mock_game.home.abbreviation = "ATL"
+    mock_game.home.name = "Atlanta Braves"
     mock_game.format_score_line.return_value = "WSH 4 @ ATL 2 (Final)"
     mock_game.format_last_play.return_value = ""
 
