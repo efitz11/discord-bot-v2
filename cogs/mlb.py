@@ -1943,7 +1943,7 @@ class MLBSlash(commands.Cog):
                         for p in performers["pitchers"]:
                             lines.append(f"**{p['name']}** ({p['team']}) {p['summary']} (GS: {p['score']})")
                         if lines:
-                            value += "\n\n**Top Performers**\n" + "\n".join(lines)
+                            value += "\n**Top Performers**\n" + "\n".join(lines)
 
                 embed = discord.Embed(title=game_title(game), description=value, color=discord.Color.blue())
                 await interaction.followup.send(embed=embed)
@@ -1986,7 +1986,7 @@ class MLBSlash(commands.Cog):
                     for p in perf["pitchers"]:
                         lines.append(f"**{p['name']}** ({p['team']}) {p['summary']} (GS: {p['score']})")
                     if lines:
-                        value += "\n\n**Top Performers**\n" + "\n".join(lines)
+                        value += "\n**Top Performers**\n" + "\n".join(lines)
 
                 # Discord limits embeds to 25 fields and 6000 total characters
                 if len(current_embed.fields) >= 25 or len(current_embed) + len(name) + len(value) > 5900:
