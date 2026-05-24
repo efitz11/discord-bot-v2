@@ -4322,10 +4322,12 @@ class MLBClient:
 
                     h  = p.get("hits", 0)
                     er = p.get("earnedRuns", 0)
+                    ur = max(0, p.get("runs", 0) - er)
                     bb = p.get("baseOnBalls", 0)
                     k  = p.get("strikeOuts", 0)
+                    full_innings = outs // 3
 
-                    game_score = 50 + outs + k - 2*h - 4*er - bb
+                    game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
 
                     pitchers.append({
                         "name":     p_data.get("person", {}).get("fullName", "Unknown"),
@@ -4418,10 +4420,12 @@ class MLBClient:
 
                 h  = p.get("hits", 0)
                 er = p.get("earnedRuns", 0)
+                ur = max(0, p.get("runs", 0) - er)
                 bb = p.get("baseOnBalls", 0)
                 k  = p.get("strikeOuts", 0)
+                full_innings = outs // 3
 
-                game_score = 50 + outs + k - 2*h - 4*er - bb
+                game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
                 if game_score < 60:
                     continue
 
@@ -4567,10 +4571,12 @@ class MLBClient:
 
                 h  = p.get("hits", 0)
                 er = p.get("earnedRuns", 0)
+                ur = max(0, p.get("runs", 0) - er)
                 bb = p.get("baseOnBalls", 0)
                 k  = p.get("strikeOuts", 0)
+                full_innings = outs // 3
 
-                game_score = 50 + outs + k - 2*h - 4*er - bb
+                game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
 
                 pitchers.append({
                     "name":    p_data.get("person", {}).get("fullName", "Unknown"),
