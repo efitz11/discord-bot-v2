@@ -244,16 +244,20 @@ from core.mlb_client import Game
 @pytest.mark.asyncio
 async def test_score_command_single(cog, mock_bot):
     mock_game = MagicMock(spec=Game)
+    mock_game.game_pk = 745000
     mock_game.abstract_state = "Live"
     mock_game.status = "In Progress"
     mock_game.away = MagicMock()
     mock_game.away.abbreviation = "WSH"
+    mock_game.away.name = "Washington Nationals"
     mock_game.home = MagicMock()
     mock_game.home.abbreviation = "ATL"
+    mock_game.home.name = "Atlanta Braves"
     mock_game.format_score_line.return_value = "WSH 4 @ ATL 2 (Live)"
     mock_game.format_last_play.return_value = "Tatis Jr. struck out."
 
     mock_bot.mlb_client.get_todays_games.return_value = [mock_game]
+    mock_bot.mlb_client.get_game_top_performers = AsyncMock(return_value=None)
 
     mock_interaction = MagicMock(spec=discord.Interaction)
     mock_interaction.response = AsyncMock()
@@ -267,7 +271,7 @@ async def test_score_command_single(cog, mock_bot):
     args, kwargs = mock_interaction.followup.send.call_args
     assert "embed" in kwargs
     embed = kwargs["embed"]
-    assert "WSH @ ATL" in embed.title
+    assert "Washington Nationals @ Atlanta Braves" in embed.title
     assert "In Progress" in embed.title
     assert "WSH 4 @ ATL 2 (Live)" in embed.description
     assert "Tatis Jr. struck out." in embed.description
@@ -276,6 +280,7 @@ async def test_score_command_single(cog, mock_bot):
 @pytest.mark.asyncio
 async def test_score_command_all(cog, mock_bot):
     g1 = MagicMock(spec=Game)
+    g1.game_pk = 745000
     g1.abstract_state = "Final"
     g1.status = "Final"
     g1.inning = 9
@@ -287,6 +292,7 @@ async def test_score_command_all(cog, mock_bot):
     g1.format_last_play.return_value = ""
 
     g2 = MagicMock(spec=Game)
+    g2.game_pk = 745001
     g2.abstract_state = "Live"
     g2.status = "In Progress"
     g2.away = MagicMock()
@@ -322,12 +328,15 @@ async def test_score_command_all(cog, mock_bot):
 @pytest.mark.asyncio
 async def test_score_command_live_filter(cog, mock_bot):
     live_game = MagicMock(spec=Game)
+    live_game.game_pk = 745001
     live_game.abstract_state = "Live"
     live_game.status = "In Progress"
     live_game.away = MagicMock()
     live_game.away.abbreviation = "NYY"
+    live_game.away.name = "New York Yankees"
     live_game.home = MagicMock()
     live_game.home.abbreviation = "BOS"
+    live_game.home.name = "Boston Red Sox"
     live_game.format_score_line.return_value = "NYY 1 @ BOS 3 (Live)"
     live_game.format_last_play.return_value = ""
 
@@ -343,6 +352,7 @@ async def test_score_command_live_filter(cog, mock_bot):
     final_game.format_last_play.return_value = ""
 
     mock_bot.mlb_client.get_todays_games.return_value = [live_game, final_game]
+    mock_bot.mlb_client.get_game_top_performers = AsyncMock(return_value=None)
 
     mock_interaction = MagicMock(spec=discord.Interaction)
     mock_interaction.response = AsyncMock()
@@ -353,7 +363,93 @@ async def test_score_command_live_filter(cog, mock_bot):
     # One live game after filtering → single-game embed path
     args, kwargs = mock_interaction.followup.send.call_args
     assert "embed" in kwargs
-    assert "NYY @ BOS" in kwargs["embed"].title
+    assert "New York Yankees @ Boston Red Sox" in kwargs["embed"].title
+
+
+@pytest.mark.asyncio
+async def test_score_command_single_with_performers(cog, mock_bot):
+    mock_game = MagicMock(spec=Game)
+    mock_game.game_pk = 745000
+    mock_game.abstract_state = "Final"
+    mock_game.status = "Final"
+    mock_game.inning = 9
+    mock_game.away = MagicMock()
+    mock_game.away.abbreviation = "WSH"
+    mock_game.away.name = "Washington Nationals"
+    mock_game.home = MagicMock()
+    mock_game.home.abbreviation = "ATL"
+    mock_game.home.name = "Atlanta Braves"
+    mock_game.format_score_line.return_value = "WSH 4 @ ATL 2 (Final)"
+    mock_game.format_last_play.return_value = ""
+
+    mock_bot.mlb_client.get_todays_games.return_value = [mock_game]
+    mock_bot.mlb_client.get_game_top_performers = AsyncMock(return_value={
+        "hitters": [
+            {"name": "Fernando Tatis Jr.", "team": "WSH", "score": 7.5, "summary": "2-4, 1 HR, 3 RBI, 2 R"},
+            {"name": "Marcell Ozuna",      "team": "ATL", "score": 4.0, "summary": "2-3, 1 2B, 2 RBI"},
+        ],
+        "pitchers": [
+            {"name": "MacKenzie Gore", "team": "WSH", "score": 72, "summary": "7.0 IP, 1 ER, 8 K, 1 BB"},
+        ],
+    })
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.score.callback(cog, mock_interaction, team="nats", date=None, live=False, division=None)
+
+    mock_bot.mlb_client.get_game_top_performers.assert_called_once_with(745000, "WSH", "ATL")
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    desc = kwargs["embed"].description
+    assert "Top Performers" in desc
+    assert "Fernando Tatis Jr." in desc
+    assert "2-4, 1 HR, 3 RBI" in desc
+    assert "MacKenzie Gore" in desc
+    assert "GS: 72" in desc
+
+
+@pytest.mark.asyncio
+async def test_score_command_doubleheader_performers(cog, mock_bot):
+    def make_game(pk, away_abbr, home_abbr, state="Final"):
+        g = MagicMock(spec=Game)
+        g.game_pk = pk
+        g.abstract_state = state
+        g.status = state
+        g.inning = 9
+        g.away = MagicMock()
+        g.away.abbreviation = away_abbr
+        g.home = MagicMock()
+        g.home.abbreviation = home_abbr
+        g.format_score_line.return_value = f"{away_abbr} 3 @ {home_abbr} 2 ({state})"
+        g.format_last_play.return_value = ""
+        return g
+
+    g1 = make_game(745000, "WSH", "ATL")
+    g2 = make_game(745001, "WSH", "ATL")
+
+    mock_bot.mlb_client.get_todays_games.return_value = [g1, g2]
+    mock_bot.mlb_client.get_game_top_performers = AsyncMock(side_effect=[
+        {"hitters": [{"name": "Tatis Jr.", "team": "WSH", "score": 6.0, "summary": "2-4, 1 HR, 2 RBI"}], "pitchers": []},
+        {"hitters": [{"name": "Ozzie Albies", "team": "ATL", "score": 5.0, "summary": "3-4, 1 2B, 1 RBI"}], "pitchers": []},
+    ])
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.score.callback(cog, mock_interaction, team="nats", date=None, live=False, division=None)
+
+    assert mock_bot.mlb_client.get_game_top_performers.call_count == 2
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    fields = kwargs["embeds"][0].fields
+    assert len(fields) == 2
+    assert "Top Performers" in fields[0].value
+    assert "Tatis Jr." in fields[0].value
+    assert "Top Performers" in fields[1].value
+    assert "Ozzie Albies" in fields[1].value
 
 
 @pytest.mark.asyncio

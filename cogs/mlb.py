@@ -1905,6 +1905,7 @@ class MLBSlash(commands.Cog):
             embeds = []
 
             def game_name(game) -> str:
+                """Short form used as field headers in the multi-game list."""
                 if game.abstract_state == "Live":
                     return f"🔴 {game.away.abbreviation} @ {game.home.abbreviation} - {game.status}"
                 elif game.abstract_state == "Final":
@@ -1913,13 +1914,38 @@ class MLBSlash(commands.Cog):
                 else:
                     return f"🗓️ {game.away.abbreviation} @ {game.home.abbreviation} - {game.status}"
 
+            def game_title(game) -> str:
+                """Full-name form used as the single-game embed title."""
+                matchup = f"{game.away.name} @ {game.home.name}"
+                if game.abstract_state == "Live":
+                    return f"🔴 {game.status} — {matchup}"
+                elif game.abstract_state == "Final":
+                    final_str = f"{game.status}/{game.inning}" if game.inning != 9 and game.inning > 0 else game.status
+                    return f"🏁 {final_str} — {matchup}"
+                else:
+                    return f"🗓️ {game.status} — {matchup}"
+
             if len(games) == 1:
                 game = games[0]
                 value = f"```python\n{game.format_score_line()}\n```"
                 last_play = game.format_last_play()
                 if last_play:
                     value += f"\n{last_play}"
-                embed = discord.Embed(title=game_name(game), description=value, color=discord.Color.blue())
+
+                if game.abstract_state != "Preview":
+                    performers = await self.bot.mlb_client.get_game_top_performers(
+                        game.game_pk, game.away.abbreviation, game.home.abbreviation
+                    )
+                    if performers:
+                        lines = []
+                        for h in performers["hitters"]:
+                            lines.append(f"**{h['name']}** ({h['team']}) {h['summary']}")
+                        for p in performers["pitchers"]:
+                            lines.append(f"**{p['name']}** ({p['team']}) {p['summary']} (GS: {p['score']})")
+                        if lines:
+                            value += "\n**Top Performers**\n" + "\n".join(lines)
+
+                embed = discord.Embed(title=game_title(game), description=value, color=discord.Color.blue())
                 await interaction.followup.send(embed=embed)
                 return
 
@@ -1930,6 +1956,20 @@ class MLBSlash(commands.Cog):
                 title += " - Live"
             current_embed = discord.Embed(title=title, color=discord.Color.blue())
 
+            # For a specific team query (e.g. doubleheader), pre-fetch performers for all games
+            performers_by_pk = {}
+            if team_query:
+                perf_results = await asyncio.gather(*(
+                    self.bot.mlb_client.get_game_top_performers(
+                        g.game_pk, g.away.abbreviation, g.home.abbreviation
+                    )
+                    for g in games if g.abstract_state != "Preview"
+                ), return_exceptions=True)
+                non_preview_games = [g for g in games if g.abstract_state != "Preview"]
+                for g, result in zip(non_preview_games, perf_results):
+                    if isinstance(result, dict):
+                        performers_by_pk[g.game_pk] = result
+
             for game in games:
                 name = game_name(game)
                 value = f"```python\n{game.format_score_line()}\n```"
@@ -1937,6 +1977,16 @@ class MLBSlash(commands.Cog):
                     last_play = game.format_last_play()
                     if last_play:
                         value += f"\n{last_play}"
+
+                perf = performers_by_pk.get(game.game_pk)
+                if perf:
+                    lines = []
+                    for h in perf["hitters"]:
+                        lines.append(f"**{h['name']}** ({h['team']}) {h['summary']}")
+                    for p in perf["pitchers"]:
+                        lines.append(f"**{p['name']}** ({p['team']}) {p['summary']} (GS: {p['score']})")
+                    if lines:
+                        value += "\n**Top Performers**\n" + "\n".join(lines)
 
                 # Discord limits embeds to 25 fields and 6000 total characters
                 if len(current_embed.fields) >= 25 or len(current_embed) + len(name) + len(value) > 5900:

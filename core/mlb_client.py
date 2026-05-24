@@ -4322,10 +4322,12 @@ class MLBClient:
 
                     h  = p.get("hits", 0)
                     er = p.get("earnedRuns", 0)
+                    ur = max(0, p.get("runs", 0) - er)
                     bb = p.get("baseOnBalls", 0)
                     k  = p.get("strikeOuts", 0)
+                    full_innings = outs // 3
 
-                    game_score = 50 + outs + k - 2*h - 4*er - bb
+                    game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
 
                     pitchers.append({
                         "name":     p_data.get("person", {}).get("fullName", "Unknown"),
@@ -4342,6 +4344,107 @@ class MLBClient:
             "date":     date_str,
             "hitters":  hitters[:7],
             "pitchers": pitchers[:3],
+        }
+
+    async def get_game_top_performers(self, game_pk: int, away_abbr: str, home_abbr: str) -> Optional[dict]:
+        """Return top performers for a single game.
+
+        Uses the same scoring as get_daily_top_performances.
+        Returns {'hitters': [...], 'pitchers': [...]} or None on failure.
+        Hitters: top 3 across both teams. Pitchers: game_score >= 64 (no IP floor).
+        Each entry has: name, team, score, summary.
+        """
+        session = await self.get_session()
+        try:
+            async with session.get(f"{self.BASE_URL}/game/{game_pk}/boxscore") as r:
+                if r.status != 200:
+                    return None
+                box = await r.json()
+        except Exception:
+            return None
+
+        hitters = []
+        pitchers = []
+
+        for side, team_abbr, opp_abbr in [("away", away_abbr, home_abbr), ("home", home_abbr, away_abbr)]:
+            team_data = box.get("teams", {}).get(side, {})
+            players = team_data.get("players", {})
+
+            for batter_id in team_data.get("batters", []):
+                p_data = players.get(f"ID{batter_id}", {})
+                b = p_data.get("stats", {}).get("batting", {})
+                if not b or b.get("atBats", 0) == 0:
+                    continue
+
+                ab      = b.get("atBats", 0)
+                hits    = b.get("hits", 0)
+                doubles = b.get("doubles", 0)
+                triples = b.get("triples", 0)
+                hr      = b.get("homeRuns", 0)
+                singles = max(0, hits - doubles - triples - hr)
+                rbi     = b.get("rbi", 0)
+                runs    = b.get("runs", 0)
+                bb      = b.get("baseOnBalls", 0)
+                sb      = b.get("stolenBases", 0)
+
+                score = hr*4 + triples*2 + doubles*1.5 + singles*0.5 + rbi*1 + runs*0.5 + bb*0.25 + sb*1
+
+                parts = [f"{hits}-{ab}"]
+                if hr:      parts.append(f"{hr} HR")
+                if triples: parts.append(f"{triples} 3B")
+                if doubles: parts.append(f"{doubles} 2B")
+                if rbi:     parts.append(f"{rbi} RBI")
+                if runs:    parts.append(f"{runs} R")
+                if bb:      parts.append(f"{bb} BB")
+                if sb:      parts.append(f"{sb} SB")
+
+                hitters.append({
+                    "name":    p_data.get("person", {}).get("fullName", "Unknown"),
+                    "team":    team_abbr,
+                    "score":   score,
+                    "summary": ", ".join(parts),
+                })
+
+            for pitcher_id in team_data.get("pitchers", []):
+                p_data = players.get(f"ID{pitcher_id}", {})
+                p = p_data.get("stats", {}).get("pitching", {})
+                if not p:
+                    continue
+
+                ip_str = str(p.get("inningsPitched", "0"))
+                try:
+                    ip_parts = ip_str.split(".")
+                    outs = int(ip_parts[0]) * 3 + (int(ip_parts[1]) if len(ip_parts) > 1 else 0)
+                except (ValueError, IndexError):
+                    outs = 0
+
+                h  = p.get("hits", 0)
+                er = p.get("earnedRuns", 0)
+                ur = max(0, p.get("runs", 0) - er)
+                bb = p.get("baseOnBalls", 0)
+                k  = p.get("strikeOuts", 0)
+                full_innings = outs // 3
+
+                game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
+                if game_score < 64:
+                    continue
+
+                pitchers.append({
+                    "name":    p_data.get("person", {}).get("fullName", "Unknown"),
+                    "team":    team_abbr,
+                    "score":   game_score,
+                    "summary": f"{ip_str} IP, {er} ER, {k} K, {bb} BB",
+                })
+
+        hitters.sort(key=lambda x: x["score"], reverse=True)
+        pitchers.sort(key=lambda x: x["score"], reverse=True)
+
+        if not hitters and not pitchers:
+            return None
+
+        return {
+            "hitters":  hitters[:3],
+            "pitchers": pitchers,
         }
 
     async def get_milb_affiliate_top_performances(self, date_str: str, fav_team_abbrev: str) -> Optional[dict]:
@@ -4468,10 +4571,12 @@ class MLBClient:
 
                 h  = p.get("hits", 0)
                 er = p.get("earnedRuns", 0)
+                ur = max(0, p.get("runs", 0) - er)
                 bb = p.get("baseOnBalls", 0)
                 k  = p.get("strikeOuts", 0)
+                full_innings = outs // 3
 
-                game_score = 50 + outs + k - 2*h - 4*er - bb
+                game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
 
                 pitchers.append({
                     "name":    p_data.get("person", {}).get("fullName", "Unknown"),
