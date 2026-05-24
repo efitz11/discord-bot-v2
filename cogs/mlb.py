@@ -1919,6 +1919,20 @@ class MLBSlash(commands.Cog):
                 last_play = game.format_last_play()
                 if last_play:
                     value += f"\n{last_play}"
+
+                if game.abstract_state != "Preview":
+                    performers = await self.bot.mlb_client.get_game_top_performers(
+                        game.game_pk, game.away.abbreviation, game.home.abbreviation
+                    )
+                    if performers:
+                        lines = []
+                        for h in performers["hitters"]:
+                            lines.append(f"**{h['name']}** ({h['team']}) {h['summary']}")
+                        for p in performers["pitchers"]:
+                            lines.append(f"**{p['name']}** ({p['team']}) {p['summary']} (GS: {p['score']})")
+                        if lines:
+                            value += "\n\n**Top Performers**\n" + "\n".join(lines)
+
                 embed = discord.Embed(title=game_name(game), description=value, color=discord.Color.blue())
                 await interaction.followup.send(embed=embed)
                 return

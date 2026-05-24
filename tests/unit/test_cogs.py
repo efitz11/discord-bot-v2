@@ -244,6 +244,7 @@ from core.mlb_client import Game
 @pytest.mark.asyncio
 async def test_score_command_single(cog, mock_bot):
     mock_game = MagicMock(spec=Game)
+    mock_game.game_pk = 745000
     mock_game.abstract_state = "Live"
     mock_game.status = "In Progress"
     mock_game.away = MagicMock()
@@ -254,6 +255,7 @@ async def test_score_command_single(cog, mock_bot):
     mock_game.format_last_play.return_value = "Tatis Jr. struck out."
 
     mock_bot.mlb_client.get_todays_games.return_value = [mock_game]
+    mock_bot.mlb_client.get_game_top_performers = AsyncMock(return_value=None)
 
     mock_interaction = MagicMock(spec=discord.Interaction)
     mock_interaction.response = AsyncMock()
@@ -322,6 +324,7 @@ async def test_score_command_all(cog, mock_bot):
 @pytest.mark.asyncio
 async def test_score_command_live_filter(cog, mock_bot):
     live_game = MagicMock(spec=Game)
+    live_game.game_pk = 745001
     live_game.abstract_state = "Live"
     live_game.status = "In Progress"
     live_game.away = MagicMock()
@@ -343,6 +346,7 @@ async def test_score_command_live_filter(cog, mock_bot):
     final_game.format_last_play.return_value = ""
 
     mock_bot.mlb_client.get_todays_games.return_value = [live_game, final_game]
+    mock_bot.mlb_client.get_game_top_performers = AsyncMock(return_value=None)
 
     mock_interaction = MagicMock(spec=discord.Interaction)
     mock_interaction.response = AsyncMock()
@@ -354,6 +358,48 @@ async def test_score_command_live_filter(cog, mock_bot):
     args, kwargs = mock_interaction.followup.send.call_args
     assert "embed" in kwargs
     assert "NYY @ BOS" in kwargs["embed"].title
+
+
+@pytest.mark.asyncio
+async def test_score_command_single_with_performers(cog, mock_bot):
+    mock_game = MagicMock(spec=Game)
+    mock_game.game_pk = 745000
+    mock_game.abstract_state = "Final"
+    mock_game.status = "Final"
+    mock_game.inning = 9
+    mock_game.away = MagicMock()
+    mock_game.away.abbreviation = "WSH"
+    mock_game.home = MagicMock()
+    mock_game.home.abbreviation = "ATL"
+    mock_game.format_score_line.return_value = "WSH 4 @ ATL 2 (Final)"
+    mock_game.format_last_play.return_value = ""
+
+    mock_bot.mlb_client.get_todays_games.return_value = [mock_game]
+    mock_bot.mlb_client.get_game_top_performers = AsyncMock(return_value={
+        "hitters": [
+            {"name": "Fernando Tatis Jr.", "team": "WSH", "score": 7.5, "summary": "2-4, 1 HR, 3 RBI, 2 R"},
+            {"name": "Marcell Ozuna",      "team": "ATL", "score": 4.0, "summary": "2-3, 1 2B, 2 RBI"},
+        ],
+        "pitchers": [
+            {"name": "MacKenzie Gore", "team": "WSH", "score": 72, "summary": "7.0 IP, 1 ER, 8 K, 1 BB"},
+        ],
+    })
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.score.callback(cog, mock_interaction, team="nats", date=None, live=False, division=None)
+
+    mock_bot.mlb_client.get_game_top_performers.assert_called_once_with(745000, "WSH", "ATL")
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    desc = kwargs["embed"].description
+    assert "Top Performers" in desc
+    assert "Fernando Tatis Jr." in desc
+    assert "2-4, 1 HR, 3 RBI" in desc
+    assert "MacKenzie Gore" in desc
+    assert "GS: 72" in desc
 
 
 @pytest.mark.asyncio
