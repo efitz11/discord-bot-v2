@@ -1956,6 +1956,20 @@ class MLBSlash(commands.Cog):
                 title += " - Live"
             current_embed = discord.Embed(title=title, color=discord.Color.blue())
 
+            # For a specific team query (e.g. doubleheader), pre-fetch performers for all games
+            performers_by_pk = {}
+            if team_query:
+                perf_results = await asyncio.gather(*(
+                    self.bot.mlb_client.get_game_top_performers(
+                        g.game_pk, g.away.abbreviation, g.home.abbreviation
+                    )
+                    for g in games if g.abstract_state != "Preview"
+                ), return_exceptions=True)
+                non_preview_games = [g for g in games if g.abstract_state != "Preview"]
+                for g, result in zip(non_preview_games, perf_results):
+                    if isinstance(result, dict):
+                        performers_by_pk[g.game_pk] = result
+
             for game in games:
                 name = game_name(game)
                 value = f"```python\n{game.format_score_line()}\n```"
@@ -1963,6 +1977,16 @@ class MLBSlash(commands.Cog):
                     last_play = game.format_last_play()
                     if last_play:
                         value += f"\n{last_play}"
+
+                perf = performers_by_pk.get(game.game_pk)
+                if perf:
+                    lines = []
+                    for h in perf["hitters"]:
+                        lines.append(f"**{h['name']}** ({h['team']}) {h['summary']}")
+                    for p in perf["pitchers"]:
+                        lines.append(f"**{p['name']}** ({p['team']}) {p['summary']} (GS: {p['score']})")
+                    if lines:
+                        value += "\n\n**Top Performers**\n" + "\n".join(lines)
 
                 # Discord limits embeds to 25 fields and 6000 total characters
                 if len(current_embed.fields) >= 25 or len(current_embed) + len(name) + len(value) > 5900:

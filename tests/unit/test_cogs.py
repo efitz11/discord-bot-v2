@@ -280,6 +280,7 @@ async def test_score_command_single(cog, mock_bot):
 @pytest.mark.asyncio
 async def test_score_command_all(cog, mock_bot):
     g1 = MagicMock(spec=Game)
+    g1.game_pk = 745000
     g1.abstract_state = "Final"
     g1.status = "Final"
     g1.inning = 9
@@ -291,6 +292,7 @@ async def test_score_command_all(cog, mock_bot):
     g1.format_last_play.return_value = ""
 
     g2 = MagicMock(spec=Game)
+    g2.game_pk = 745001
     g2.abstract_state = "Live"
     g2.status = "In Progress"
     g2.away = MagicMock()
@@ -406,6 +408,48 @@ async def test_score_command_single_with_performers(cog, mock_bot):
     assert "2-4, 1 HR, 3 RBI" in desc
     assert "MacKenzie Gore" in desc
     assert "GS: 72" in desc
+
+
+@pytest.mark.asyncio
+async def test_score_command_doubleheader_performers(cog, mock_bot):
+    def make_game(pk, away_abbr, home_abbr, state="Final"):
+        g = MagicMock(spec=Game)
+        g.game_pk = pk
+        g.abstract_state = state
+        g.status = state
+        g.inning = 9
+        g.away = MagicMock()
+        g.away.abbreviation = away_abbr
+        g.home = MagicMock()
+        g.home.abbreviation = home_abbr
+        g.format_score_line.return_value = f"{away_abbr} 3 @ {home_abbr} 2 ({state})"
+        g.format_last_play.return_value = ""
+        return g
+
+    g1 = make_game(745000, "WSH", "ATL")
+    g2 = make_game(745001, "WSH", "ATL")
+
+    mock_bot.mlb_client.get_todays_games.return_value = [g1, g2]
+    mock_bot.mlb_client.get_game_top_performers = AsyncMock(side_effect=[
+        {"hitters": [{"name": "Tatis Jr.", "team": "WSH", "score": 6.0, "summary": "2-4, 1 HR, 2 RBI"}], "pitchers": []},
+        {"hitters": [{"name": "Ozzie Albies", "team": "ATL", "score": 5.0, "summary": "3-4, 1 2B, 1 RBI"}], "pitchers": []},
+    ])
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    await cog.score.callback(cog, mock_interaction, team="nats", date=None, live=False, division=None)
+
+    assert mock_bot.mlb_client.get_game_top_performers.call_count == 2
+
+    args, kwargs = mock_interaction.followup.send.call_args
+    fields = kwargs["embeds"][0].fields
+    assert len(fields) == 2
+    assert "Top Performers" in fields[0].value
+    assert "Tatis Jr." in fields[0].value
+    assert "Top Performers" in fields[1].value
+    assert "Ozzie Albies" in fields[1].value
 
 
 @pytest.mark.asyncio
