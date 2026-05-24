@@ -4351,7 +4351,7 @@ class MLBClient:
 
         Uses the same scoring as get_daily_top_performances.
         Returns {'hitters': [...], 'pitchers': [...]} or None on failure.
-        Hitters: top 3 across both teams. Pitchers: game_score >= 60 (no IP floor).
+        Hitters: top 3 across both teams. Pitchers: game_score >= 64 (no IP floor).
         Each entry has: name, team, score, summary.
         """
         session = await self.get_session()
@@ -4426,7 +4426,7 @@ class MLBClient:
                 full_innings = outs // 3
 
                 game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
-                if game_score < 60:
+                if game_score < 64:
                     continue
 
                 pitchers.append({
