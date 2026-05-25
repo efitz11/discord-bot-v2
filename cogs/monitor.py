@@ -1156,8 +1156,12 @@ class MonitorCog(commands.Cog):
 
             key_changed       = stored is None or stored["key"] != alert_key
             prev_alert_posted = (stored or {}).get("alert_posted", False)
-            firing_alert      = key_changed and should_alert
-            if key_changed or should_tune_in:
+            # Fire alert if: (a) key changed and should_alert, OR (b) should_alert but alert
+            # was never posted yet — catches cases where the bot saw the NH mid-inning first
+            # (should_alert=False) or crashed during the 15-second delay before the alert sent.
+            firing_alert = should_alert and (key_changed or not prev_alert_posted)
+
+            if key_changed or should_tune_in or firing_alert:
                 self._nh_alerted[game_pk] = {
                     "key":           alert_key,
                     "perfect":       is_pg,
@@ -1167,7 +1171,12 @@ class MonitorCog(commands.Cog):
                 }
                 self._save_nh_state()
                 if firing_alert:
+                    half_str = "bottom" if not is_top else "top"
+                    print(f"[monitor] NH alert: {nh_pitching} inn={inning} {half_str} game={game_pk}")
                     asyncio.create_task(self._delayed_nh_alert(channel, feed, game_pk))
+                elif key_changed:
+                    half_str = "bottom" if not is_top else "top"
+                    print(f"[monitor] NH detected, holding alert: {nh_pitching} inn={inning} {half_str} should_alert={should_alert} game={game_pk}")
                 if should_tune_in:
                     batting_side = "away" if home_pitching else "home"
                     asyncio.create_task(self._delayed_nh_tune_in_alert(channel, feed, game_pk, nh_pitching, batting_side))
