@@ -5,6 +5,8 @@ Posts to ALERT_CHANNEL_ID automatically when:
   1. A no-hitter or perfect game is in progress (updates every inning change).
   2. A notable home run is hit (≥420 ft, favorite team HR, ≤5-park HR, or xBA < .200),
      once a highlight video is available.
+  3. A walkoff play ends a game (all 30 teams); alert is posted immediately then edited
+     with the highlight video once MLB uploads it (up to 10 minutes).
 
 Polling strategy:
   - On startup, fetches today's schedule to get all game PKs and start times.
@@ -42,6 +44,7 @@ _STATE_DIR            = os.getenv("STATE_DIR", ".")
 HR_STATE_FILE         = os.path.join(_STATE_DIR, "hr_posted.json")
 NH_STATE_FILE         = os.path.join(_STATE_DIR, "nh_state.json")
 SUMMARY_STATE_FILE    = os.path.join(_STATE_DIR, "summary_state.json")
+WALKOFF_STATE_FILE    = os.path.join(_STATE_DIR, "walkoff_state.json")
 VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
 NH_ALERT_DELAY        = 15                  # Seconds to delay NH alerts (stream spoiler protection)
 
@@ -103,6 +106,11 @@ class MonitorCog(commands.Cog):
         self._hr_pending: dict = {}  # {hr_key: {"cycles_waited": int, "data": dict}}
         self._hr_posted: set = set() # hr_keys already posted
         self._hr_clear_date = None   # date string for which we've done the 6am clear
+
+        # Walkoff tracking
+        self._walkoff_pending: dict = {}  # {game_pk: {"cycles_waited": int, "data": dict, "message": Message|None}}
+        self._walkoff_posted: set = set() # game_pks already posted
+        self._walkoff_clear_date = None
         self._summary_posted_date = None       # date string for which we've posted the morning summary
         self._milb_summary_posted_date = None  # date string for which we've posted the MiLB affiliate summary
         self._milb_ready_since: "datetime | None" = None  # when all MLB+MiLB games first went Final
@@ -111,6 +119,7 @@ class MonitorCog(commands.Cog):
         self._load_hr_state()
         self._load_nh_state()
         self._load_summary_state()
+        self._load_walkoff_state()
         self.monitor_loop.start()
 
     def cog_unload(self):
@@ -193,6 +202,25 @@ class MonitorCog(commands.Cog):
             os.replace(tmp, NH_STATE_FILE)
         except Exception as e:
             print(f"[monitor] failed to save NH state: {e}")
+
+    def _load_walkoff_state(self) -> None:
+        try:
+            with open(WALKOFF_STATE_FILE) as f:
+                data = json.load(f)
+            self._walkoff_posted = set(int(pk) for pk in data.get("posted", []))
+            self._walkoff_clear_date = data.get("clear_date")
+            print(f"[monitor] loaded {len(self._walkoff_posted)} posted walkoff(s) from disk")
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._walkoff_posted = set()
+
+    def _save_walkoff_state(self) -> None:
+        tmp = WALKOFF_STATE_FILE + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump({"posted": list(self._walkoff_posted), "clear_date": self._walkoff_clear_date}, f)
+            os.replace(tmp, WALKOFF_STATE_FILE)
+        except Exception as e:
+            print(f"[monitor] failed to save walkoff state: {e}")
 
     async def _refresh_schedule(self, prune_finished: bool = False) -> None:
         """Fetch today's full MLB schedule and MERGE into the existing game cache.
@@ -816,6 +844,41 @@ class MonitorCog(commands.Cog):
                 }
         return result
 
+    def _build_walkoff_embed(self, wo: dict) -> discord.Embed:
+        away        = wo["away"]
+        home        = wo["home"]
+        away_score  = wo["away_score"]
+        home_score  = wo["home_score"]
+        batter      = wo["batter"]
+        pitcher     = wo["pitcher"]
+        inning      = wo["inning"].title()
+        desc        = wo["desc"]
+        video_url   = wo.get("video_url", "")
+        video_blurb = wo.get("video_blurb", "Watch")
+
+        title    = f"🚶 {home} walks off {away}: {home_score}-{away_score}"
+        desc_fmt = desc.replace(batter, f"**{batter}**", 1)
+        body     = f"**{inning}:** With **{pitcher}** pitching, {desc_fmt}"
+        if video_url:
+            body += f"\n> [🎥 **{video_blurb or 'Watch'}**]({video_url})"
+
+        return discord.Embed(title=title, description=body, color=discord.Color.green())
+
+    async def _post_walkoff_alert(self, channel, wo: dict) -> "discord.Message | None":
+        embed = self._build_walkoff_embed(wo)
+        try:
+            return await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to post walkoff alert: {e}")
+            return None
+
+    async def _edit_walkoff_alert(self, msg: discord.Message, wo: dict) -> None:
+        embed = self._build_walkoff_embed(wo)
+        try:
+            await msg.edit(embed=embed)
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to edit walkoff alert: {e}")
+
     async def _post_hr_alert(self, channel, hr: dict) -> None:
         batter     = hr["batter"]
         team       = hr["batter_team"]
@@ -1262,6 +1325,111 @@ class MonitorCog(commands.Cog):
             else:
                 self._hr_pending[hr_key]["cycles_waited"] += 1
 
+        # ── Walkoff detection ────────────────────────────────────────────────
+        if (
+            is_final
+            and all_plays
+            and game_pk not in self._walkoff_posted
+            and game_pk not in self._walkoff_pending
+        ):
+            last_play   = all_plays[-1]
+            last_about  = last_play.get("about", {})
+            last_result = last_play.get("result", {})
+            if (
+                last_about.get("halfInning") == "bottom"
+                and last_about.get("isScoringPlay")
+                and last_result.get("homeScore", 0) > last_result.get("awayScore", 0)
+            ):
+                # Skip stale walkoffs (bot restart after > 20 min)
+                end_time_str = last_about.get("endTime", "")
+                stale = False
+                if end_time_str:
+                    try:
+                        end_time = datetime.strptime(end_time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                        if (datetime.now(timezone.utc) - end_time).total_seconds() > 1200:
+                            stale = True
+                    except Exception:
+                        pass
+                if stale:
+                    self._walkoff_posted.add(game_pk)
+                    self._save_walkoff_state()
+                else:
+                    batter  = last_play.get("matchup", {}).get("batter", {}).get("fullName", "Unknown")
+                    pitcher = last_play.get("matchup", {}).get("pitcher", {}).get("fullName", "Unknown")
+                    desc       = last_result.get("description", "")
+                    inn_num    = last_about.get("inning", 9)
+                    away_score = last_result.get("awayScore", 0)
+                    home_score = last_result.get("homeScore", 0)
+
+                    play_id = None
+                    for evt in last_play.get("playEvents", []):
+                        if evt.get("isPitch") and evt.get("details", {}).get("isInPlay"):
+                            play_id = evt.get("playId")
+                            break
+                    if not play_id:
+                        for evt in last_play.get("playEvents", []):
+                            play_id = evt.get("playId")
+                            if play_id:
+                                break
+
+                    wo_data = {
+                        "game_pk":    game_pk,
+                        "away":       away_abbr,
+                        "home":       home_abbr,
+                        "away_score": away_score,
+                        "home_score": home_score,
+                        "batter":     batter,
+                        "pitcher":    pitcher,
+                        "inning":     f"bot {inn_num}",
+                        "desc":       desc,
+                        "play_id":    play_id,
+                    }
+                    self._walkoff_pending[game_pk] = {
+                        "cycles_waited": 0,
+                        "data":          wo_data,
+                        "message":       None,
+                    }
+
+        # ── Resolve walkoff video / post pending walkoff alert ───────────────
+        if game_pk in self._walkoff_pending and game_pk not in self._walkoff_posted:
+            pending_wo = self._walkoff_pending[game_pk]
+            wo         = pending_wo["data"]
+            cycles     = pending_wo["cycles_waited"]
+            msg        = pending_wo["message"]
+
+            if msg is None:
+                msg = await self._post_walkoff_alert(channel, wo)
+                pending_wo["message"] = msg
+
+            video_url = video_blurb = ""
+            play_id = wo.get("play_id")
+            if play_id:
+                wo_content = await self._fetch_content(game_pk)
+                for item in wo_content.get("highlights", {}).get("highlights", {}).get("items", []):
+                    if item.get("guid") == play_id:
+                        for pb in item.get("playbacks", []):
+                            if pb.get("name") == "mp4Avc":
+                                video_url   = pb["url"]
+                                video_blurb = item.get("headline", item.get("blurb", "Watch"))
+                                break
+                        if video_url:
+                            break
+
+            if video_url:
+                wo["video_url"]   = video_url
+                wo["video_blurb"] = video_blurb
+                if msg:
+                    await self._edit_walkoff_alert(msg, wo)
+                self._walkoff_posted.add(game_pk)
+                self._save_walkoff_state()
+                del self._walkoff_pending[game_pk]
+            elif cycles >= VIDEO_WAIT_MAX_CYCLES:
+                self._walkoff_posted.add(game_pk)
+                self._save_walkoff_state()
+                del self._walkoff_pending[game_pk]
+            else:
+                pending_wo["cycles_waited"] += 1
+
     # ─────────────────────────────────────────────
     # Main loop
     # ─────────────────────────────────────────────
@@ -1287,13 +1455,19 @@ class MonitorCog(commands.Cog):
             if self._milb_schedule_date != today_str:
                 await self._refresh_milb_schedule()
 
-            # Clear HR state at 6am ET each day
+            # Clear HR and walkoff state at 6am ET each day
             if now_et.hour >= 6 and self._hr_clear_date != today_str:
                 self._hr_posted.clear()
                 self._hr_clear_date = today_str
                 self._save_hr_state()
                 self._milb_ready_since = None
                 print("[monitor] 6am ET — HR posted state cleared")
+            if now_et.hour >= 6 and self._walkoff_clear_date != today_str:
+                self._walkoff_posted.clear()
+                self._walkoff_pending.clear()
+                self._walkoff_clear_date = today_str
+                self._save_walkoff_state()
+                print("[monitor] 6am ET — walkoff posted state cleared")
 
             # Morning performance summary at 8am ET
             if now_et.hour >= 8 and self._summary_posted_date != today_str:
