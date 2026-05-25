@@ -1154,24 +1154,38 @@ class MonitorCog(commands.Cog):
             stored_tune_in         = (stored or {}).get("tune_in_inning", 0)
             should_tune_in         = inning >= 9 and entering_pitching_half and inning > stored_tune_in
 
-            key_changed = stored is None or stored["key"] != alert_key
-            if key_changed or should_tune_in:
+            key_changed       = stored is None or stored["key"] != alert_key
+            prev_alert_posted = (stored or {}).get("alert_posted", False)
+            # Fire alert if: (a) key changed and should_alert, OR (b) should_alert but alert
+            # was never posted yet — catches cases where the bot saw the NH mid-inning first
+            # (should_alert=False) or crashed during the 15-second delay before the alert sent.
+            firing_alert = should_alert and (key_changed or not prev_alert_posted)
+
+            if key_changed or should_tune_in or firing_alert:
                 self._nh_alerted[game_pk] = {
                     "key":           alert_key,
                     "perfect":       is_pg,
                     "pitching_abbr": nh_pitching,
                     "tune_in_inning": inning if should_tune_in else stored_tune_in,
+                    "alert_posted":  prev_alert_posted or firing_alert,
                 }
                 self._save_nh_state()
-                if key_changed and should_alert:
+                if firing_alert:
+                    half_str = "bottom" if not is_top else "top"
+                    print(f"[monitor] NH alert: {nh_pitching} inn={inning} {half_str} game={game_pk}")
                     asyncio.create_task(self._delayed_nh_alert(channel, feed, game_pk))
+                elif key_changed:
+                    half_str = "bottom" if not is_top else "top"
+                    print(f"[monitor] NH detected, holding alert: {nh_pitching} inn={inning} {half_str} should_alert={should_alert} game={game_pk}")
                 if should_tune_in:
                     batting_side = "away" if home_pitching else "home"
                     asyncio.create_task(self._delayed_nh_tune_in_alert(channel, feed, game_pk, nh_pitching, batting_side))
         else:
-            # Flag was cleared — post break-up alert if we were tracking this game
+            # Flag was cleared — post break-up alert only if we actually posted an NH alert
             nh_changed = False
-            if game_pk in self._nh_alerted and game_pk not in self._nh_broken_posted:
+            if (game_pk in self._nh_alerted
+                    and game_pk not in self._nh_broken_posted
+                    and self._nh_alerted[game_pk].get("alert_posted", False)):
                 was_perfect   = self._nh_alerted[game_pk].get("perfect", False)
                 pitching_abbr = self._nh_alerted[game_pk].get("pitching_abbr")
                 self._nh_broken_posted.add(game_pk)
