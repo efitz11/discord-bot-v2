@@ -572,16 +572,36 @@ class MonitorCog(commands.Cog):
         )
         return header + "\n" + "\n".join(fmt_row(r) for r in pitchers)
 
+    @staticmethod
+    def _nh_remaining_delay(feed: dict) -> float:
+        """Return how many seconds to still wait before posting an NH alert.
+
+        Uses the last completed play's endTime so that if the poll cycle already
+        ran 12 seconds after the play, we only sleep the remaining 3 seconds
+        instead of the full NH_ALERT_DELAY.
+        """
+        try:
+            all_plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
+            for play in reversed(all_plays):
+                end_time_str = play.get("about", {}).get("endTime", "")
+                if end_time_str:
+                    end_time = datetime.strptime(end_time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                    elapsed = (datetime.now(timezone.utc) - end_time).total_seconds()
+                    return max(0.0, NH_ALERT_DELAY - elapsed)
+        except Exception:
+            pass
+        return NH_ALERT_DELAY
+
     async def _delayed_nh_alert(self, channel, feed: dict, game_pk: int) -> None:
-        await asyncio.sleep(NH_ALERT_DELAY)
+        await asyncio.sleep(self._nh_remaining_delay(feed))
         await self._post_nh_alert(channel, feed, game_pk)
 
     async def _delayed_nh_broken_alert(self, channel, feed: dict, was_perfect: bool, pitching_abbr: str = None) -> None:
-        await asyncio.sleep(NH_ALERT_DELAY)
+        await asyncio.sleep(self._nh_remaining_delay(feed))
         await self._post_nh_broken_alert(channel, feed, was_perfect, pitching_abbr)
 
     async def _delayed_nh_tune_in_alert(self, channel, feed: dict, game_pk: int, pitching_abbr: str, batting_side: str) -> None:
-        await asyncio.sleep(NH_ALERT_DELAY)
+        await asyncio.sleep(self._nh_remaining_delay(feed))
         await self._post_nh_tune_in_alert(channel, feed, game_pk, pitching_abbr, batting_side)
 
     def _get_next_batters(self, feed: dict, batting_side: str, n: int = 3) -> list:
