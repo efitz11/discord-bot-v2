@@ -1315,49 +1315,48 @@ class MonitorCog(commands.Cog):
             k: v for k, v in self._hr_pending.items()
             if v["data"]["game_pk"] == game_pk and not v.get("milb")
         }
-        if not pending_here:
-            return
 
-        content_data = await self._fetch_content(game_pk)
-        content_dict = {}
-        for item in (content_data or {}).get("highlights", {}).get("highlights", {}).get("items", []):
-            if "guid" in item:
-                for pb in item.get("playbacks", []):
-                    if pb.get("name") == "mp4Avc":
-                        content_dict[item["guid"]] = {
-                            "url":   pb["url"],
-                            "blurb": item.get("headline", item.get("blurb", "")),
-                        }
-                        break
+        if pending_here:
+            content_data = await self._fetch_content(game_pk)
+            content_dict = {}
+            for item in (content_data or {}).get("highlights", {}).get("highlights", {}).get("items", []):
+                if "guid" in item:
+                    for pb in item.get("playbacks", []):
+                        if pb.get("name") == "mp4Avc":
+                            content_dict[item["guid"]] = {
+                                "url":   pb["url"],
+                                "blurb": item.get("headline", item.get("blurb", "")),
+                            }
+                            break
 
-        savant_data = await self._fetch_savant_hr_data(game_pk)
+            savant_data = await self._fetch_savant_hr_data(game_pk)
 
-        for hr_key, pending in list(pending_here.items()):
-            if hr_key in self._hr_posted:
-                continue
-            hr      = pending["data"]
-            play_id = hr.get("play_id")
-            cycles  = pending["cycles_waited"]
+            for hr_key, pending in list(pending_here.items()):
+                if hr_key in self._hr_posted:
+                    continue
+                hr      = pending["data"]
+                play_id = hr.get("play_id")
+                cycles  = pending["cycles_waited"]
 
-            if play_id and play_id in content_dict:
-                hr["video_url"]  = content_dict[play_id]["url"]
-                hr["video_blurb"] = content_dict[play_id]["blurb"]
-                video_found = True
-            else:
-                video_found = False
+                if play_id and play_id in content_dict:
+                    hr["video_url"]  = content_dict[play_id]["url"]
+                    hr["video_blurb"] = content_dict[play_id]["blurb"]
+                    video_found = True
+                else:
+                    video_found = False
 
-            if play_id and play_id in savant_data:
-                hr["xba"]   = savant_data[play_id]["xba"]
-                hr["parks"] = savant_data[play_id]["parks"]
+                if play_id and play_id in savant_data:
+                    hr["xba"]   = savant_data[play_id]["xba"]
+                    hr["parks"] = savant_data[play_id]["parks"]
 
-            if video_found or cycles >= VIDEO_WAIT_MAX_CYCLES:
-                if self._should_post_hr(hr):
-                    await self._post_hr_alert(channel, hr)
-                self._hr_posted.add(hr_key)
-                self._save_hr_state()
-                del self._hr_pending[hr_key]
-            else:
-                self._hr_pending[hr_key]["cycles_waited"] += 1
+                if video_found or cycles >= VIDEO_WAIT_MAX_CYCLES:
+                    if self._should_post_hr(hr):
+                        await self._post_hr_alert(channel, hr)
+                    self._hr_posted.add(hr_key)
+                    self._save_hr_state()
+                    del self._hr_pending[hr_key]
+                else:
+                    self._hr_pending[hr_key]["cycles_waited"] += 1
 
         # ── Walkoff detection ────────────────────────────────────────────────
         if (
