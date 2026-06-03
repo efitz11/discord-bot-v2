@@ -1212,6 +1212,7 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="Pre All-Star", value="preas"),
         app_commands.Choice(name="Post All-Star", value="posas"),
         app_commands.Choice(name="Month by Month", value="all_months"),
+        app_commands.Choice(name="Fielding Positions", value="all_positions"),
         app_commands.Choice(name="March", value="3"),
         app_commands.Choice(name="April", value="4"),
         app_commands.Choice(name="May", value="5"),
@@ -1259,11 +1260,12 @@ class MLBSlash(commands.Cog):
                 "vl": "vL", "vr": "vR", "h": "Home", "a": "Away",
                 "d": "Day", "n": "Night", "risp": "RISP",
                 "preas": "PreAS", "posas": "PostAS", "all_months": "Month",
+                "all_positions": "Pos",
                 "3": "Mar", "4": "Apr", "5": "May", "6": "Jun",
                 "7": "Jul", "8": "Aug", "9": "Sep", "10": "Oct",
             }
-            label1 = "Month by Month" if split.value == "all_months" else split.name
-            label2 = "Month by Month" if split2.value == "all_months" else split2.name
+            label1 = split.name
+            label2 = split2.name
             row1 = dict(s1.stats[0]); row1['split'] = _split_short.get(split.value, split.name)
             row2 = dict(s2.stats[0]); row2['split'] = _split_short.get(split2.value, split2.name)
             combined = dataclasses.replace(s1, stats=[row1, row2])
@@ -1287,7 +1289,7 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send(stats.info_message)
             return
 
-        split_label = "Month by Month" if split.value == "all_months" else split.name
+        split_label = split.name
         embed = discord.Embed(color=discord.Color.blue())
         embed.title = f"{stats.years} {split_label} {stats.stat_type.capitalize()} — {stats.player_name} ({stats.team_abbrev})"
         embed.description = f"{stats.info_line}\n\n```python\n{stats.format_discord_code_block()}\n```"

@@ -2395,8 +2395,15 @@ class MLBClient:
         season = year or str(datetime.now().year)
 
         _month_abbrevs = {'3':'Mar','4':'Apr','5':'May','6':'Jun','7':'Jul','8':'Aug','9':'Sep','10':'Oct'}
-        all_months = sit_code == "all_months"
-        api_sit_code = "3,4,5,6,7,8,9,10" if all_months else sit_code
+        _pos_abbrevs   = {'p1':'P','p2':'C','p3':'1B','p4':'2B','p5':'3B','p6':'SS','p7':'LF','p8':'CF','p9':'RF','pD':'DH','pH':'PH'}
+        all_months     = sit_code == "all_months"
+        all_positions  = sit_code == "all_positions"
+        if all_months:
+            api_sit_code = "3,4,5,6,7,8,9,10"
+        elif all_positions:
+            api_sit_code = "p1,p2,p3,p4,p5,p6,p7,p8,p9,pD,pH"
+        else:
+            api_sit_code = sit_code
 
         url = (
             f"{self.BASE_URL}/people/{player_id}/stats"
@@ -2434,6 +2441,14 @@ class MLBClient:
                 code = sp.get('split', {}).get('code', '')
                 s = sp.get('stat', {})
                 s['season'] = _month_abbrevs.get(code, code)
+                s['team'] = team_abbrev
+                stat_rows.append(s)
+        elif all_positions:
+            stat_rows = []
+            for sp in splits:
+                code = sp.get('split', {}).get('code', '')
+                s = sp.get('stat', {})
+                s['season'] = _pos_abbrevs.get(code, code)
                 s['team'] = team_abbrev
                 stat_rows.append(s)
         else:
