@@ -1319,7 +1319,7 @@ class MonitorCog(commands.Cog):
         if pending_here:
             content_data = await self._fetch_content(game_pk)
             content_dict = {}
-            for item in (content_data or {}).get("highlights", {}).get("highlights", {}).get("items", []):
+            for item in (((content_data or {}).get("highlights") or {}).get("highlights") or {}).get("items") or []:
                 if "guid" in item:
                     for pb in item.get("playbacks", []):
                         if pb.get("name") == "mp4Avc":
