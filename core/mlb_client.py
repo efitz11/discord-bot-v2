@@ -237,7 +237,8 @@ class Game:
                 dt = datetime.strptime(data['gameDate'], "%Y-%m-%dT%H:%M:%SZ")
                 dt = dt - timedelta(hours=4)  # ET offset for baseball season
                 game.game_time_str = dt.strftime("%I:%M").lstrip('0') + " ET"
-                game.game_date_str = dt.strftime("%A, %b %d").replace(" 0", " ")
+                fmt = "%A, %b %d, %Y" if dt.year != datetime.now().year else "%A, %b %d"
+                game.game_date_str = dt.strftime(fmt).replace(" 0", " ")
             except ValueError:
                 pass
 
@@ -1710,7 +1711,8 @@ class MLBClient:
         results = []
         games = sched_data['dates'][0]['games']
         game_date = sched_data['dates'][0]['date']
-        game_date_formatted = f"{int(game_date[5:7])}/{int(game_date[8:10])}"
+        game_year = int(game_date[:4])
+        game_date_formatted = f"{int(game_date[5:7])}/{int(game_date[8:10])}" + (f"/{game_year}" if game_year != datetime.now().year else "")
 
         # Loop through all games that day (handles doubleheaders cleanly)
         for game in games:
@@ -3249,7 +3251,9 @@ class MLBClient:
         game_abstract = game_data.get('status', {}).get('abstractGameState', '')
         raw_date = dates[0].get('date', '')
         try:
-            game_date = datetime.strptime(raw_date, '%Y-%m-%d').strftime('%A, %b %d').replace(' 0', ' ')
+            parsed = datetime.strptime(raw_date, '%Y-%m-%d')
+            fmt = '%A, %b %d, %Y' if parsed.year != datetime.now().year else '%A, %b %d'
+            game_date = parsed.strftime(fmt).replace(' 0', ' ')
         except Exception:
             game_date = raw_date
 
