@@ -176,24 +176,23 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     sz_top = pitches[0].sz_top or 3.5
     sz_bot = pitches[0].sz_bot or 1.5
     
-    # Proportions matched to MLB Gameday: zone 83x102 px, ball 14 px diameter.
-    # Scaled 4x for our resolution: zone 332x408 px, ball 56 px.
-    zone_px_w = 332
-    zone_px_h = 408
-    ball_r = 28
-    x_scale = zone_px_w / (2 * 0.708)        # pixels per foot
-    z_scale = zone_px_h / (sz_top - sz_bot)  # vertical scale follows the batter's zone, like Gameday
+    # Match MLB Gameday: one uniform scale on both axes (true physical
+    # proportions, ~58.8 px/ft at Gameday's resolution). Zone width is the
+    # 17" plate, ball markers are real baseball size (14/83 of zone width).
+    zone_px_w = 332          # 4x Gameday's 83 px
+    ball_r = 28              # 4x Gameday's 14 px diameter
+    scale = zone_px_w / (2 * 0.708)  # px per foot, both axes
 
     # Anchor the vertical center of the strike zone at a fixed pixel so
     # batters with short/tall zones don't push the plot off-canvas
-    base_y = 560 + ((sz_top + sz_bot) / 2) * z_scale
+    base_y = 560 + ((sz_top + sz_bot) / 2) * scale
 
     def get_x(px):
         center_x = zone_area_width // 2
-        return center_x + (px * x_scale)
+        return center_x + (px * scale)
 
     def get_y(pz):
-        return base_y - (pz * z_scale)
+        return base_y - (pz * scale)
 
     # Draw ground line
     ground_y = get_y(0)
@@ -225,8 +224,9 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     zy_top = get_y(sz_top)
     zy_bot = get_y(sz_bot)
     
-    # Outer box - High contrast
-    draw.rectangle([zx_left, zy_top, zx_right, zy_bot], outline=(200, 200, 200), width=9)
+    # Outer box - High contrast. PIL draws outline width inward, so expand
+    # the rect by half the line width to center it on the true zone boundary
+    draw.rectangle([zx_left - 4, zy_top - 4, zx_right + 4, zy_bot + 4], outline=(200, 200, 200), width=9)
     
     # Internal lines for 3x3
     v_step = (zx_right - zx_left) / 3
@@ -272,9 +272,6 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     # Plot pitches
     for i, p in enumerate(pitches):
         px, py = get_x(p.px), get_y(p.pz)
-        # Clamp extreme locations so the marker stays fully visible
-        px = max(ball_r + 6, min(px, zone_area_width - ball_r - 6))
-        py = max(ball_r + 6, min(py, height - ball_r - 6))
         color = get_color_for_desc(p.description)
         
         # Draw circle
