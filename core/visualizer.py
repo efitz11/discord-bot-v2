@@ -176,24 +176,31 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     sz_top = pitches[0].sz_top or 3.5
     sz_bot = pitches[0].sz_bot or 1.5
     
-    # Scale constants - Balanced for elongation and coverage
-    x_scale = 190 # pixels per foot
-    z_scale = 240 # pixels per foot 
-    
+    # Proportions matched to MLB Gameday: zone 83x102 px, ball 14 px diameter.
+    # Scaled 4x for our resolution: zone 332x408 px, ball 56 px.
+    zone_px_w = 332
+    zone_px_h = 408
+    ball_r = 28
+    x_scale = zone_px_w / (2 * 0.708)        # pixels per foot
+    z_scale = zone_px_h / (sz_top - sz_bot)  # vertical scale follows the batter's zone, like Gameday
+
+    # Anchor the vertical center of the strike zone at a fixed pixel so
+    # batters with short/tall zones don't push the plot off-canvas
+    base_y = 560 + ((sz_top + sz_bot) / 2) * z_scale
+
     def get_x(px):
         center_x = zone_area_width // 2
         return center_x + (px * x_scale)
 
     def get_y(pz):
-        # Anchor at 1200px
-        base_y = 1200 
         return base_y - (pz * z_scale)
 
     # Draw ground line
-    draw.line([50, 1200, zone_area_width - 50, 1200], fill=(50, 60, 70), width=4)
+    ground_y = get_y(0)
+    draw.line([50, ground_y, zone_area_width - 50, ground_y], fill=(50, 60, 70), width=4)
 
     # Draw Plate
-    plate_y = 1215
+    plate_y = ground_y + 15
     plate_w_feet = 0.708 
     draw.polygon([
         (get_x(0), plate_y + 35),
@@ -251,10 +258,11 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
 
     # Draw Batter indicator
     bat_color = (60, 70, 80)
+    bat_y = get_y(sz_top) - 120
     if stand == "R":
-        draw.text((get_x(-1.8), get_y(4.5)), "RHB", fill=bat_color, font=font_title)
+        draw.text((get_x(-0.708) - 200, bat_y), "RHB", fill=bat_color, font=font_title)
     else:
-        draw.text((get_x(1.2), get_y(4.5)), "LHB", fill=bat_color, font=font_title)
+        draw.text((get_x(0.708) + 60, bat_y), "LHB", fill=bat_color, font=font_title)
 
 
 
@@ -264,10 +272,13 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     # Plot pitches
     for i, p in enumerate(pitches):
         px, py = get_x(p.px), get_y(p.pz)
+        # Clamp extreme locations so the marker stays fully visible
+        px = max(ball_r + 6, min(px, zone_area_width - ball_r - 6))
+        py = max(ball_r + 6, min(py, height - ball_r - 6))
         color = get_color_for_desc(p.description)
         
         # Draw circle
-        r = 35
+        r = ball_r
         draw.ellipse([px-r, py-r, px+r, py+r], fill=color, outline=(255, 255, 255), width=4)
         
         # Draw number
