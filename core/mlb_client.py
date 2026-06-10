@@ -1751,7 +1751,7 @@ class MLBClient:
             # Pitchers usually have empty hitting dicts even in the DH era, so we filter them out
             if batting and batting.get('atBats', 0) == 0 and batting.get('plateAppearances', 0) == 0:
                 batting = None
-            if pitching and pitching.get('inningsPitched', '0.0') == '0.0':
+            if pitching and pitching.get('inningsPitched', '0.0') == '0.0' and pitching.get('battersFaced', 0) == 0:
                 pitching = None
                 
             if not batting and not pitching:
