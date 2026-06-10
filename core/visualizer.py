@@ -176,24 +176,30 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     sz_top = pitches[0].sz_top or 3.5
     sz_bot = pitches[0].sz_bot or 1.5
     
-    # Scale constants - Balanced for elongation and coverage
-    x_scale = 190 # pixels per foot
-    z_scale = 240 # pixels per foot 
-    
+    # Match MLB Gameday: one uniform scale on both axes (true physical
+    # proportions, ~58.8 px/ft at Gameday's resolution). Zone width is the
+    # 17" plate, ball markers are real baseball size (14/83 of zone width).
+    zone_px_w = 332          # 4x Gameday's 83 px
+    ball_r = 28              # 4x Gameday's 14 px diameter
+    scale = zone_px_w / (2 * 0.708)  # px per foot, both axes
+
+    # Anchor the vertical center of the strike zone at a fixed pixel so
+    # batters with short/tall zones don't push the plot off-canvas
+    base_y = 560 + ((sz_top + sz_bot) / 2) * scale
+
     def get_x(px):
         center_x = zone_area_width // 2
-        return center_x + (px * x_scale)
+        return center_x + (px * scale)
 
     def get_y(pz):
-        # Anchor at 1200px
-        base_y = 1200 
-        return base_y - (pz * z_scale)
+        return base_y - (pz * scale)
 
     # Draw ground line
-    draw.line([50, 1200, zone_area_width - 50, 1200], fill=(50, 60, 70), width=4)
+    ground_y = get_y(0)
+    draw.line([50, ground_y, zone_area_width - 50, ground_y], fill=(50, 60, 70), width=4)
 
     # Draw Plate
-    plate_y = 1215
+    plate_y = ground_y + 15
     plate_w_feet = 0.708 
     draw.polygon([
         (get_x(0), plate_y + 35),
@@ -218,8 +224,9 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     zy_top = get_y(sz_top)
     zy_bot = get_y(sz_bot)
     
-    # Outer box - High contrast
-    draw.rectangle([zx_left, zy_top, zx_right, zy_bot], outline=(200, 200, 200), width=9)
+    # Outer box - High contrast. PIL draws outline width inward, so expand
+    # the rect by half the line width to center it on the true zone boundary
+    draw.rectangle([zx_left - 4, zy_top - 4, zx_right + 4, zy_bot + 4], outline=(200, 200, 200), width=9)
     
     # Internal lines for 3x3
     v_step = (zx_right - zx_left) / 3
@@ -251,10 +258,11 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
 
     # Draw Batter indicator
     bat_color = (60, 70, 80)
+    bat_y = get_y(sz_top) - 120
     if stand == "R":
-        draw.text((get_x(-1.8), get_y(4.5)), "RHB", fill=bat_color, font=font_title)
+        draw.text((get_x(-0.708) - 200, bat_y), "RHB", fill=bat_color, font=font_title)
     else:
-        draw.text((get_x(1.2), get_y(4.5)), "LHB", fill=bat_color, font=font_title)
+        draw.text((get_x(0.708) + 60, bat_y), "LHB", fill=bat_color, font=font_title)
 
 
 
@@ -267,7 +275,7 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
         color = get_color_for_desc(p.description)
         
         # Draw circle
-        r = 35
+        r = ball_r
         draw.ellipse([px-r, py-r, px+r, py+r], fill=color, outline=(255, 255, 255), width=4)
         
         # Draw number
