@@ -10,6 +10,8 @@ from discord import app_commands
 from discord.ext import commands
 from PIL import Image
 
+from core.visualizer import generate_intraday_chart
+
 
 MAP_ZOOM = 8     # base map zoom — each tile ~155km
 RADAR_ZOOM = 7   # max zoom level RainViewer radar supports
@@ -111,6 +113,35 @@ class ExtendedSlash(commands.Cog):
                 return []
         return []
 
+    async def _intraday_chart(self, session, symbol: str) -> io.BytesIO | None:
+        """Build an intraday price chart from Yahoo's 5-minute chart data."""
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/"
+            f"{urllib.parse.quote(symbol)}?interval=5m&range=1d&includePrePost=false"
+        )
+        try:
+            async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json(content_type=None)
+            result = (data.get("chart", {}).get("result") or [None])[0]
+            if not result:
+                return None
+            meta = result.get("meta", {})
+            timestamps = result.get("timestamp") or []
+            closes = (result.get("indicators", {}).get("quote") or [{}])[0].get("close") or []
+            points = [(ts, c) for ts, c in zip(timestamps, closes) if c is not None]
+            prev_close = meta.get("chartPreviousClose")
+            if len(points) < 2 or prev_close is None:
+                return None
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None, generate_intraday_chart, points, prev_close, meta.get("gmtoffset", 0)
+            )
+        except Exception as e:
+            print(f"[stock] intraday chart error for {symbol}: {e}")
+            return None
+
     @app_commands.command(name="stock", description="Stock quote for a ticker, or the major indexes if omitted")
     @app_commands.describe(ticker="Ticker symbol (e.g. AAPL); omit for Dow/S&P 500/Nasdaq")
     async def stock(self, interaction: discord.Interaction, ticker: str = None):
@@ -156,7 +187,12 @@ class ExtendedSlash(commands.Cog):
                 description=f"```{chr(10).join(lines)}```",
                 color=discord.Color.green() if change >= 0 else discord.Color.red(),
             )
-            await interaction.followup.send(embed=embed)
+            chart = await self._intraday_chart(session, symbol)
+            if chart:
+                embed.set_image(url="attachment://chart.png")
+                await interaction.followup.send(embed=embed, file=discord.File(chart, filename="chart.png"))
+            else:
+                await interaction.followup.send(embed=embed)
             return
 
         # No ticker — summary of the major indexes
