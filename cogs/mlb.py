@@ -2,6 +2,7 @@ from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_co
 import io
 import asyncio
 import dataclasses
+import traceback
 import discord
 from typing import List, Optional, Union, Dict
 
@@ -11,6 +12,8 @@ from datetime import datetime, timedelta
 
 
 from core.utils import parse_date, et_now
+from core.mlb_client import (PERCENTILE_DISPLAY_NAMES, BATTER_PERCENTILE_CATEGORIES,
+                             PITCHER_PERCENTILE_CATEGORIES)
 
 class PlayerAbsView(discord.ui.View):
     def __init__(self, cog, player_id: str, date: str, milb: bool):
@@ -104,6 +107,23 @@ class MLBSlash(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """Fallback for any slash command that raises — log it and tell the user
+        instead of leaving the interaction hanging on 'thinking…'."""
+        original = getattr(error, "original", error)
+        cmd = interaction.command.qualified_name if interaction.command else "?"
+        print(f"[mlb] error in /{cmd}: {original!r}")
+        traceback.print_exception(type(original), original, original.__traceback__)
+
+        msg = f"Error running `/{cmd}`: `{type(original).__name__}: {original}`"
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg)
+            else:
+                await interaction.response.send_message(msg)
+        except discord.HTTPException:
+            pass
+
     # Create a slash command group: /mlb
     mlb = app_commands.Group(name="mlb", description="MLB stats and scores commands")
     milb = app_commands.Group(name="milb", description="MiLB stats and scores commands")
@@ -114,18 +134,21 @@ class MLBSlash(commands.Cog):
     @app_commands.describe(player="The player to search for")
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
     async def line(self, interaction: discord.Interaction, player: str, date: str = None):
+        # Because we linked autocomplete below, "player" will typically contain the exact Player ID
+        await self._send_player_line(interaction, player, date, milb=False)
+
+    async def _send_player_line(self, interaction: discord.Interaction, player: str, date: str, milb: bool):
         await interaction.response.defer()
         parsed_date = parse_date(date)
 
-        # Because we linked autocomplete below, "player" will typically contain the exact Player ID
-        stats_list = await self.bot.mlb_client.get_player_game_stats(player, date=parsed_date)
+        stats_list = await self.bot.mlb_client.get_player_game_stats(player, date=parsed_date, milb=milb)
 
         if not stats_list:
-            await interaction.followup.send("Could not find stats for that player.")
+            await interaction.followup.send(f"Could not find stats for that {'minor league ' if milb else ''}player.")
             return
 
         embed = discord.Embed(color=discord.Color.blue())
-        
+
         if len(stats_list) == 1:
             stats = stats_list[0]
             embed.title = f"{stats.player_name} ({stats.team_abbrev}) {stats.date} {'vs' if stats.is_home else '@'} {stats.opp_abbrev}"
@@ -136,25 +159,22 @@ class MLBSlash(commands.Cog):
             for i, s in enumerate(stats_list, 1):
                 name = f"Game {i}: {'vs' if s.is_home else '@'} {s.opp_abbrev}"
                 embed.add_field(name=name, value=f"```python\n{s.format_discord_code_block()}\n```", inline=False)
-                
+
         if stats_list[0].headshot_url:
             embed.set_thumbnail(url=stats_list[0].headshot_url)
-        
-        # Add button if any game had batting stats AND no pitching stats (for pitchers, we skip ABs view)
+
+        # "Show At-Bats" button when batting stats exist (MLB: skipped for pitchers' lines)
         view = None
         has_pitching = any(s.pitching_stats is not None for s in stats_list if not s.info_message)
         has_batting = any(s.batting_stats is not None for s in stats_list if not s.info_message)
-        
-        if has_batting and not has_pitching:
+        if has_batting and (milb or not has_pitching):
             first = stats_list[0]
-            view = PlayerAbsView(self, first.player_id, first.date, milb=False)
+            view = PlayerAbsView(self, first.player_id, first.date, milb=milb)
 
-                
         if view:
             await interaction.followup.send(embed=embed, view=view)
         else:
             await interaction.followup.send(embed=embed)
-
 
 
     @line.autocomplete('player')
@@ -501,9 +521,12 @@ class MLBSlash(commands.Cog):
     @app_commands.describe(player="The player to search for", games="Number of games to show (default: 5)", date="Show N games on or before this date (e.g. 4/7/26, yesterday)")
     @app_commands.autocomplete(player=player_autocomplete)
     async def log(self, interaction: discord.Interaction, player: str, games: int = 5, date: str = None):
+        await self._send_player_log(interaction, player, games, date, milb=False)
+
+    async def _send_player_log(self, interaction: discord.Interaction, player: str, games: int, date: str, milb: bool):
         await interaction.response.defer()
         parsed_date = parse_date(date) if date else None
-        log_data = await self.bot.mlb_client.get_player_game_log(player, n=games, before_date=parsed_date)
+        log_data = await self.bot.mlb_client.get_player_game_log(player, n=games, before_date=parsed_date, milb=milb)
 
         if not log_data:
             await interaction.followup.send("Could not find stats for that player.")
@@ -604,48 +627,17 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send(f"No Savant data found for **{player2}**.")
             return
 
+        # Shared labels, with longer variants where the comparison image has room
         display_names = {
-            "exit_velocity_avg":        "Avg EV",
-            "barrel_batted_rate":       "Barrel %",
-            "hard_hit_percent":         "Hard-Hit %",
-            "xwoba":                    "xwOBA",
-            "xba":                      "xBA",
-            "xslg":                     "xSLG",
-            "sweet_spot_percent":       "Sweet-Spot %",
-            "k_percent":                "K %",
-            "bb_percent":               "BB %",
-            "whiff_percent":            "Whiff %",
-            "chase_percent":            "Chase %",
-            "sprint_speed":             "Sprint Speed",
-            "oaa":                      "Range (OAA)",
-            "framing":                  "Framing",
-            "runner_run_value":         "Baserunning",
-            "fielding_run_value":       "Fielding",
-            "batting_run_value":        "Batting",
-            "launch_angle_avg":         "Avg LA",
-            "groundballs_percent":      "GB %",
-            "xera":                     "xERA",
-            "pitch_run_value_fastball": "Fastball",
-            "pitch_run_value_breaking": "Breaking Ball",
-            "pitch_run_value_offspeed": "Offspeed",
+            **PERCENTILE_DISPLAY_NAMES,
+            "sprint_speed":     "Sprint Speed",
+            "oaa":              "Range (OAA)",
+            "runner_run_value": "Baserunning",
         }
-
-        batter_categories = [
-            ("Run Value",            ["batting_run_value", "runner_run_value", "fielding_run_value"]),
-            ("Batting",              ["xwoba", "xba", "xslg", "exit_velocity_avg", "barrel_batted_rate",
-                                      "hard_hit_percent", "sweet_spot_percent", "whiff_percent",
-                                      "chase_percent", "k_percent", "bb_percent"]),
-            ("Fielding and Running", ["oaa", "framing", "sprint_speed"]),
-        ]
-        pitcher_categories = [
-            ("Pitch Values",     ["pitch_run_value_fastball", "pitch_run_value_breaking", "pitch_run_value_offspeed"]),
-            ("Contact Quality",  ["barrel_batted_rate", "exit_velocity_avg", "launch_angle_avg", "groundballs_percent", "xwoba", "xera"]),
-            ("Plate Discipline", ["k_percent", "bb_percent", "whiff_percent", "chase_percent"]),
-        ]
 
         # Use p1's stat_type to pick category layout; warn if they differ
         stat_type = p1_data.stat_type
-        category_list = batter_categories if stat_type == "Batter" else pitcher_categories
+        category_list = BATTER_PERCENTILE_CATEGORIES if stat_type == "Batter" else PITCHER_PERCENTILE_CATEGORIES
 
         p1_lookup = {row['stat']: row for row in p1_data.percentiles}
         p2_lookup = {row['stat']: row for row in p2_data.percentiles}
@@ -1312,12 +1304,14 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="Pitching", value="pitching")
     ])
     async def last_games(self, interaction: discord.Interaction, player: str, games: int = 10, days: int = None, stat_type: app_commands.Choice[str] = None):
+        await self._send_player_last(interaction, player, games, days, stat_type, milb=False)
 
+    async def _send_player_last(self, interaction: discord.Interaction, player: str, games: int, days, stat_type, milb: bool):
         await interaction.response.defer()
         num_games = max(1, min(50, games))
         s_type = stat_type.value if stat_type else None
 
-        stats_list = await self.bot.mlb_client.get_player_last_games(player, num_games=num_games, stat_type=s_type, days=days)
+        stats_list = await self.bot.mlb_client.get_player_last_games(player, num_games=num_games, stat_type=s_type, milb=milb, days=days)
 
         if not stats_list:
             await interaction.followup.send("Could not find stats for that player.")
@@ -1449,40 +1443,7 @@ class MLBSlash(commands.Cog):
     @app_commands.describe(player="The minor league player to search for")
     @app_commands.describe(date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
     async def milb_line(self, interaction: discord.Interaction, player: str, date: str = None):
-        await interaction.response.defer()
-        parsed_date = parse_date(date)
-
-        stats_list = await self.bot.mlb_client.get_player_game_stats(player, date=parsed_date, milb=True)
-
-        if not stats_list:
-            await interaction.followup.send("Could not find stats for that minor league player.")
-            return
-
-        embed = discord.Embed(color=discord.Color.blue())
-        
-        if len(stats_list) == 1:
-            stats = stats_list[0]
-            embed.title = f"{stats.player_name} ({stats.team_abbrev}) {stats.date} {'vs' if stats.is_home else '@'} {stats.opp_abbrev}"
-            embed.description = f"```python\n{stats.format_discord_code_block()}\n```"
-        else:
-            stats = stats_list[0]
-            embed.title = f"{stats.player_name} ({stats.team_abbrev}) - {stats.date}"
-            for i, s in enumerate(stats_list, 1):
-                name = f"Game {i}: {'vs' if s.is_home else '@'} {s.opp_abbrev}"
-                embed.add_field(name=name, value=f"```python\n{s.format_discord_code_block()}\n```", inline=False)
-                
-        if stats_list[0].headshot_url:
-            embed.set_thumbnail(url=stats_list[0].headshot_url)
-        
-        # Add button if any game had batting stats
-        view = None
-        has_batting = any(s.batting_stats is not None for s in stats_list if not s.info_message)
-        if has_batting:
-            first = stats_list[0]
-            view = PlayerAbsView(self, first.player_id, first.date, milb=True)
-                
-        await interaction.followup.send(embed=embed, view=view)
-
+        await self._send_player_line(interaction, player, date, milb=True)
 
 
     @milb_line.autocomplete('player')
@@ -1502,20 +1463,7 @@ class MLBSlash(commands.Cog):
     @milb.command(name="log", description="Get a minor league player's last N games stat log")
     @app_commands.describe(player="The minor league player to search for", games="Number of games to show (default: 5)", date="Show N games on or before this date (e.g. 4/7/26, yesterday)")
     async def milb_log(self, interaction: discord.Interaction, player: str, games: int = 5, date: str = None):
-        await interaction.response.defer()
-        parsed_date = parse_date(date) if date else None
-        log_data = await self.bot.mlb_client.get_player_game_log(player, n=games, before_date=parsed_date, milb=True)
-
-        if not log_data:
-            await interaction.followup.send("Could not find stats for that player.")
-            return
-
-        embed = discord.Embed(
-            title=f"Last {len(log_data.rows)} Games — {log_data.player_name} ({log_data.team_abbrev})",
-            description=f"```\n{log_data.format_log()}\n```",
-            color=discord.Color.blue(),
-        )
-        await interaction.followup.send(embed=embed)
+        await self._send_player_log(interaction, player, games, date, milb=True)
 
     @milb_log.autocomplete('player')
     async def milb_log_player_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -1531,36 +1479,7 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="Pitching", value="pitching")
     ])
     async def milb_last(self, interaction: discord.Interaction, player: str, games: int = 10, days: int = None, stat_type: app_commands.Choice[str] = None):
-        await interaction.response.defer()
-        num_games = max(1, min(50, games))
-        s_type = stat_type.value if stat_type else None
-
-        stats_list = await self.bot.mlb_client.get_player_last_games(player, num_games=num_games, stat_type=s_type, milb=True, days=days)
-
-        if not stats_list:
-            await interaction.followup.send("Could not find stats for that player.")
-            return
-
-        embed = discord.Embed(color=discord.Color.blue())
-
-        first_stats = stats_list[0]
-        period_label = first_stats.years
-        if len(stats_list) > 1:
-            embed.title = f"{period_label} for {first_stats.player_name} ({first_stats.team_abbrev})"
-        else:
-            embed.title = f"{period_label} {first_stats.stat_type.capitalize()} for {first_stats.player_name} ({first_stats.team_abbrev})"
-
-        description = f"{first_stats.info_line}\n\n"
-        for st in stats_list:
-            if len(stats_list) > 1:
-                description += f"*{st.stat_type.capitalize()}*\n"
-            description += f"```python\n{st.format_discord_code_block()}\n```\n"
-
-        embed.description = description.strip()
-        if first_stats.headshot_url:
-            embed.set_thumbnail(url=first_stats.headshot_url)
-
-        await interaction.followup.send(embed=embed)
+        await self._send_player_last(interaction, player, games, days, stat_type, milb=True)
 
     @milb_last.autocomplete('player')
     async def milb_last_player_autocomplete(self, interaction: discord.Interaction, current: str):

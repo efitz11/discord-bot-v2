@@ -22,6 +22,47 @@ TEAM_ALIASES = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals",
 LEVEL_ABBREVS = {"Triple-A": "AAA", "Double-A": "AA", "High-A": "A+",
                  "Single-A": "A", "Rookie": "Rk", "Complex League": "CPX"}
 
+# Savant percentile stat keys → compact display labels
+PERCENTILE_DISPLAY_NAMES = {
+    "exit_velocity_avg":        "Avg EV",
+    "barrel_batted_rate":       "Barrel %",
+    "hard_hit_percent":         "Hard-Hit %",
+    "xwoba":                    "xwOBA",
+    "xba":                      "xBA",
+    "xslg":                     "xSLG",
+    "sweet_spot_percent":       "Sweet-Spot %",
+    "k_percent":                "K %",
+    "bb_percent":               "BB %",
+    "whiff_percent":            "Whiff %",
+    "chase_percent":            "Chase %",
+    "sprint_speed":             "Sprint",
+    "oaa":                      "OAA",
+    "framing":                  "Framing",
+    "runner_run_value":         "BsR",
+    "fielding_run_value":       "Fielding",
+    "batting_run_value":        "Batting",
+    "launch_angle_avg":         "Avg LA",
+    "groundballs_percent":      "GB %",
+    "xera":                     "xERA",
+    "pitch_run_value_fastball": "Fastball",
+    "pitch_run_value_breaking": "Breaking Ball",
+    "pitch_run_value_offspeed": "Offspeed",
+}
+
+# Savant percentile section layouts
+BATTER_PERCENTILE_CATEGORIES = [
+    ("Run Value",            ["batting_run_value", "runner_run_value", "fielding_run_value"]),
+    ("Batting",              ["xwoba", "xba", "xslg", "exit_velocity_avg", "barrel_batted_rate",
+                              "hard_hit_percent", "sweet_spot_percent", "whiff_percent",
+                              "chase_percent", "k_percent", "bb_percent"]),
+    ("Fielding and Running", ["oaa", "framing", "sprint_speed"]),
+]
+PITCHER_PERCENTILE_CATEGORIES = [
+    ("Pitch Values",     ["pitch_run_value_fastball", "pitch_run_value_breaking", "pitch_run_value_offspeed"]),
+    ("Contact Quality",  ["barrel_batted_rate", "exit_velocity_avg", "launch_angle_avg", "groundballs_percent", "xwoba", "xera"]),
+    ("Plate Discipline", ["k_percent", "bb_percent", "whiff_percent", "chase_percent"]),
+]
+
 
 def resolve_team_alias(query: str) -> str:
     q = query.lower()
@@ -650,47 +691,8 @@ class PlayerPercentiles:
             filled = round(val / 10)
             return "█" * filled + "░" * (10 - filled)
 
-        display_names = {
-            "exit_velocity_avg":        "Avg EV",
-            "barrel_batted_rate":       "Barrel %",
-            "hard_hit_percent":         "Hard-Hit %",
-            "xwoba":                    "xwOBA",
-            "xba":                      "xBA",
-            "xslg":                     "xSLG",
-            "sweet_spot_percent":       "Sweet-Spot %",
-            "k_percent":                "K %",
-            "bb_percent":               "BB %",
-            "whiff_percent":            "Whiff %",
-            "chase_percent":            "Chase %",
-            "sprint_speed":             "Sprint",
-            "oaa":                      "OAA",
-            "framing":                  "Framing",
-            "runner_run_value":         "BsR",
-            "fielding_run_value":       "Fielding",
-            "batting_run_value":        "Batting",
-            "launch_angle_avg":         "Avg LA",
-            "groundballs_percent":      "GB %",
-            "xera":                     "xERA",
-            "pitch_run_value_fastball": "Fastball",
-            "pitch_run_value_breaking": "Breaking Ball",
-            "pitch_run_value_offspeed": "Offspeed",
-        }
-
-        batter_categories = [
-            ("Run Value",    ["batting_run_value", "runner_run_value", "fielding_run_value"]),
-            ("Batting",  ["xwoba", "xba", "xslg", "exit_velocity_avg", "barrel_batted_rate",
-                          "hard_hit_percent", "sweet_spot_percent", "whiff_percent",
-                          "chase_percent", "k_percent", "bb_percent"]),
-            ("Fielding and Running", ["oaa", "framing", "sprint_speed"]),
-        ]
-
-        pitcher_categories = [
-            ("Pitch Values",     ["pitch_run_value_fastball", "pitch_run_value_breaking", "pitch_run_value_offspeed"]),
-            ("Contact Quality",  ["barrel_batted_rate", "exit_velocity_avg", "launch_angle_avg", "groundballs_percent", "xwoba", "xera"]),
-            ("Plate Discipline", ["k_percent", "bb_percent", "whiff_percent", "chase_percent"]),
-        ]
-
-        category_list = batter_categories if self.stat_type == "Batter" else pitcher_categories
+        display_names = PERCENTILE_DISPLAY_NAMES
+        category_list = BATTER_PERCENTILE_CATEGORIES if self.stat_type == "Batter" else PITCHER_PERCENTILE_CATEGORIES
         stat_lookup = {row['stat']: row for row in self.percentiles}
         assigned_stats = set()
 
