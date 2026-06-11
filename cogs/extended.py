@@ -163,11 +163,29 @@ class ExtendedSlash(commands.Cog):
             pct = q.get("regularMarketChangePercent", 0.0)
 
             tz = timezone(timedelta(seconds=q.get("gmtOffSetMilliseconds", 0) / 1000))
-            ts = datetime.fromtimestamp(q["regularMarketTime"], tz=tz).strftime("%Y-%m-%d %H:%M:%S") \
-                if q.get("regularMarketTime") else "?"
 
-            lines = [
-                f"Market Hours: {price:,.2f} ({change:+,.2f}, {pct:+.2f}%) ({ts})",
+            def quote_line(label: str, prefix: str) -> str | None:
+                p = q.get(f"{prefix}Price")
+                if p is None:
+                    return None
+                t = q.get(f"{prefix}Time")
+                ts = datetime.fromtimestamp(t, tz=tz).strftime("%Y-%m-%d %H:%M:%S") if t else "?"
+                return (
+                    f"{label}: {p:,.2f} ({q.get(f'{prefix}Change', 0.0):+,.2f},"
+                    f" {q.get(f'{prefix}ChangePercent', 0.0):+.2f}%) ({ts})"
+                )
+
+            state = q.get("marketState", "")
+            lines = [quote_line("Market Hours", "regularMarket")]
+            if state.startswith("PRE"):
+                pre = quote_line("Premarket", "preMarket")
+                if pre:
+                    lines.insert(0, pre)
+            elif state.startswith("POST") or state == "CLOSED":
+                post = quote_line("After Hours", "postMarket")
+                if post:
+                    lines.insert(0, post)
+            lines += [
                 f"Day volume: {_abbrev_number(q.get('regularMarketVolume'))}"
                 f" ({_abbrev_number(q.get('averageDailyVolume10Day'))} 10 day avg)",
                 f"Day range: {q.get('regularMarketDayLow', 0):,.2f} - {q.get('regularMarketDayHigh', 0):,.2f}",
