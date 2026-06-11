@@ -10,7 +10,7 @@ from discord.ext import commands
 from datetime import datetime, timedelta
 
 
-from core.utils import parse_date
+from core.utils import parse_date, et_now
 
 class PlayerAbsView(discord.ui.View):
     def __init__(self, cog, player_id: str, date: str, milb: bool):
@@ -1176,10 +1176,9 @@ class MLBSlash(commands.Cog):
 
         if first_stats.birth_date:
             try:
-                from datetime import datetime, timezone, timedelta
-                et_now = datetime.now(timezone.utc) - timedelta(hours=5)
+                now_et = et_now()
                 bd = datetime.strptime(first_stats.birth_date, "%Y-%m-%d")
-                if et_now.month == bd.month and et_now.day == bd.day:
+                if now_et.month == bd.month and now_et.day == bd.day:
                     description += "🎂 Happy Birthday 🎂\n\n"
             except Exception:
                 pass
@@ -1662,7 +1661,7 @@ class MLBSlash(commands.Cog):
                 break
 
         if len(choices) < 25:
-            season = str(__import__('datetime').datetime.now().year)
+            season = str(datetime.now().year)
             async with session.get(f"{self.bot.mlb_client.BASE_URL}/teams?sportIds=11,12,13,14,15&season={season}") as resp:
                 milb_data = await resp.json()
             for t in milb_data.get('teams', []):
@@ -1748,13 +1747,8 @@ class MLBSlash(commands.Cog):
         return matches[:25]
 
     async def _send_player_abs(self, interaction: discord.Interaction, player: str, date: str, milb: bool, edit_original: bool = False):
-        if edit_original:
-            await interaction.response.defer()
-        else:
-            await interaction.response.defer()
-        
+        await interaction.response.defer()
         parsed_date = parse_date(date)
-
 
         stats_list = await self.bot.mlb_client.get_player_game_stats(player, date=parsed_date, milb=milb, include_abs=True)
 
@@ -1841,15 +1835,12 @@ class MLBSlash(commands.Cog):
             view = PitchPlotView(self, stats_list[0].player_id, stats_list[0].date, inning_labels)
 
 
+        kwargs = {"embeds": embeds}
+        if view is not None:
+            kwargs["view"] = view
         if edit_original:
-            kwargs = {"embeds": embeds}
-            if view is not None:
-                kwargs["view"] = view
             await interaction.edit_original_response(**kwargs)
         else:
-            kwargs = {"embeds": embeds}
-            if view is not None:
-                kwargs["view"] = view
             await interaction.followup.send(**kwargs)
 
 

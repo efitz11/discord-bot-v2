@@ -6,6 +6,14 @@ from dataclasses import dataclass
 from typing import List, Optional
 from datetime import datetime, timedelta
 
+from core.utils import et_now, utc_to_et
+
+# Pitchers always flagged 💩 in /mlb bullpen, as (last_name, team_abbrev) pairs
+BAD_PITCHERS = {
+    ('parker', 'wsh'),
+    ('littell', 'wsh'),
+}
+
 def _bold_play_description(desc: str, play: dict) -> str:
     if not desc or not play:
         return desc
@@ -234,8 +242,7 @@ class Game:
         
         if 'gameDate' in data:
             try:
-                dt = datetime.strptime(data['gameDate'], "%Y-%m-%dT%H:%M:%SZ")
-                dt = dt - timedelta(hours=4)  # ET offset for baseball season
+                dt = utc_to_et(datetime.strptime(data['gameDate'], "%Y-%m-%dT%H:%M:%SZ"))
                 game.game_time_str = dt.strftime("%I:%M").lstrip('0') + " ET"
                 fmt = "%A, %b %d, %Y" if dt.year != datetime.now().year else "%A, %b %d"
                 game.game_date_str = dt.strftime(fmt).replace(" 0", " ")
@@ -367,45 +374,6 @@ class Game:
             lines.append(line.rstrip())
 
         return '\n'.join(lines) + '\n'
-
-    def format_modern_score_line(self) -> str:
-        """A modern Discord markdown formatter for the game score."""
-        away_line = f"**{self.away.abbreviation} {self.away.score}** ({self.away.hits}H, {self.away.errors}E)"
-        home_line = f"**{self.home.abbreviation} {self.home.score}** ({self.home.hits}H, {self.home.errors}E)"
-        
-        if self.abstract_state == "Live" and self.status not in ["Delayed", "Warmup"]:
-            outs_str = (int(self.outs) * '●') + ((3 - int(self.outs)) * '○')
-            inning_half_str = "▲" if self.is_top_inning else "▼"
-            
-            bases_emojis = ""
-            bases_emojis += "⚾" if self.bases[0] == "1" else "♢"
-            bases_emojis += "⚾" if self.bases[1] == "2" else "♢"
-            bases_emojis += "⚾" if self.bases[2] == "3" else "♢"
-            
-            pitcher_str = f"**P:** {self.pitcher}" + (f" ({self.pitch_count}P)" if self.pitch_count > 0 else "")
-            batter_str = f"**B:** {self.batter}"
-            
-            output = f"{away_line} @ {home_line}\n"
-            output += f"**{inning_half_str} {self.inning}** | **Outs:** {outs_str} | **Count:** {self.balls}-{self.strikes} | **Bases:** {bases_emojis}\n"
-            output += f"{pitcher_str} | {batter_str}\n"
-            
-            if self.last_play_desc:
-                output += f"*{self.last_play_desc}*\n"
-                
-                pitch_info = []
-                if self.last_pitch_type:
-                    pitch_info.append(f"{self.last_pitch_type} ({self.last_pitch_speed:.1f} mph)")
-                if self.statcast_dist > 0 or self.statcast_speed > 0:
-                    pitch_info.append(f"{self.statcast_dist:.1f}ft / {self.statcast_speed:.1f}mph / {self.statcast_angle:.1f}°")
-                
-                if pitch_info:
-                    output += f"> {' | '.join(pitch_info)}"
-            return output
-        elif self.abstract_state == "Final":
-            final_str = f"Final/{self.inning}" if self.inning != 9 and self.inning > 0 else "Final"
-            return f"{away_line} @ {home_line} | **{final_str}**"
-        else:
-            return f"{away_line} @ {home_line} | **{self.status}**"
 
 @dataclass
 class Pitch:
@@ -692,7 +660,6 @@ class PitchArsenal:
             speed = f"{float(p['avg_speed'] or 0):.1f}".rjust(5)
             ba = f"{float(p['ba'] or 0):.3f}".lstrip('0').rjust(5)
             xba = f"{float(p['xba'] or 0):.3f}".lstrip('0').rjust(5)
-            rv = str(p['rv100']).rjust(6)
             lines.append(f"{name} {speed} {usage} {whiff} {k_pct}  {ba} {xba}")
 
         return "\n".join(lines)
@@ -731,20 +698,6 @@ class BatterVsPitcher:
     so: int
     avg: str
     ops: str
-
-    @property
-    def score(self) -> float:
-        """Heuristic to determine who 'owns' who."""
-        try:
-            ops_val = float(self.ops)
-        except:
-            ops_val = 0.0
-        
-        # Factor in volume - ownership needs at least a few PAs to be meaningful
-        if self.pa < 3:
-            return 0.0
-            
-        return ops_val
 
 @dataclass
 class HighlightItem:
@@ -1044,9 +997,9 @@ class BullpenData:
         day_3 = counts[-3]
         total_3 = yest + day_before + day_3
 
-        pitcher_name = row.get('name', '')
-
-        if ({'name': pitcher_name, 'team': self.team_abbrev.lower()} in pitcher_bad):
+        # boxscoreName can be "Parker" or "Parker, M" — match on the last name only
+        pitcher_last = row.get('name', '').split(',')[0].strip().lower()
+        if (pitcher_last, self.team_abbrev.lower()) in BAD_PITCHERS:
             return "💩"
         
         # 3 in a row
@@ -1326,7 +1279,7 @@ class MLBClient:
         if not team_id:
             return []
 
-        now = datetime.utcnow() - timedelta(hours=5)
+        now = et_now()
         # Use a wide 45-day window to guarantee we find enough games even with rainouts or the All-Star break
         if past:
             start_date = (now - timedelta(days=45)).strftime("%Y-%m-%d")
@@ -1534,9 +1487,7 @@ class MLBClient:
 
     async def get_recent_home_runs(self, date: str = None) -> List[dict]:
         session = await self.get_session()
-        from datetime import timezone
-        now = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=5)
-        date_str = date or now.strftime("%Y-%m-%d")
+        date_str = date or et_now().strftime("%Y-%m-%d")
 
         sched_url = f"{self.BASE_URL}/schedule?sportId=1&date={date_str}&hydrate=team"
         async with session.get(sched_url) as resp:
@@ -2608,7 +2559,7 @@ class MLBClient:
             
         if not statcast_data: return None
         
-        target_year = str(year) if year else str(datetime.utcnow().year)
+        target_year = str(year) if year else str(et_now().year)
         
         year_stats = None
         for sm_dict in statcast_data:
@@ -2929,7 +2880,7 @@ class MLBClient:
             return None
 
         pid = str(resolved['id'])
-        target_year = year or str(datetime.utcnow().year)
+        target_year = year or str(et_now().year)
 
         # Fetch from statcast breakdown endpoint
         pitch_data = None
@@ -3011,7 +2962,7 @@ class MLBClient:
         """Fetch a Statcast leaderboard from Baseball Savant."""
         import io, csv
         session = await self.get_session()
-        target_year = year or str(datetime.utcnow().year)
+        target_year = year or str(et_now().year)
         
         stat_labels = {
             'exit_velocity_avg': 'Avg Exit Velocity',
@@ -3105,7 +3056,7 @@ class MLBClient:
         for batter_id in all_batters:
             p_data = players.get(f'ID{batter_id}', {})
             b_stats = p_data.get('stats', {}).get('batting', {})
-            if not b_stats and 'atBats' not in b_stats:
+            if not b_stats:
                 continue
             season_stats = p_data.get('seasonStats', {}).get('batting', {})
 
@@ -3280,7 +3231,7 @@ class MLBClient:
         for batter_id in all_batters:
             p_data = players.get(f'ID{batter_id}', {})
             b_stats = p_data.get('stats', {}).get('batting', {})
-            if not b_stats and 'atBats' not in b_stats:
+            if not b_stats:
                 continue
             season_stats = p_data.get('seasonStats', {}).get('batting', {})
             name = p_data.get('person', {}).get('boxscoreName', 'Unknown')
@@ -3366,8 +3317,8 @@ class MLBClient:
         session = await self.get_session()
         
         stat_group = stat_group or "hitting"
-        season = year or datetime.utcnow().year
-        if not year and datetime.utcnow().month < 3:
+        season = year or et_now().year
+        if not year and et_now().month < 3:
             season -= 1
 
         # Use the stats/season endpoint which allows fetching a larger pool to sort manually
@@ -3488,8 +3439,8 @@ class MLBClient:
         if year:
             season = year
         else:
-            season = datetime.utcnow().year
-            if datetime.utcnow().month < 3:
+            season = et_now().year
+            if et_now().month < 3:
                 season -= 1
             
         url = f"{self.BASE_URL}/teams/stats?season={season}&sportId=1&group={stat_group}&stats=season"
@@ -3543,7 +3494,7 @@ class MLBClient:
         if not team_id:
             return None
 
-        now = datetime.utcnow() - timedelta(hours=5)
+        now = et_now()
         # Look 6 days back and 3 days ahead for starters
         start_date = (now - timedelta(days=6)).strftime("%Y-%m-%d")
         end_date = (now + timedelta(days=3)).strftime("%Y-%m-%d")
@@ -3918,8 +3869,7 @@ class MLBClient:
         url = f"{self.BASE_URL}/schedule?sportId=1&hydrate=team,linescore(matchup,runners),previousPlay,person,stats,lineups,probablePitcher,decisions,flags"
         if date:
             url += f"&date={date}"
-        print(url)  # Debug: Print the URL being requested
-        
+
         async with session.get(url) as resp:
             resp.raise_for_status()
             data = await resp.json()
@@ -4169,7 +4119,7 @@ class MLBClient:
             return None
 
         if year is None:
-            year = (datetime.utcnow() - timedelta(hours=5)).year
+            year = et_now().year
 
         session = await self.get_session()
         url = (
@@ -4246,8 +4196,7 @@ class MLBClient:
         session = await self.get_session()
 
         if date_str is None:
-            et_now = datetime.utcnow() - timedelta(hours=4)
-            date_str = (et_now - timedelta(days=1)).strftime("%Y-%m-%d")
+            date_str = (et_now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
         url = f"{self.BASE_URL}/schedule?sportId=1&date={date_str}&hydrate=team"
         async with session.get(url) as resp:
@@ -4613,10 +4562,3 @@ class MLBClient:
             "hitters":  hitters[:7],
             "pitchers": pitchers[:3],
         }
-
-
-pitcher_bad = [{
-    'name': 'Parker', 'team': 'wsh'
-}, {
-    'name': 'Littell', 'team': 'wsh'
-}]

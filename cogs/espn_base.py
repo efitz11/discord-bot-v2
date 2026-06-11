@@ -2,10 +2,8 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from datetime import datetime, timedelta
-from core.utils import parse_date
-
-ET_OFFSET = timedelta(hours=4)
+from datetime import datetime
+from core.utils import parse_date, et_now, utc_to_et
 
 ESPN_BASE     = "https://site.api.espn.com/apis/site/v2/sports"
 ESPN_WEB_BASE = "https://site.web.api.espn.com/apis/site/v2/sports"
@@ -16,7 +14,7 @@ FINAL_STATUSES = {"STATUS_FINAL", "STATUS_FINAL_OT", "STATUS_FINAL_SHOOTOUT"}
 def _utc_to_et(iso_str: str) -> datetime | None:
     for fmt in ("%Y-%m-%dT%H:%MZ", "%Y-%m-%dT%H:%M:%SZ"):
         try:
-            return datetime.strptime(iso_str, fmt) - ET_OFFSET
+            return utc_to_et(datetime.strptime(iso_str, fmt))
         except ValueError:
             continue
     return None
@@ -216,7 +214,7 @@ class ESPNCog(commands.Cog):
             if date_str:
                 d = datetime.strptime(date_str, "%Y-%m-%d")
             else:
-                d = datetime.utcnow() - ET_OFFSET
+                d = et_now()
             date_label = d.strftime("%A, %B %-d, %Y")
             await interaction.followup.send(embed=discord.Embed(
                 title=f"{self.SPORT} Scores — {date_label}",
