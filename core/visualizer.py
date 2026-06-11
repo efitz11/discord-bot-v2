@@ -599,3 +599,105 @@ def generate_rolling_xwoba_chart(
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
+
+
+def generate_intraday_chart(
+    points: list,
+    prev_close: float,
+    tz_offset_secs: int = 0,
+) -> io.BytesIO:
+    """Render an intraday price line chart vs. previous close.
+
+    points: chronologically ordered list of (unix_ts, price)
+    """
+    from datetime import datetime, timezone, timedelta
+
+    W, H = 720, 300
+    PAD_T = 16
+    PAD_B = 28
+    PAD_L = 14
+    PAD_R = 64   # room for y-axis price labels
+
+    plot_w = W - PAD_L - PAD_R
+    plot_h = H - PAD_T - PAD_B
+
+    prices = [p for _, p in points]
+    up = prices[-1] >= prev_close
+
+    BG       = (30, 31, 34)        # Discord dark theme background
+    LINE_COL = (35, 197, 94) if up else (239, 68, 68)
+    FILL_COL = (35, 197, 94, 40) if up else (239, 68, 68, 40)
+    PREV_COL = (150, 150, 150)
+    GRID_COL = (55, 57, 62)
+    DIM_COL  = (160, 160, 165)
+
+    f_axis = _dv("DejaVuSans.ttf", 11)
+
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    # Y range — include prev_close, pad 5%
+    lo = min(min(prices), prev_close)
+    hi = max(max(prices), prev_close)
+    span = (hi - lo) or max(hi * 0.01, 0.01)
+    lo -= span * 0.05
+    hi += span * 0.05
+
+    t0, t1 = points[0][0], points[-1][0]
+    t_span = max(t1 - t0, 1)
+
+    def xp(ts):
+        return PAD_L + (ts - t0) / t_span * plot_w
+
+    def yp(v):
+        return PAD_T + plot_h - (v - lo) / (hi - lo) * plot_h
+
+    # Horizontal grid + price labels at ~5 nice levels
+    step = span / 4
+    mag = 10 ** math.floor(math.log10(step))
+    for nice in (1, 2, 2.5, 5, 10):
+        if mag * nice >= step:
+            step = mag * nice
+            break
+    gv = math.ceil(lo / step) * step
+    while gv <= hi:
+        y = yp(gv)
+        draw.line([(PAD_L, y), (PAD_L + plot_w, y)], fill=GRID_COL, width=1)
+        draw.text((PAD_L + plot_w + 6, y), f"{gv:,.2f}", font=f_axis, fill=DIM_COL, anchor="lm")
+        gv += step
+
+    # X-axis hour labels in exchange-local time
+    tz = timezone(timedelta(seconds=tz_offset_secs))
+    first_dt = datetime.fromtimestamp(t0, tz=tz)
+    hour_dt = first_dt.replace(minute=0, second=0, microsecond=0)
+    if hour_dt < first_dt:
+        hour_dt += timedelta(hours=1)
+    while hour_dt.timestamp() <= t1:
+        x = xp(hour_dt.timestamp())
+        draw.line([(x, PAD_T), (x, PAD_T + plot_h)], fill=GRID_COL, width=1)
+        label = hour_dt.strftime("%I%p").lstrip("0").lower()
+        draw.text((x, PAD_T + plot_h + 6), label, font=f_axis, fill=DIM_COL, anchor="ma")
+        hour_dt += timedelta(hours=1)
+
+    # Previous-close dashed baseline
+    py = yp(prev_close)
+    x = PAD_L
+    while x < PAD_L + plot_w:
+        draw.line([(x, py), (min(x + 6, PAD_L + plot_w), py)], fill=PREV_COL, width=1)
+        x += 11
+
+    # Filled area between line and baseline, then the price line on top
+    line_pts = [(xp(ts), yp(p)) for ts, p in points]
+    if len(line_pts) > 1:
+        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        odraw = ImageDraw.Draw(overlay)
+        odraw.polygon(line_pts + [(line_pts[-1][0], py), (line_pts[0][0], py)], fill=FILL_COL)
+        img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"), (0, 0))
+        draw.line(line_pts, fill=LINE_COL, width=2)
+        lx, ly = line_pts[-1]
+        draw.ellipse([lx - 3, ly - 3, lx + 3, ly + 3], fill=LINE_COL)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf

@@ -3,12 +3,14 @@ import math
 import asyncio
 import os
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 from PIL import Image
+
+from core.visualizer import generate_intraday_chart
 
 
 MAP_ZOOM = 8     # base map zoom — each tile ~155km
@@ -26,6 +28,23 @@ def _lat_lon_to_pixel(lat: float, lon: float, zoom: int) -> tuple[float, float]:
     gx = (lon + 180.0) / 360.0 * n * TILE_SIZE
     gy = (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi) / 2.0 * n * TILE_SIZE
     return gx, gy
+
+
+STOCK_INDEXES = [
+    ("^DJI", "Dow Jones"),
+    ("^GSPC", "S&P 500"),
+    ("^IXIC", "Nasdaq"),
+]
+
+
+def _abbrev_number(n) -> str:
+    """1234567890 -> '1.2B'"""
+    if n is None:
+        return "-"
+    for div, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(n) >= div:
+            return f"{n / div:.1f}{suffix}"
+    return f"{n:,.0f}"
 
 
 def _desc_to_icon(d: str) -> str:
@@ -49,6 +68,155 @@ class ExtendedSlash(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+
+    async def _yahoo_crumb(self, session, force: bool = False) -> tuple[str, str] | None:
+        """Yahoo quote API needs a session cookie + crumb token; cache them."""
+        if not force and getattr(self, "_crumb_cache", None):
+            return self._crumb_cache
+        try:
+            async with session.get("https://fc.yahoo.com", headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                cookie = resp.headers.get("Set-Cookie", "").split(";")[0]
+            if not cookie:
+                return None
+            async with session.get(
+                "https://query1.finance.yahoo.com/v1/test/getcrumb",
+                headers={"User-Agent": "Mozilla/5.0", "Cookie": cookie},
+            ) as resp:
+                crumb = (await resp.text()).strip()
+            if not crumb or "<" in crumb:
+                return None
+        except Exception:
+            return None
+        self._crumb_cache = (cookie, crumb)
+        return self._crumb_cache
+
+    async def _fetch_quotes(self, session, symbols: list[str]) -> list[dict]:
+        """Fetch quotes from Yahoo Finance's v7 quote endpoint (free, no API key)."""
+        for attempt in range(2):
+            auth = await self._yahoo_crumb(session, force=attempt > 0)
+            if not auth:
+                return []
+            cookie, crumb = auth
+            url = (
+                "https://query1.finance.yahoo.com/v7/finance/quote"
+                f"?symbols={urllib.parse.quote(','.join(symbols))}&crumb={urllib.parse.quote(crumb)}"
+            )
+            try:
+                async with session.get(url, headers={"User-Agent": "Mozilla/5.0", "Cookie": cookie}) as resp:
+                    if resp.status in (401, 403):  # stale crumb — refresh and retry once
+                        continue
+                    if resp.status != 200:
+                        return []
+                    data = await resp.json(content_type=None)
+                return data.get("quoteResponse", {}).get("result") or []
+            except Exception:
+                return []
+        return []
+
+    async def _intraday_chart(self, session, symbol: str) -> io.BytesIO | None:
+        """Build an intraday price chart from Yahoo's 5-minute chart data."""
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/"
+            f"{urllib.parse.quote(symbol)}?interval=5m&range=1d&includePrePost=false"
+        )
+        try:
+            async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json(content_type=None)
+            result = (data.get("chart", {}).get("result") or [None])[0]
+            if not result:
+                return None
+            meta = result.get("meta", {})
+            timestamps = result.get("timestamp") or []
+            closes = (result.get("indicators", {}).get("quote") or [{}])[0].get("close") or []
+            points = [(ts, c) for ts, c in zip(timestamps, closes) if c is not None]
+            prev_close = meta.get("chartPreviousClose")
+            if len(points) < 2 or prev_close is None:
+                return None
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None, generate_intraday_chart, points, prev_close, meta.get("gmtoffset", 0)
+            )
+        except Exception as e:
+            print(f"[stock] intraday chart error for {symbol}: {e}")
+            return None
+
+    @app_commands.command(name="stock", description="Stock quote for a ticker, or the major indexes if omitted")
+    @app_commands.describe(ticker="Ticker symbol (e.g. AAPL); omit for Dow/S&P 500/Nasdaq")
+    async def stock(self, interaction: discord.Interaction, ticker: str = None):
+        await interaction.response.defer()
+
+        session = await self.bot.mlb_client.get_session()
+
+        if ticker:
+            symbol = ticker.strip().upper()
+            quotes = await self._fetch_quotes(session, [symbol])
+            if not quotes or quotes[0].get("regularMarketPrice") is None:
+                await interaction.followup.send(f"Could not find a quote for **{symbol}**.")
+                return
+            q = quotes[0]
+            symbol = q.get("symbol", symbol)
+            name = q.get("longName") or q.get("shortName") or symbol
+            price = q["regularMarketPrice"]
+            change = q.get("regularMarketChange", 0.0)
+            pct = q.get("regularMarketChangePercent", 0.0)
+
+            tz = timezone(timedelta(seconds=q.get("gmtOffSetMilliseconds", 0) / 1000))
+            ts = datetime.fromtimestamp(q["regularMarketTime"], tz=tz).strftime("%Y-%m-%d %H:%M:%S") \
+                if q.get("regularMarketTime") else "?"
+
+            lines = [
+                f"Market Hours: {price:,.2f} ({change:+,.2f}, {pct:+.2f}%) ({ts})",
+                f"Day volume: {_abbrev_number(q.get('regularMarketVolume'))}"
+                f" ({_abbrev_number(q.get('averageDailyVolume10Day'))} 10 day avg)",
+                f"Day range: {q.get('regularMarketDayLow', 0):,.2f} - {q.get('regularMarketDayHigh', 0):,.2f}",
+                f"52w range: {q.get('fiftyTwoWeekLow', 0):,.2f} - {q.get('fiftyTwoWeekHigh', 0):,.2f}",
+            ]
+            last = []
+            if q.get("marketCap") is not None:
+                last.append(f"Market Cap: {_abbrev_number(q['marketCap'])}")
+            if q.get("trailingPE") is not None:
+                last.append(f"P/E: {q['trailingPE']:.2f}")
+            if last:
+                lines.append(", ".join(last))
+
+            embed = discord.Embed(
+                title=f"{name} ({symbol})",
+                url=f"https://finance.yahoo.com/quote/{urllib.parse.quote(symbol)}",
+                description=f"```{chr(10).join(lines)}```",
+                color=discord.Color.green() if change >= 0 else discord.Color.red(),
+            )
+            chart = await self._intraday_chart(session, symbol)
+            if chart:
+                embed.set_image(url="attachment://chart.png")
+                await interaction.followup.send(embed=embed, file=discord.File(chart, filename="chart.png"))
+            else:
+                await interaction.followup.send(embed=embed)
+            return
+
+        # No ticker — summary of the major indexes
+        quotes = await self._fetch_quotes(session, [sym for sym, _ in STOCK_INDEXES])
+        by_symbol = {q.get("symbol"): q for q in quotes}
+        lines = []
+        for sym, label in STOCK_INDEXES:
+            q = by_symbol.get(sym)
+            if not q or q.get("regularMarketPrice") is None:
+                continue
+            lines.append(
+                f"{label:<10}{q['regularMarketPrice']:>12,.2f}"
+                f"{q.get('regularMarketChangePercent', 0.0):>+8.2f}%"
+            )
+        if not lines:
+            await interaction.followup.send("Could not fetch index data right now.")
+            return
+
+        embed = discord.Embed(
+            title="📊 Market Summary",
+            description=f"```{chr(10).join(lines)}```",
+            color=discord.Color.blurple(),
+        )
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="weather", description="Get the current weather for a location")
     @app_commands.describe(location="City, zip code, or address (e.g. Washington DC, 20001)")
