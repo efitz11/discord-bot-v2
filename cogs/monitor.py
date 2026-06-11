@@ -29,6 +29,8 @@ from zoneinfo import ZoneInfo
 import discord
 from discord.ext import commands, tasks
 
+from core.mlb_client import extract_highlight_videos, format_table, parse_hr_number, LEVEL_ABBREVS
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────────────────────────
@@ -309,8 +311,7 @@ class MonitorCog(commands.Cog):
         session = await client.get_session()
         milb_teams = await client.get_milb_teams()
 
-        _level_abbrev = {"Triple-A": "AAA", "Double-A": "AA", "High-A": "A+", "Single-A": "A", "Rookie": "Rk"}
-        affiliate_ids = {t['id']: _level_abbrev.get(t.get('level', ''), t.get('level', ''))
+        affiliate_ids = {t['id']: LEVEL_ABBREVS.get(t.get('level', ''), t.get('level', ''))
                          for t in milb_teams if t.get('parent_abbrev', '').upper() == fav_team.upper()}
         if not affiliate_ids:
             return
@@ -555,22 +556,7 @@ class MonitorCog(commands.Cog):
             return ""
         labels  = ["pitcher", "ip", "bb", "so", "np"]
         headers = {"pitcher": "PITCHER", "ip": "IP", "bb": "BB", "so": "SO", "np": "NP"}
-        widths  = {k: len(v) for k, v in headers.items()}
-        for row in pitchers:
-            for k in labels:
-                widths[k] = max(widths[k], len(str(row.get(k, ""))))
-        def fmt_row(row):
-            return " ".join(
-                str(row.get(k, "")).ljust(widths[k]) if k == "pitcher"
-                else str(row.get(k, "")).rjust(widths[k])
-                for k in labels
-            )
-        header = " ".join(
-            headers[k].ljust(widths[k]) if k == "pitcher"
-            else headers[k].rjust(widths[k])
-            for k in labels
-        )
-        return header + "\n" + "\n".join(fmt_row(r) for r in pitchers)
+        return format_table(labels, pitchers, headers, {"pitcher"})
 
     @staticmethod
     def _nh_remaining_delay(feed: dict) -> float:
@@ -1090,13 +1076,7 @@ class MonitorCog(commands.Cog):
                 self._hr_posted.add(hr_key)  # mark so we don't recheck each poll
                 continue
 
-            hr_num = 0
-            for keyword in ("grand slam", "home run", "homers"):
-                if keyword in desc:
-                    m = re.search(r'\((\d+)\)', desc[desc.index(keyword):])
-                    if m:
-                        hr_num = int(m.group(1))
-                    break
+            hr_num = parse_hr_number(desc)
 
             hr_data = {
                 "batter":       batter,
@@ -1271,13 +1251,7 @@ class MonitorCog(commands.Cog):
             inn_num = about.get("inning", 0)
             batter_team  = home_abbr if half == "bottom" else away_abbr
 
-            hr_num = 0
-            for keyword in ("grand slam", "home run", "homers"):
-                if keyword in desc:
-                    m = re.search(r'\((\d+)\)', desc[desc.index(keyword):])
-                    if m:
-                        hr_num = int(m.group(1))
-                    break
+            hr_num = parse_hr_number(desc)
 
             pitcher_team = away_abbr if half == "bottom" else home_abbr
 
@@ -1318,16 +1292,7 @@ class MonitorCog(commands.Cog):
 
         if pending_here:
             content_data = await self._fetch_content(game_pk)
-            content_dict = {}
-            for item in (((content_data or {}).get("highlights") or {}).get("highlights") or {}).get("items") or []:
-                if "guid" in item:
-                    for pb in item.get("playbacks", []):
-                        if pb.get("name") == "mp4Avc":
-                            content_dict[item["guid"]] = {
-                                "url":   pb["url"],
-                                "blurb": item.get("headline", item.get("blurb", "")),
-                            }
-                            break
+            content_dict = extract_highlight_videos(content_data)
 
             savant_data = await self._fetch_savant_hr_data(game_pk)
 
@@ -1438,15 +1403,10 @@ class MonitorCog(commands.Cog):
             play_id = wo.get("play_id")
             if play_id:
                 wo_content = await self._fetch_content(game_pk)
-                for item in wo_content.get("highlights", {}).get("highlights", {}).get("items", []):
-                    if item.get("guid") == play_id:
-                        for pb in item.get("playbacks", []):
-                            if pb.get("name") == "mp4Avc":
-                                video_url   = pb["url"]
-                                video_blurb = item.get("headline", item.get("blurb", "Watch"))
-                                break
-                        if video_url:
-                            break
+                video = extract_highlight_videos(wo_content).get(play_id)
+                if video:
+                    video_url   = video["url"]
+                    video_blurb = video["blurb"] or "Watch"
 
             if video_url:
                 wo["video_url"]   = video_url

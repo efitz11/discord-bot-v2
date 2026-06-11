@@ -23,10 +23,12 @@ ENV/
 # OS generated files
 .DS_Store
 Thumbs.db
-ehthumbs.dbscratch/
+ehthumbs.db
+scratch/
 
 # Runtime state
 hr_posted.json
 nh_state.json
 summary_state.json
+walkoff_state.json
 CLAUDE.md

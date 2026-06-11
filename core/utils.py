@@ -1,10 +1,24 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+
+ET_ZONE = ZoneInfo("America/New_York")
+
+
+def et_now() -> datetime:
+    """Current US/Eastern time as a naive datetime (handles EST/EDT automatically)."""
+    return datetime.now(ET_ZONE).replace(tzinfo=None)
+
+
+def utc_to_et(dt_utc: datetime) -> datetime:
+    """Convert an aware-or-naive UTC datetime to naive US/Eastern."""
+    if dt_utc.tzinfo is None:
+        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+    return dt_utc.astimezone(ET_ZONE).replace(tzinfo=None)
 
 
 def parse_date(date_str: str) -> str | None:
     """Parse a user-supplied date string into YYYY-MM-DD (ET baseline). Returns None if blank/invalid."""
-    now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    now = et_now()
     if not date_str:
         return None
 
