@@ -14,6 +14,176 @@ BAD_PITCHERS = {
     ('littell', 'wsh'),
 }
 
+# Common team nicknames accepted anywhere a team query is typed
+TEAM_ALIASES = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals",
+                "dbacks": "diamondbacks", "barves": "braves"}
+
+# MiLB sport names → short level tags
+LEVEL_ABBREVS = {"Triple-A": "AAA", "Double-A": "AA", "High-A": "A+",
+                 "Single-A": "A", "Rookie": "Rk", "Complex League": "CPX"}
+
+
+def resolve_team_alias(query: str) -> str:
+    q = query.lower()
+    return TEAM_ALIASES.get(q, q)
+
+
+def player_headshot_url(player_id) -> str:
+    return f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
+
+
+def extract_highlight_videos(content_data: dict) -> dict:
+    """Map playId guid → {'url', 'blurb'} for mp4 highlights in a /game/{pk}/content payload."""
+    videos = {}
+    if not isinstance(content_data, dict):
+        return videos
+    items = (((content_data.get('highlights') or {}).get('highlights') or {}).get('items')) or []
+    for item in items:
+        if 'guid' not in item:
+            continue
+        for pb in item.get('playbacks', []):
+            if pb.get('name') == 'mp4Avc':
+                videos[item['guid']] = {'url': pb['url'], 'blurb': item.get('headline', item.get('blurb', ''))}
+                break
+    return videos
+
+
+def parse_hr_number(desc: str) -> int:
+    """Extract the season HR count from a play description, e.g. '... homers (12) ...'."""
+    for keyword in ('grand slam', 'home run', 'homers'):
+        if keyword in desc:
+            m = re.search(r'\((\d+)\)', desc[desc.index(keyword):])
+            return int(m.group(1)) if m else 0
+    return 0
+
+
+def format_table(labels: list, rows: list, headers: dict, left_cols: set) -> str:
+    """Fixed-width plain-text table. `headers` maps label → display name."""
+    if not rows:
+        return "No data available."
+    widths = {}
+    for label in labels:
+        widths[label] = len(headers.get(label, str(label).upper()))
+        for row in rows:
+            widths[label] = max(widths[label], len(str(row.get(label, ''))))
+
+    def fmt(label, val):
+        return val.ljust(widths[label]) if label in left_cols else val.rjust(widths[label])
+
+    lines = [' '.join(fmt(l, headers.get(l, str(l).upper())) for l in labels).rstrip()]
+    for row in rows:
+        lines.append(' '.join(fmt(l, str(row.get(l, ''))) for l in labels).rstrip())
+    return '\n'.join(lines)
+
+
+def score_hitter_line(b: dict):
+    """Weighted fantasy-style score + summary for a boxscore batting dict.
+    Returns (score, summary) or None if the player had no at-bats."""
+    if not b or b.get("atBats", 0) == 0:
+        return None
+    ab      = b.get("atBats", 0)
+    hits    = b.get("hits", 0)
+    doubles = b.get("doubles", 0)
+    triples = b.get("triples", 0)
+    hr      = b.get("homeRuns", 0)
+    singles = max(0, hits - doubles - triples - hr)
+    rbi     = b.get("rbi", 0)
+    runs    = b.get("runs", 0)
+    bb      = b.get("baseOnBalls", 0)
+    sb      = b.get("stolenBases", 0)
+
+    score = hr*4 + triples*2 + doubles*1.5 + singles*0.5 + rbi*1 + runs*0.5 + bb*0.25 + sb*1
+
+    parts = [f"{hits}-{ab}"]
+    if hr:      parts.append(f"{hr} HR")
+    if triples: parts.append(f"{triples} 3B")
+    if doubles: parts.append(f"{doubles} 2B")
+    if rbi:     parts.append(f"{rbi} RBI")
+    if runs:    parts.append(f"{runs} R")
+    if bb:      parts.append(f"{bb} BB")
+    if sb:      parts.append(f"{sb} SB")
+    return score, ", ".join(parts)
+
+
+def score_pitcher_line(p: dict):
+    """Bill James game score + summary for a boxscore pitching dict.
+    Returns (game_score, outs, summary) or None if empty."""
+    if not p:
+        return None
+    ip_str = str(p.get("inningsPitched", "0"))
+    try:
+        ip_parts = ip_str.split(".")
+        outs = int(ip_parts[0]) * 3 + (int(ip_parts[1]) if len(ip_parts) > 1 else 0)
+    except (ValueError, IndexError):
+        outs = 0
+
+    h  = p.get("hits", 0)
+    er = p.get("earnedRuns", 0)
+    ur = max(0, p.get("runs", 0) - er)
+    bb = p.get("baseOnBalls", 0)
+    k  = p.get("strikeOuts", 0)
+    full_innings = outs // 3
+
+    game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
+    return game_score, outs, f"{ip_str} IP, {er} ER, {k} K, {bb} BB"
+
+
+def collect_team_performances(team_data: dict) -> tuple:
+    """Score every batter and pitcher on one side of a boxscore.
+    Returns (hitters, pitchers): hitters = [{'name', 'score', 'summary'}],
+    pitchers = [{'name', 'score', 'outs', 'summary'}]."""
+    players = team_data.get("players", {})
+    hitters, pitchers = [], []
+    for batter_id in team_data.get("batters", []):
+        p_data = players.get(f"ID{batter_id}", {})
+        scored = score_hitter_line(p_data.get("stats", {}).get("batting", {}))
+        if scored:
+            hitters.append({
+                "name":    p_data.get("person", {}).get("fullName", "Unknown"),
+                "score":   scored[0],
+                "summary": scored[1],
+            })
+    for pitcher_id in team_data.get("pitchers", []):
+        p_data = players.get(f"ID{pitcher_id}", {})
+        scored = score_pitcher_line(p_data.get("stats", {}).get("pitching", {}))
+        if scored:
+            pitchers.append({
+                "name":    p_data.get("person", {}).get("fullName", "Unknown"),
+                "score":   scored[0],
+                "outs":    scored[1],
+                "summary": scored[2],
+            })
+    return hitters, pitchers
+
+
+def build_player_info_line(person: dict, bt_label: bool = False) -> str:
+    """Standard 'POS | B/T | height | weight | age' line for player embeds."""
+    pos = person.get('primaryPosition', {}).get('abbreviation', '')
+    age_str = ""
+    try:
+        b_dt = datetime.strptime(person.get('birthDate', '1900-01-01')[:10], "%Y-%m-%d")
+        now = datetime.now()
+        age = now.year - b_dt.year - ((now.month, now.day) < (b_dt.month, b_dt.day))
+        age_str = f"Age: {age}"
+    except ValueError:
+        pass
+    bt = f"{person.get('batSide', {}).get('code', '')}/{person.get('pitchHand', {}).get('code', '')}"
+    label = "B/T: " if bt_label else ""
+    line = f"{pos}  |  {label}{bt}  |  {person.get('height', '')}  |  {person.get('weight', '')} lbs  |  {age_str}"
+    if person.get('nickName'):
+        line += f"  |  \"{person['nickName']}\""
+    return line
+
+
+def stat_groups_for(pos: str, stat_type: Optional[str]) -> List[str]:
+    """Which stat groups to fetch for a player: explicit override, both for two-way players,
+    else pitching for pitchers / hitting for everyone else."""
+    if stat_type:
+        return [stat_type]
+    if pos == "TWP":
+        return ["hitting", "pitching"]
+    return ["pitching"] if pos == "P" else ["hitting"]
+
 def _bold_play_description(desc: str, play: dict) -> str:
     if not desc or not play:
         return desc
@@ -132,9 +302,8 @@ class Game:
             balls=ls.get('balls', 0)
         )
 
-        _sport_level_map = {"Triple-A": "AAA", "Double-A": "AA", "High-A": "A+", "Single-A": "A", "Complex League": "CPX"}
         sport_name = home_data.get('team', {}).get('sport', {}).get('name', '')
-        game.level = _sport_level_map.get(sport_name, sport_name)
+        game.level = LEVEL_ABBREVS.get(sport_name, sport_name)
 
         offense = ls.get('offense', {})
         defense = ls.get('defense', {})
@@ -346,34 +515,7 @@ class Game:
             return ""
         labels = ['pitcher', 'ip', 'bb', 'so', 'np']
         header_map = {'pitcher': 'PITCHER', 'ip': 'IP', 'bb': 'BB', 'so': 'SO', 'np': 'NP'}
-        left_cols = {'pitcher'}
-
-        widths = {}
-        for label in labels:
-            widths[label] = len(header_map[label])
-            for row in self.no_hitter_pitchers:
-                widths[label] = max(widths[label], len(str(row.get(label, ''))))
-
-        header = ''
-        for label in labels:
-            display = header_map[label]
-            if label in left_cols:
-                header += display.ljust(widths[label]) + ' '
-            else:
-                header += display.rjust(widths[label]) + ' '
-
-        lines = ['\n' + header.rstrip()]
-        for row in self.no_hitter_pitchers:
-            line = ''
-            for label in labels:
-                val = str(row.get(label, ''))
-                if label in left_cols:
-                    line += val.ljust(widths[label]) + ' '
-                else:
-                    line += val.rjust(widths[label]) + ' '
-            lines.append(line.rstrip())
-
-        return '\n'.join(lines) + '\n'
+        return '\n' + format_table(labels, self.no_hitter_pitchers, header_map, {'pitcher'}) + '\n'
 
 @dataclass
 class Pitch:
@@ -844,49 +986,15 @@ class BoxScoreData:
     game_abstract_state: str = ""
     game_date: str = ""
 
-    def _format_table(self, labels: List[str], rows: List[dict], repl: dict, left_cols: set) -> str:
-        """Generic fixed-width table formatter."""
-        if not rows:
-            return "No data available."
-
-        widths = {}
-        for label in labels:
-            widths[label] = len(repl.get(label, label.upper()))
-            for row in rows:
-                widths[label] = max(widths[label], len(str(row.get(label, ''))))
-
-        header = ''
-        for label in labels:
-            display = repl.get(label, label.upper())
-            if label in left_cols:
-                header += display.ljust(widths[label]) + ' '
-            else:
-                header += display.rjust(widths[label]) + ' '
-
-        lines = [header.rstrip()]
-        for row in rows:
-            line = ''
-            for label in labels:
-                val = str(row.get(label, ''))
-                if label in left_cols:
-                    line += val.ljust(widths[label]) + ' '
-                else:
-                    line += val.rjust(widths[label]) + ' '
-            lines.append(line.rstrip())
-
-        return '\n'.join(lines)
-
     def format_batting(self) -> str:
         labels = ['name', 'pos', 'ab', 'r', 'h', 'rbi', 'bb', 'so', 'lob', 'avg', 'obp', 'slg']
         repl = {'name': '', 'pos': '', 'ab': 'AB', 'r': 'R', 'h': 'H', 'rbi': 'RBI', 'bb': 'BB', 'so': 'SO', 'lob': 'LOB', 'avg': 'AVG', 'obp': 'OBP', 'slg': 'SLG'}
-        left_cols = {'name', 'pos'}
-        return self._format_table(labels, self.batting_rows, repl, left_cols)
+        return format_table(labels, self.batting_rows, repl, {'name', 'pos'})
 
     def format_pitching(self) -> str:
         labels = ['name', 'ip', 'h', 'r', 'er', 'bb', 'so', 'hr', 'era', 'p', 's', 'dec']
         repl = {'name': '', 'ip': 'IP', 'h': 'H', 'r': 'R', 'er': 'ER', 'bb': 'BB', 'so': 'SO', 'hr': 'HR', 'era': 'ERA', 'p': 'P', 's': 'S', 'dec': 'DEC'}
-        left_cols = {'name', 'dec'}
-        return self._format_table(labels, self.pitching_rows, repl, left_cols)
+        return format_table(labels, self.pitching_rows, repl, {'name', 'dec'})
 
     def format_notes(self) -> str:
         """Format team batting/fielding/baserunning notes."""
@@ -927,6 +1035,107 @@ class BoxScoreData:
                 output += f"**{label}**\n"
         return output.strip()
 
+def parse_box_score_side(box_data: dict, side: str) -> "BoxScoreData":
+    """Parse one team's side of a /game/{pk}/boxscore payload into a BoxScoreData.
+    Game status/date fields are left blank for the caller to fill in."""
+    team_data = box_data.get('teams', {}).get(side, {})
+    players = team_data.get('players', {})
+    team_name = team_data.get('team', {}).get('name', '')
+    team_abbrev = team_data.get('team', {}).get('abbreviation', '')
+
+    def batting_row(p_data: dict, b_stats: dict, indent: bool) -> dict:
+        season = p_data.get('seasonStats', {}).get('batting', {})
+        name = p_data.get('person', {}).get('boxscoreName', 'Unknown')
+        positions = p_data.get('allPositions', [])
+        pos = "-".join(p.get('abbreviation', '') for p in positions) if positions else p_data.get('position', {}).get('abbreviation', '')
+        return {
+            'name': (" " if indent else "") + name,  # indent substitutes
+            'pos': pos,
+            'ab': str(b_stats.get('atBats', 0)),
+            'r': str(b_stats.get('runs', 0)),
+            'h': str(b_stats.get('hits', 0)),
+            'rbi': str(b_stats.get('rbi', 0)),
+            'bb': str(b_stats.get('baseOnBalls', 0)),
+            'so': str(b_stats.get('strikeOuts', 0)),
+            'lob': str(b_stats.get('leftOnBase', 0)),
+            'avg': season.get('avg', '.000'),
+            'obp': season.get('obp', '.000'),
+            'slg': season.get('slg', '.000'),
+            'is_starter': not indent,
+        }
+
+    # ones digit of battingOrder == '0' → original starter; anything else → substitute
+    all_batters = team_data.get('batters', [])
+    starter_ids = {bid for bid in all_batters
+                   if str(players.get(f'ID{bid}', {}).get('battingOrder', '')).endswith('0')}
+
+    batting_rows = []
+    order_pos = 0  # tracks position in the lineup (1-9)
+    for idx, batter_id in enumerate(all_batters):
+        p_data = players.get(f'ID{batter_id}', {})
+        b_stats = p_data.get('stats', {}).get('batting', {})
+        if not b_stats:
+            continue
+        is_starter = batter_id in starter_ids
+        if is_starter:
+            order_pos += 1
+        batting_rows.append(batting_row(p_data, b_stats, indent=not is_starter))
+        # After the 9th starter, append the trailing substitutes then stop
+        if is_starter and order_pos >= 9:
+            for rem_id in all_batters[idx + 1:]:
+                if rem_id in starter_ids:
+                    break
+                rem_data = players.get(f'ID{rem_id}', {})
+                rem_stats = rem_data.get('stats', {}).get('batting', {})
+                if not rem_stats:
+                    continue
+                batting_rows.append(batting_row(rem_data, rem_stats, indent=True))
+            break
+
+    pitching_rows = []
+    for pitcher_id in team_data.get('pitchers', []):
+        p_data = players.get(f'ID{pitcher_id}', {})
+        p_stats = p_data.get('stats', {}).get('pitching', {})
+        if not p_stats:
+            continue
+        season = p_data.get('seasonStats', {}).get('pitching', {})
+        pitching_rows.append({
+            'name': p_data.get('person', {}).get('boxscoreName', 'Unknown'),
+            'ip': str(p_stats.get('inningsPitched', '0')),
+            'h': str(p_stats.get('hits', 0)),
+            'r': str(p_stats.get('runs', 0)),
+            'er': str(p_stats.get('earnedRuns', 0)),
+            'bb': str(p_stats.get('baseOnBalls', 0)),
+            'so': str(p_stats.get('strikeOuts', 0)),
+            'hr': str(p_stats.get('homeRuns', 0)),
+            'era': season.get('era', '-.--'),
+            'p': str(p_stats.get('pitchesThrown', 0)),
+            's': str(p_stats.get('strikes', 0)),
+            'dec': p_stats.get('note', ''),
+        })
+
+    game_info, abs_info = [], []
+    for info in box_data.get('info', []):
+        label = info.get('label', '').upper()
+        (abs_info if 'ABS' in label or 'CHALLENGE' in label else game_info).append(info)
+
+    opp_side = 'away' if side == 'home' else 'home'
+    opp_abbrev = box_data.get('teams', {}).get(opp_side, {}).get('team', {}).get('abbreviation', '??')
+    title = f"{opp_abbrev} @ {team_abbrev}" if side == 'home' else f"{team_abbrev} @ {opp_abbrev}"
+
+    return BoxScoreData(
+        title=title,
+        team_name=team_name,
+        team_abbrev=team_abbrev,
+        batting_rows=batting_rows,
+        pitching_rows=pitching_rows,
+        pitching_notes=box_data.get('pitchingNotes', []),
+        team_notes=team_data.get('info', []),
+        game_info=game_info,
+        abs_info=abs_info,
+    )
+
+
 @dataclass
 class PlayerGameLogData:
     player_id: str
@@ -935,33 +1144,6 @@ class PlayerGameLogData:
     headshot_url: str
     position_type: str  # 'hitting' or 'pitching'
     rows: List[dict]
-
-    def _format_table(self, labels: List[str], rows: List[dict], repl: dict, left_cols: set) -> str:
-        if not rows:
-            return "No data available."
-        widths = {}
-        for label in labels:
-            widths[label] = len(repl.get(label, label.upper()))
-            for row in rows:
-                widths[label] = max(widths[label], len(str(row.get(label, ''))))
-        header = ''
-        for label in labels:
-            display = repl.get(label, label.upper())
-            if label in left_cols:
-                header += display.ljust(widths[label]) + ' '
-            else:
-                header += display.rjust(widths[label]) + ' '
-        lines = [header.rstrip()]
-        for row in rows:
-            line = ''
-            for label in labels:
-                val = str(row.get(label, ''))
-                if label in left_cols:
-                    line += val.ljust(widths[label]) + ' '
-                else:
-                    line += val.rjust(widths[label]) + ' '
-            lines.append(line.rstrip())
-        return '\n'.join(lines)
 
     def format_log(self) -> str:
         if self.position_type == 'pitching':
@@ -972,7 +1154,7 @@ class PlayerGameLogData:
             labels = ['date', 'opp', 'ab', 'r', 'h', '2b', '3b', 'hr', 'rbi', 'bb', 'so', 'lob', 'avg', 'obp', 'slg', 'ops']
             repl = {'date': 'DATE', 'opp': 'OPP', 'ab': 'AB', 'r': 'R', 'h': 'H', '2b': '2B', '3b': '3B', 'hr': 'HR', 'rbi': 'RBI', 'bb': 'BB', 'so': 'SO', 'lob': 'LOB', 'avg': 'AVG', 'obp': 'OBP', 'slg': 'SLG', 'ops': 'OPS'}
             left_cols = {'date', 'opp'}
-        return self._format_table(labels, self.rows, repl, left_cols)
+        return format_table(labels, self.rows, repl, left_cols)
 
 
 @dataclass
@@ -1260,9 +1442,7 @@ class MLBClient:
 
     async def get_team_id(self, team_query: str) -> Optional[int]:
         if not team_query: return None
-        query = team_query.lower()
-        aliases = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals", "dbacks": "diamondbacks", "barves": "braves"}
-        query = aliases.get(query, query)
+        query = resolve_team_alias(team_query)
         
         session = await self.get_session()
         async with session.get(f"{self.BASE_URL}/teams?sportId=1") as resp:
@@ -1357,14 +1537,7 @@ class MLBClient:
             team_side = 'away' if game.away.id == team_id else 'home'
             team_half = 'top' if team_side == 'away' else 'bottom'
 
-            content_dict = {}
-            highlights = content_data.get('highlights', {}).get('highlights', {}).get('items', [])
-            for item in highlights:
-                if 'guid' in item:
-                    for pb in item.get('playbacks', []):
-                        if pb.get('name') == 'mp4Avc':
-                            content_dict[item['guid']] = {'url': pb['url'], 'blurb': item.get('headline', item.get('blurb', ''))}
-                            break
+            content_dict = extract_highlight_videos(content_data)
 
             scoring_play_indices = pbp_data.get('scoringPlays', [])
             if not scoring_play_indices: return
@@ -1415,13 +1588,7 @@ class MLBClient:
             print(f"Error fetching plays for inning: {e}")
             return game, [], team_abbrev, team_half
 
-        content_dict = {}
-        for item in content_data.get('highlights', {}).get('highlights', {}).get('items', []):
-            if 'guid' in item:
-                for pb in item.get('playbacks', []):
-                    if pb.get('name') == 'mp4Avc':
-                        content_dict[item['guid']] = {'url': pb['url'], 'blurb': item.get('headline', item.get('blurb', ''))}
-                        break
+        content_dict = extract_highlight_videos(content_data)
 
         plays = []
         for play in pbp_data.get('allPlays', []):
@@ -1517,13 +1684,7 @@ class MLBClient:
             except Exception:
                 return
 
-            content_dict = {}
-            for item in content_data.get('highlights', {}).get('highlights', {}).get('items', []):
-                if 'guid' in item:
-                    for pb in item.get('playbacks', []):
-                        if pb.get('name') == 'mp4Avc':
-                            content_dict[item['guid']] = {'url': pb['url'], 'blurb': item.get('headline', item.get('blurb', ''))}
-                            break
+            content_dict = extract_highlight_videos(content_data)
 
             for play in pbp.get('allPlays', []):
                 if play.get('result', {}).get('eventType') != 'home_run':
@@ -1559,13 +1720,7 @@ class MLBClient:
                         break
 
                 desc = play.get('result', {}).get('description', '')
-                hr_num = 0
-                for keyword in ('grand slam', 'home run', 'homers'):
-                    if keyword in desc:
-                        m = re.search(r'\((\d+)\)', desc[desc.index(keyword):])
-                        if m:
-                            hr_num = int(m.group(1))
-                        break
+                hr_num = parse_hr_number(desc)
 
                 video_url, video_blurb = '', ''
                 if last_play_id and last_play_id in content_dict:
@@ -1604,7 +1759,7 @@ class MLBClient:
         player_id = resolved['id']
         player_name = resolved['name']
         
-        headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
+        headshot_url = player_headshot_url(player_id)
 
         # Fetch player info to find out what team they are currently on
         person_url = f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam,team"
@@ -1724,17 +1879,8 @@ class MLBClient:
                     print(f"Error fetching AB data: {e}")
                     pbp_data, content_data = {}, {}
                     
-                content_dict = {}
-                if not isinstance(content_data, dict):
-                    content_data = {}
-                highlights = ((content_data.get('highlights') or {}).get('highlights') or {}).get('items', [])
-                for item in highlights:
-                    if 'guid' in item:
-                        for pb in item.get('playbacks', []):
-                            if pb.get('name') == 'mp4Avc':
-                                content_dict[item['guid']] = {'url': pb['url'], 'blurb': item.get('headline', item.get('blurb', ''))}
-                                break
-                                
+                content_dict = extract_highlight_videos(content_data)
+
                 for play in pbp_data.get('allPlays', []):
                     if play.get('matchup', {}).get('batter', {}).get('id') == int(player_id):
                         half = play.get('about', {}).get('halfInning', '')
@@ -1823,7 +1969,7 @@ class MLBClient:
         player_id = resolved['id']
         player_name = resolved['name']
 
-        headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
+        headshot_url = player_headshot_url(player_id)
 
         league_list_id = "mlb_milb" if milb else "mlb"
         person_url = f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam,team,draft,stats(type=[yearByYear,careerRegularSeason,career](team(league,sport)),leagueListId={league_list_id},group=[hitting,pitching])"
@@ -1836,21 +1982,9 @@ class MLBClient:
         person = person_data['people'][0]
         player_name = person.get('fullName', player_name)
         pos = person.get('primaryPosition', {}).get('abbreviation', '')
-        
         birthdate = person.get('birthDate', '1900-01-01')[:10]
-        try:
-            b_dt = datetime.strptime(birthdate, "%Y-%m-%d")
-            now = datetime.now()
-            age = now.year - b_dt.year - ((now.month, now.day) < (b_dt.month, b_dt.day))
-            age_str = f"Age: {age}"
-        except:
-            age_str = ""
+        info_line = build_player_info_line(person)
 
-        info_line = f"{pos}  |  {person.get('batSide', {}).get('code', '')}/{person.get('pitchHand', {}).get('code', '')}  |  {person.get('height', '')}  |  {person.get('weight', '')} lbs  |  {age_str}"
-        
-        if person.get('nickName'):
-            info_line += f"  |  \"{person['nickName']}\""
-            
         if milb and 'drafts' in person and person['drafts']:
             draft = person['drafts'][-1]
             d_year = draft.get('year', 'N/A')
@@ -1870,13 +2004,7 @@ class MLBClient:
                         if team_data.get('teams'):
                             parent_org_abbrev = team_data['teams'][0].get('abbreviation', '')
 
-        if not stat_type:
-            if pos == "TWP":
-                stat_types_to_fetch = ["hitting", "pitching"]
-            else:
-                stat_types_to_fetch = ["pitching"] if pos == "P" else ["hitting"]
-        else:
-            stat_types_to_fetch = [stat_type]
+        stat_types_to_fetch = stat_groups_for(pos, stat_type)
 
         api_stat_types = ["careerRegularSeason", "career"] if career else ["yearByYear"]
         
@@ -2036,7 +2164,7 @@ class MLBClient:
         player_id = resolved['id']
         player_name = resolved['name']
 
-        headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
+        headshot_url = player_headshot_url(player_id)
 
         if days is not None:
             # byDateRange: fetch person info and stats separately
@@ -2056,25 +2184,8 @@ class MLBClient:
             pos = person.get('primaryPosition', {}).get('abbreviation', '')
             team_abbrev = await self._team_abbrev(person)
 
-            birthdate = person.get('birthDate', '1900-01-01')[:10]
-            try:
-                b_dt = datetime.strptime(birthdate, "%Y-%m-%d")
-                now = datetime.now()
-                age = now.year - b_dt.year - ((now.month, now.day) < (b_dt.month, b_dt.day))
-                age_str = f"Age: {age}"
-            except:
-                age_str = ""
-            info_line = f"{pos}  |  B/T: {person.get('batSide', {}).get('code', '')}/{person.get('pitchHand', {}).get('code', '')}  |  {person.get('height', '')}  |  {person.get('weight', '')} lbs  |  {age_str}"
-            if person.get('nickName'):
-                info_line += f"  |  \"{person['nickName']}\""
-
-            if not stat_type:
-                if pos == "TWP":
-                    stat_types_to_fetch = ["hitting", "pitching"]
-                else:
-                    stat_types_to_fetch = ["pitching"] if pos == "P" else ["hitting"]
-            else:
-                stat_types_to_fetch = [stat_type]
+            info_line = build_player_info_line(person, bt_label=True)
+            stat_types_to_fetch = stat_groups_for(pos, stat_type)
 
             milb_suffix = "&leagueListId=milb_all" if milb else ""
             results = []
@@ -2136,26 +2247,8 @@ class MLBClient:
         pos = person.get('primaryPosition', {}).get('abbreviation', '')
         team_abbrev = await self._team_abbrev(person)
 
-        birthdate = person.get('birthDate', '1900-01-01')[:10]
-        try:
-            b_dt = datetime.strptime(birthdate, "%Y-%m-%d")
-            now = datetime.now()
-            age = now.year - b_dt.year - ((now.month, now.day) < (b_dt.month, b_dt.day))
-            age_str = f"Age: {age}"
-        except:
-            age_str = ""
-
-        info_line = f"{pos}  |  B/T: {person.get('batSide', {}).get('code', '')}/{person.get('pitchHand', {}).get('code', '')}  |  {person.get('height', '')}  |  {person.get('weight', '')} lbs  |  {age_str}"
-        if person.get('nickName'):
-            info_line += f"  |  \"{person['nickName']}\""
-
-        if not stat_type:
-            if pos == "TWP":
-                stat_types_to_fetch = ["hitting", "pitching"]
-            else:
-                stat_types_to_fetch = ["pitching"] if pos == "P" else ["hitting"]
-        else:
-            stat_types_to_fetch = [stat_type]
+        info_line = build_player_info_line(person, bt_label=True)
+        stat_types_to_fetch = stat_groups_for(pos, stat_type)
 
         all_stats = person.get('stats', [])
         results = []
@@ -2213,7 +2306,7 @@ class MLBClient:
             return None
         player_id = resolved['id']
         player_name = resolved['name']
-        headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
+        headshot_url = player_headshot_url(player_id)
 
         # Fetch person info and teams list concurrently
         person_url = f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam"
@@ -2328,7 +2421,7 @@ class MLBClient:
         player_id = resolved['id']
         player_name = resolved['name']
 
-        headshot_url = f"https://securea.mlb.com/mlb/images/players/head_shot/{player_id}@3x.jpg"
+        headshot_url = player_headshot_url(player_id)
 
         async with session.get(f"{self.BASE_URL}/people/{player_id}") as resp:
             person_data = await resp.json()
@@ -3030,9 +3123,7 @@ class MLBClient:
 
         game = games[0]
         # Determine which side the team is on
-        query = team_query.lower()
-        aliases = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals", "dbacks": "diamondbacks", "barves": "braves"}
-        query = aliases.get(query, query)
+        query = resolve_team_alias(team_query)
         if query in game.home.abbreviation.lower() or query in game.home.name.lower():
             side = "home"
         else:
@@ -3043,148 +3134,11 @@ class MLBClient:
         async with session.get(box_url) as resp:
             box_data = await resp.json()
 
-        team_data = box_data.get('teams', {}).get(side, {})
-        players = box_data.get('teams', {}).get(side, {}).get('players', {})
-        team_name = team_data.get('team', {}).get('name', '')
-        team_abbrev = team_data.get('team', {}).get('abbreviation', '')
-
-        # Parse batters
-        all_batters = team_data.get('batters', [])
-        batting_rows = []
-        order_pos = 0  # tracks position in the lineup (1-9)
-
-        for batter_id in all_batters:
-            p_data = players.get(f'ID{batter_id}', {})
-            b_stats = p_data.get('stats', {}).get('batting', {})
-            if not b_stats:
-                continue
-            season_stats = p_data.get('seasonStats', {}).get('batting', {})
-
-            name = p_data.get('person', {}).get('boxscoreName', 'Unknown')
-            # Build position string from allPositions
-            positions = p_data.get('allPositions', [])
-            pos = "-".join(p.get('abbreviation', '') for p in positions) if positions else p_data.get('position', {}).get('abbreviation', '')
-
-            # ones digit of battingOrder == '0' → original starter; anything else → substitute
-            is_starter = str(p_data.get('battingOrder', '')).endswith('0')
-            if is_starter:
-                order_pos += 1
-                display_name = name
-            else:
-                display_name = " " + name  # indent substitutes
-
-            batting_rows.append({
-                'name': display_name,
-                'pos': pos,
-                'ab': str(b_stats.get('atBats', 0)),
-                'r': str(b_stats.get('runs', 0)),
-                'h': str(b_stats.get('hits', 0)),
-                'rbi': str(b_stats.get('rbi', 0)),
-                'bb': str(b_stats.get('baseOnBalls', 0)),
-                'so': str(b_stats.get('strikeOuts', 0)),
-                'lob': str(b_stats.get('leftOnBase', 0)),
-                'avg': season_stats.get('avg', '.000'),
-                'obp': season_stats.get('obp', '.000'),
-                'slg': season_stats.get('slg', '.000'),
-                'is_starter': is_starter,
-            })
-            # Stop after 9 starters have been listed (remaining are subs already handled)
-            if is_starter and order_pos >= 9:
-                # Include remaining non-starters that follow
-                remaining_idx = all_batters.index(batter_id) + 1
-                for rem_id in all_batters[remaining_idx:]:
-                    if str(players.get(f'ID{rem_id}', {}).get('battingOrder', '')).endswith('0'):
-                        break  # shouldn't happen, but safety
-                    rem_data = players.get(f'ID{rem_id}', {})
-                    rem_stats = rem_data.get('stats', {}).get('batting', {})
-                    if not rem_stats:
-                        continue
-                    rem_season = rem_data.get('seasonStats', {}).get('batting', {})
-                    rem_name = rem_data.get('person', {}).get('boxscoreName', 'Unknown')
-                    rem_positions = rem_data.get('allPositions', [])
-                    rem_pos = "-".join(p.get('abbreviation', '') for p in rem_positions) if rem_positions else ''
-                    batting_rows.append({
-                        'name': " " + rem_name,
-                        'pos': rem_pos,
-                        'ab': str(rem_stats.get('atBats', 0)),
-                        'r': str(rem_stats.get('runs', 0)),
-                        'h': str(rem_stats.get('hits', 0)),
-                        'rbi': str(rem_stats.get('rbi', 0)),
-                        'bb': str(rem_stats.get('baseOnBalls', 0)),
-                        'so': str(rem_stats.get('strikeOuts', 0)),
-                        'lob': str(rem_stats.get('leftOnBase', 0)),
-                        'avg': rem_season.get('avg', '.000'),
-                        'obp': rem_season.get('obp', '.000'),
-                        'slg': rem_season.get('slg', '.000'),
-                        'is_starter': False,
-                    })
-                break
-
-        # Parse pitchers
-        pitching_rows = []
-        for pitcher_id in team_data.get('pitchers', []):
-            p_data = players.get(f'ID{pitcher_id}', {})
-            p_stats = p_data.get('stats', {}).get('pitching', {})
-            if not p_stats:
-                continue
-            season_stats = p_data.get('seasonStats', {}).get('pitching', {})
-            name = p_data.get('person', {}).get('boxscoreName', 'Unknown')
-            dec = p_stats.get('note', '')
-
-            pitching_rows.append({
-                'name': name,
-                'ip': str(p_stats.get('inningsPitched', '0')),
-                'h': str(p_stats.get('hits', 0)),
-                'r': str(p_stats.get('runs', 0)),
-                'er': str(p_stats.get('earnedRuns', 0)),
-                'bb': str(p_stats.get('baseOnBalls', 0)),
-                'so': str(p_stats.get('strikeOuts', 0)),
-                'hr': str(p_stats.get('homeRuns', 0)),
-                'era': season_stats.get('era', '-.--'),
-                'p': str(p_stats.get('pitchesThrown', 0)),
-                's': str(p_stats.get('strikes', 0)),
-                'dec': dec,
-            })
-
-        # Parse pitching notes
-        pitching_notes = box_data.get('pitchingNotes', [])
-
-        # Parse team notes (batting/fielding/baserunning)
-        team_notes = team_data.get('info', [])
-
-        # Parse game info (weather, umpires, etc.)
-        game_info_raw = box_data.get('info', [])
-        game_info = []
-        abs_info = []
-        for info in game_info_raw:
-            label = info.get('label', '').upper()
-            if 'ABS' in label or 'CHALLENGE' in label:
-                abs_info.append(info)
-            else:
-                game_info.append(info)
-
-        # Build title
-        opp_side = "away" if side == "home" else "home"
-        opp_abbrev = box_data.get('teams', {}).get(opp_side, {}).get('team', {}).get('abbreviation', '??')
-        if side == "home":
-            title = f"{opp_abbrev} @ {team_abbrev}"
-        else:
-            title = f"{team_abbrev} @ {box_data.get('teams', {}).get('home', {}).get('team', {}).get('abbreviation', '??')}"
-
-        return BoxScoreData(
-            title=title,
-            team_name=team_name,
-            team_abbrev=team_abbrev,
-            batting_rows=batting_rows,
-            pitching_rows=pitching_rows,
-            pitching_notes=pitching_notes,
-            team_notes=team_notes,
-            game_info=game_info,
-            abs_info=abs_info,
-            game_status=game.status,
-            game_abstract_state=game.abstract_state,
-            game_date=game.game_date_str,
-        )
+        box = parse_box_score_side(box_data, side)
+        box.game_status = game.status
+        box.game_abstract_state = game.abstract_state
+        box.game_date = game.game_date_str
+        return box
 
     async def get_milb_box_score(self, team_id: int, date: str = None) -> Optional["BoxScoreData"]:
         session = await self.get_session()
@@ -3215,103 +3169,11 @@ class MLBClient:
         async with session.get(box_url) as resp:
             box_data = await resp.json()
 
-        team_data = box_data.get('teams', {}).get(side, {})
-        players = team_data.get('players', {})
-        team_name = team_data.get('team', {}).get('name', '')
-        team_abbrev = team_data.get('team', {}).get('abbreviation', '')
-
-        all_batters = team_data.get('batters', [])
-        batting_order = {
-            bid for bid in all_batters
-            if str(players.get(f'ID{bid}', {}).get('battingOrder', '')).endswith('0')
-        }
-        batting_rows = []
-        order_pos = 0
-
-        for batter_id in all_batters:
-            p_data = players.get(f'ID{batter_id}', {})
-            b_stats = p_data.get('stats', {}).get('batting', {})
-            if not b_stats:
-                continue
-            season_stats = p_data.get('seasonStats', {}).get('batting', {})
-            name = p_data.get('person', {}).get('boxscoreName', 'Unknown')
-            positions = p_data.get('allPositions', [])
-            pos = "-".join(p.get('abbreviation', '') for p in positions) if positions else p_data.get('position', {}).get('abbreviation', '')
-            is_starter = str(p_data.get('battingOrder', '')).endswith('0')
-            if is_starter:
-                order_pos += 1
-                display_name = name
-            else:
-                display_name = " " + name
-            batting_rows.append({
-                'name': display_name, 'pos': pos,
-                'ab': str(b_stats.get('atBats', 0)), 'r': str(b_stats.get('runs', 0)),
-                'h': str(b_stats.get('hits', 0)), 'rbi': str(b_stats.get('rbi', 0)),
-                'bb': str(b_stats.get('baseOnBalls', 0)), 'so': str(b_stats.get('strikeOuts', 0)),
-                'lob': str(b_stats.get('leftOnBase', 0)),
-                'avg': season_stats.get('avg', '.000'), 'obp': season_stats.get('obp', '.000'),
-                'slg': season_stats.get('slg', '.000'), 'is_starter': is_starter,
-            })
-            if is_starter and order_pos >= 9:
-                remaining_idx = all_batters.index(batter_id) + 1
-                for rem_id in all_batters[remaining_idx:]:
-                    if rem_id in batting_order:
-                        break
-                    rem_data = players.get(f'ID{rem_id}', {})
-                    rem_stats = rem_data.get('stats', {}).get('batting', {})
-                    if not rem_stats:
-                        continue
-                    rem_season = rem_data.get('seasonStats', {}).get('batting', {})
-                    rem_name = rem_data.get('person', {}).get('boxscoreName', 'Unknown')
-                    rem_positions = rem_data.get('allPositions', [])
-                    rem_pos = "-".join(p.get('abbreviation', '') for p in rem_positions) if rem_positions else ''
-                    batting_rows.append({
-                        'name': " " + rem_name, 'pos': rem_pos,
-                        'ab': str(rem_stats.get('atBats', 0)), 'r': str(rem_stats.get('runs', 0)),
-                        'h': str(rem_stats.get('hits', 0)), 'rbi': str(rem_stats.get('rbi', 0)),
-                        'bb': str(rem_stats.get('baseOnBalls', 0)), 'so': str(rem_stats.get('strikeOuts', 0)),
-                        'lob': str(rem_stats.get('leftOnBase', 0)),
-                        'avg': rem_season.get('avg', '.000'), 'obp': rem_season.get('obp', '.000'),
-                        'slg': rem_season.get('slg', '.000'), 'is_starter': False,
-                    })
-                break
-
-        pitching_rows = []
-        for pitcher_id in team_data.get('pitchers', []):
-            p_data = players.get(f'ID{pitcher_id}', {})
-            p_stats = p_data.get('stats', {}).get('pitching', {})
-            if not p_stats:
-                continue
-            season_stats = p_data.get('seasonStats', {}).get('pitching', {})
-            name = p_data.get('person', {}).get('boxscoreName', 'Unknown')
-            dec = p_stats.get('note', '')
-            pitching_rows.append({
-                'name': name, 'ip': str(p_stats.get('inningsPitched', '0')),
-                'h': str(p_stats.get('hits', 0)), 'r': str(p_stats.get('runs', 0)),
-                'er': str(p_stats.get('earnedRuns', 0)), 'bb': str(p_stats.get('baseOnBalls', 0)),
-                'so': str(p_stats.get('strikeOuts', 0)), 'hr': str(p_stats.get('homeRuns', 0)),
-                'era': season_stats.get('era', '-.--'), 'p': str(p_stats.get('pitchesThrown', 0)),
-                's': str(p_stats.get('strikes', 0)), 'dec': dec,
-            })
-
-        pitching_notes = box_data.get('pitchingNotes', [])
-        team_notes = team_data.get('info', [])
-        game_info_raw = box_data.get('info', [])
-        game_info = [i for i in game_info_raw if 'ABS' not in i.get('label', '').upper() and 'CHALLENGE' not in i.get('label', '').upper()]
-        abs_info = [i for i in game_info_raw if 'ABS' in i.get('label', '').upper() or 'CHALLENGE' in i.get('label', '').upper()]
-
-        opp_side = "away" if side == "home" else "home"
-        opp_abbrev = box_data.get('teams', {}).get(opp_side, {}).get('team', {}).get('abbreviation', '??')
-        title = f"{opp_abbrev} @ {team_abbrev}" if side == "home" else f"{team_abbrev} @ {box_data.get('teams',{}).get('home',{}).get('team',{}).get('abbreviation','??')}"
-
-        return BoxScoreData(
-            title=title, team_name=team_name, team_abbrev=team_abbrev,
-            batting_rows=batting_rows, pitching_rows=pitching_rows,
-            pitching_notes=pitching_notes, team_notes=team_notes,
-            game_info=game_info, abs_info=abs_info,
-            game_status=game_status, game_abstract_state=game_abstract,
-            game_date=game_date,
-        )
+        box = parse_box_score_side(box_data, side)
+        box.game_status = game_status
+        box.game_abstract_state = game_abstract
+        box.game_date = game_date
+        return box
 
     async def get_leaders(self, stat: str, stat_group: str = None, team_id: str = None, year: str = None, league: str = None, player_pool: str = None, position: str = None, reverse: bool = False) -> List["Leader"]:
         session = await self.get_session()
@@ -3732,10 +3594,7 @@ class MLBClient:
         game = games[0]
 
         # Determine which side this team is on
-        query = team_query.lower()
-        aliases = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals",
-                   "dbacks": "diamondbacks", "barves": "braves"}
-        query = aliases.get(query, query)
+        query = resolve_team_alias(team_query)
         away_name = game.away.name.lower()
         away_abbr = game.away.abbreviation.lower()
         if query == away_abbr or query in away_name:
@@ -3883,13 +3742,8 @@ class MLBClient:
             
             # Filter by team if a search query was provided
             if team_query:
-                query = team_query.lower()
-                
-                # Common aliases mapping to catch nicknames your old bot used
-                aliases = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals", "dbacks": "diamondbacks", "barves": "braves"}
-                if query in aliases:
-                    query = aliases[query]
-                    
+                query = resolve_team_alias(team_query)
+
                 away_name = game.away.name.lower()
                 home_name = game.home.name.lower()
                 away_abbr = game.away.abbreviation.lower()
@@ -4233,77 +4087,15 @@ class MLBClient:
             if box is None:
                 continue
             for side, team_abbr, opp_abbr in [("away", away_abbr, home_abbr), ("home", home_abbr, away_abbr)]:
-                team_data = box.get("teams", {}).get(side, {})
-                players = team_data.get("players", {})
-
-                for batter_id in team_data.get("batters", []):
-                    p_data = players.get(f"ID{batter_id}", {})
-                    b = p_data.get("stats", {}).get("batting", {})
-                    if not b or b.get("atBats", 0) == 0:
+                side_hitters, side_pitchers = collect_team_performances(box.get("teams", {}).get(side, {}))
+                for h in side_hitters:
+                    hitters.append({"name": h["name"], "team": team_abbr, "opponent": opp_abbr,
+                                    "score": h["score"], "summary": h["summary"]})
+                for p in side_pitchers:
+                    if p["outs"] < 15:  # require 5 IP minimum
                         continue
-
-                    ab      = b.get("atBats", 0)
-                    hits    = b.get("hits", 0)
-                    doubles = b.get("doubles", 0)
-                    triples = b.get("triples", 0)
-                    hr      = b.get("homeRuns", 0)
-                    singles = max(0, hits - doubles - triples - hr)
-                    rbi     = b.get("rbi", 0)
-                    runs    = b.get("runs", 0)
-                    bb      = b.get("baseOnBalls", 0)
-                    sb      = b.get("stolenBases", 0)
-
-                    score = hr*4 + triples*2 + doubles*1.5 + singles*0.5 + rbi*1 + runs*0.5 + bb*0.25 + sb*1
-
-                    parts = [f"{hits}-{ab}"]
-                    if hr:      parts.append(f"{hr} HR")
-                    if triples: parts.append(f"{triples} 3B")
-                    if doubles: parts.append(f"{doubles} 2B")
-                    if rbi:     parts.append(f"{rbi} RBI")
-                    if runs:    parts.append(f"{runs} R")
-                    if bb:      parts.append(f"{bb} BB")
-                    if sb:      parts.append(f"{sb} SB")
-
-                    hitters.append({
-                        "name":     p_data.get("person", {}).get("fullName", "Unknown"),
-                        "team":     team_abbr,
-                        "opponent": opp_abbr,
-                        "score":    score,
-                        "summary":  ", ".join(parts),
-                    })
-
-                for pitcher_id in team_data.get("pitchers", []):
-                    p_data = players.get(f"ID{pitcher_id}", {})
-                    p = p_data.get("stats", {}).get("pitching", {})
-                    if not p:
-                        continue
-
-                    ip_str = str(p.get("inningsPitched", "0"))
-                    try:
-                        ip_parts = ip_str.split(".")
-                        outs = int(ip_parts[0]) * 3 + (int(ip_parts[1]) if len(ip_parts) > 1 else 0)
-                    except (ValueError, IndexError):
-                        outs = 0
-
-                    if outs < 15:  # require 5 IP minimum
-                        continue
-
-                    h  = p.get("hits", 0)
-                    er = p.get("earnedRuns", 0)
-                    ur = max(0, p.get("runs", 0) - er)
-                    bb = p.get("baseOnBalls", 0)
-                    k  = p.get("strikeOuts", 0)
-                    full_innings = outs // 3
-
-                    game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
-
-                    pitchers.append({
-                        "name":     p_data.get("person", {}).get("fullName", "Unknown"),
-                        "team":     team_abbr,
-                        "opponent": opp_abbr,
-                        "score":    game_score,
-                        "summary":  f"{ip_str} IP, {er} ER, {k} K, {bb} BB",
-                    })
+                    pitchers.append({"name": p["name"], "team": team_abbr, "opponent": opp_abbr,
+                                     "score": p["score"], "summary": p["summary"]})
 
         hitters.sort(key=lambda x: x["score"], reverse=True)
         pitchers.sort(key=lambda x: x["score"], reverse=True)
@@ -4335,74 +4127,15 @@ class MLBClient:
         pitchers = []
 
         for side, team_abbr, opp_abbr in [("away", away_abbr, home_abbr), ("home", home_abbr, away_abbr)]:
-            team_data = box.get("teams", {}).get(side, {})
-            players = team_data.get("players", {})
-
-            for batter_id in team_data.get("batters", []):
-                p_data = players.get(f"ID{batter_id}", {})
-                b = p_data.get("stats", {}).get("batting", {})
-                if not b or b.get("atBats", 0) == 0:
+            side_hitters, side_pitchers = collect_team_performances(box.get("teams", {}).get(side, {}))
+            for h in side_hitters:
+                hitters.append({"name": h["name"], "team": team_abbr,
+                                "score": h["score"], "summary": h["summary"]})
+            for p in side_pitchers:
+                if p["score"] < 64:
                     continue
-
-                ab      = b.get("atBats", 0)
-                hits    = b.get("hits", 0)
-                doubles = b.get("doubles", 0)
-                triples = b.get("triples", 0)
-                hr      = b.get("homeRuns", 0)
-                singles = max(0, hits - doubles - triples - hr)
-                rbi     = b.get("rbi", 0)
-                runs    = b.get("runs", 0)
-                bb      = b.get("baseOnBalls", 0)
-                sb      = b.get("stolenBases", 0)
-
-                score = hr*4 + triples*2 + doubles*1.5 + singles*0.5 + rbi*1 + runs*0.5 + bb*0.25 + sb*1
-
-                parts = [f"{hits}-{ab}"]
-                if hr:      parts.append(f"{hr} HR")
-                if triples: parts.append(f"{triples} 3B")
-                if doubles: parts.append(f"{doubles} 2B")
-                if rbi:     parts.append(f"{rbi} RBI")
-                if runs:    parts.append(f"{runs} R")
-                if bb:      parts.append(f"{bb} BB")
-                if sb:      parts.append(f"{sb} SB")
-
-                hitters.append({
-                    "name":    p_data.get("person", {}).get("fullName", "Unknown"),
-                    "team":    team_abbr,
-                    "score":   score,
-                    "summary": ", ".join(parts),
-                })
-
-            for pitcher_id in team_data.get("pitchers", []):
-                p_data = players.get(f"ID{pitcher_id}", {})
-                p = p_data.get("stats", {}).get("pitching", {})
-                if not p:
-                    continue
-
-                ip_str = str(p.get("inningsPitched", "0"))
-                try:
-                    ip_parts = ip_str.split(".")
-                    outs = int(ip_parts[0]) * 3 + (int(ip_parts[1]) if len(ip_parts) > 1 else 0)
-                except (ValueError, IndexError):
-                    outs = 0
-
-                h  = p.get("hits", 0)
-                er = p.get("earnedRuns", 0)
-                ur = max(0, p.get("runs", 0) - er)
-                bb = p.get("baseOnBalls", 0)
-                k  = p.get("strikeOuts", 0)
-                full_innings = outs // 3
-
-                game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
-                if game_score < 64:
-                    continue
-
-                pitchers.append({
-                    "name":    p_data.get("person", {}).get("fullName", "Unknown"),
-                    "team":    team_abbr,
-                    "score":   game_score,
-                    "summary": f"{ip_str} IP, {er} ER, {k} K, {bb} BB",
-                })
+                pitchers.append({"name": p["name"], "team": team_abbr,
+                                 "score": p["score"], "summary": p["summary"]})
 
         hitters.sort(key=lambda x: x["score"], reverse=True)
         pitchers.sort(key=lambda x: x["score"], reverse=True)
@@ -4429,8 +4162,7 @@ class MLBClient:
         if not affiliate_ids:
             return None
 
-        _level_abbrev = {"Triple-A": "AAA", "Double-A": "AA", "High-A": "A+", "Single-A": "A", "Rookie": "Rk"}
-        level_map = {t['id']: _level_abbrev.get(t.get('level', ''), t.get('level', '')) for t in milb_teams}
+        level_map = {t['id']: LEVEL_ABBREVS.get(t.get('level', ''), t.get('level', '')) for t in milb_teams}
         team_level_map: dict = {}
 
         team_id_param = ','.join(str(i) for i in affiliate_ids)
@@ -4480,79 +4212,17 @@ class MLBClient:
             if box is None:
                 continue
             team_abbr = away_abbr if affiliate_side == "away" else home_abbr
-            opp_abbr  = home_abbr if affiliate_side == "away" else away_abbr
-            team_data = box.get("teams", {}).get(affiliate_side, {})
-            players = team_data.get("players", {})
             level = team_level_map.get(team_abbr, "")
 
-            for batter_id in team_data.get("batters", []):
-                p_data = players.get(f"ID{batter_id}", {})
-                b = p_data.get("stats", {}).get("batting", {})
-                if not b or b.get("atBats", 0) == 0:
+            side_hitters, side_pitchers = collect_team_performances(box.get("teams", {}).get(affiliate_side, {}))
+            for h in side_hitters:
+                hitters.append({"name": h["name"], "team": team_abbr, "level": level,
+                                "score": h["score"], "summary": h["summary"]})
+            for p in side_pitchers:
+                if p["outs"] < 15:  # 5 IP minimum
                     continue
-
-                ab      = b.get("atBats", 0)
-                hits    = b.get("hits", 0)
-                doubles = b.get("doubles", 0)
-                triples = b.get("triples", 0)
-                hr      = b.get("homeRuns", 0)
-                singles = max(0, hits - doubles - triples - hr)
-                rbi     = b.get("rbi", 0)
-                runs    = b.get("runs", 0)
-                bb      = b.get("baseOnBalls", 0)
-                sb      = b.get("stolenBases", 0)
-
-                score = hr*4 + triples*2 + doubles*1.5 + singles*0.5 + rbi*1 + runs*0.5 + bb*0.25 + sb*1
-
-                parts = [f"{hits}-{ab}"]
-                if hr:      parts.append(f"{hr} HR")
-                if triples: parts.append(f"{triples} 3B")
-                if doubles: parts.append(f"{doubles} 2B")
-                if rbi:     parts.append(f"{rbi} RBI")
-                if runs:    parts.append(f"{runs} R")
-                if bb:      parts.append(f"{bb} BB")
-                if sb:      parts.append(f"{sb} SB")
-
-                hitters.append({
-                    "name":    p_data.get("person", {}).get("fullName", "Unknown"),
-                    "team":    team_abbr,
-                    "level":   level,
-                    "score":   score,
-                    "summary": ", ".join(parts),
-                })
-
-            for pitcher_id in team_data.get("pitchers", []):
-                p_data = players.get(f"ID{pitcher_id}", {})
-                p = p_data.get("stats", {}).get("pitching", {})
-                if not p:
-                    continue
-
-                ip_str = str(p.get("inningsPitched", "0"))
-                try:
-                    ip_parts = ip_str.split(".")
-                    outs = int(ip_parts[0]) * 3 + (int(ip_parts[1]) if len(ip_parts) > 1 else 0)
-                except (ValueError, IndexError):
-                    outs = 0
-
-                if outs < 15:  # 5 IP minimum
-                    continue
-
-                h  = p.get("hits", 0)
-                er = p.get("earnedRuns", 0)
-                ur = max(0, p.get("runs", 0) - er)
-                bb = p.get("baseOnBalls", 0)
-                k  = p.get("strikeOuts", 0)
-                full_innings = outs // 3
-
-                game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
-
-                pitchers.append({
-                    "name":    p_data.get("person", {}).get("fullName", "Unknown"),
-                    "team":    team_abbr,
-                    "level":   level,
-                    "score":   game_score,
-                    "summary": f"{ip_str} IP, {er} ER, {k} K, {bb} BB",
-                })
+                pitchers.append({"name": p["name"], "team": team_abbr, "level": level,
+                                 "score": p["score"], "summary": p["summary"]})
 
         hitters.sort(key=lambda x: x["score"], reverse=True)
         pitchers.sort(key=lambda x: x["score"], reverse=True)
