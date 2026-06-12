@@ -11,6 +11,7 @@ from discord.ext import commands
 from PIL import Image
 
 from core.visualizer import generate_intraday_chart
+from core.utils import ET_ZONE
 
 
 MAP_ZOOM = 8     # base map zoom — each tile ~155km
@@ -162,14 +163,12 @@ class ExtendedSlash(commands.Cog):
             change = q.get("regularMarketChange", 0.0)
             pct = q.get("regularMarketChangePercent", 0.0)
 
-            tz = timezone(timedelta(seconds=q.get("gmtOffSetMilliseconds", 0) / 1000))
-
             def quote_line(label: str, prefix: str) -> str | None:
                 p = q.get(f"{prefix}Price")
                 if p is None:
                     return None
                 t = q.get(f"{prefix}Time")
-                ts = datetime.fromtimestamp(t, tz=tz).strftime("%Y-%m-%d %H:%M:%S") if t else "?"
+                ts = datetime.fromtimestamp(t, tz=ET_ZONE).strftime("%Y-%m-%d %H:%M:%S") if t else "?"
                 return (
                     f"{label}: {p:,.2f} ({q.get(f'{prefix}Change', 0.0):+,.2f},"
                     f" {q.get(f'{prefix}ChangePercent', 0.0):+.2f}%) ({ts})"
