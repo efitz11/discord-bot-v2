@@ -7,6 +7,8 @@ Posts to ALERT_CHANNEL_ID automatically when:
      once a highlight video is available.
   3. A walkoff play ends a game (all 30 teams); alert is posted immediately then edited
      with the highlight video once MLB uploads it (up to 10 minutes).
+  4. FAVORITE_TEAM's starting lineup, as soon as MLB publishes it (within
+     LINEUP_CHECK_HOURS of first pitch), in the /mlb box batting format.
 
 Polling strategy:
   - On startup, fetches today's schedule to get all game PKs and start times.
@@ -29,7 +31,7 @@ from zoneinfo import ZoneInfo
 import discord
 from discord.ext import commands, tasks
 
-from core.mlb_client import extract_highlight_videos, format_table, parse_hr_number, LEVEL_ABBREVS
+from core.mlb_client import extract_highlight_videos, format_table, parse_box_score_side, parse_hr_number, LEVEL_ABBREVS
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -47,6 +49,8 @@ HR_STATE_FILE         = os.path.join(_STATE_DIR, "hr_posted.json")
 NH_STATE_FILE         = os.path.join(_STATE_DIR, "nh_state.json")
 SUMMARY_STATE_FILE    = os.path.join(_STATE_DIR, "summary_state.json")
 WALKOFF_STATE_FILE    = os.path.join(_STATE_DIR, "walkoff_state.json")
+LINEUP_STATE_FILE     = os.path.join(_STATE_DIR, "lineup_state.json")
+LINEUP_CHECK_HOURS    = 6                   # Start polling for the lineup this many hours before first pitch
 VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
 NH_ALERT_DELAY        = 15                  # Seconds to delay NH alerts (stream spoiler protection)
 
@@ -118,10 +122,15 @@ class MonitorCog(commands.Cog):
         self._milb_ready_since: "datetime | None" = None  # when all MLB+MiLB games first went Final
         self._game_errors_alerted: set = set()            # game_pks that have already raised error alerts today
 
+        # Lineup auto-post tracking
+        self._lineup_posted: set = set()  # game_pks whose lineup has been posted
+        self._lineup_clear_date = None
+
         self._load_hr_state()
         self._load_nh_state()
         self._load_summary_state()
         self._load_walkoff_state()
+        self._load_lineup_state()
         self.monitor_loop.start()
 
     def cog_unload(self):
@@ -131,98 +140,102 @@ class MonitorCog(commands.Cog):
     # Schedule helpers
     # ─────────────────────────────────────────────
 
-    def _load_hr_state(self) -> None:
+    @staticmethod
+    def _load_json(path):
+        """Load a JSON state file; returns None if missing or unreadable."""
         try:
-            with open(HR_STATE_FILE) as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                self._hr_posted = set(data)
-                self._hr_clear_date = None
-            else:
-                self._hr_posted = set(data.get("posted", []))
-                self._hr_clear_date = data.get("clear_date")
-            print(f"[monitor] loaded {len(self._hr_posted)} posted HR key(s) from disk (clear_date={self._hr_clear_date})")
+            with open(path) as f:
+                return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            self._hr_posted = set()
+            return None
 
-    def _save_hr_state(self) -> None:
-        tmp = HR_STATE_FILE + ".tmp"
+    @staticmethod
+    def _save_json(path: str, data, label: str) -> None:
+        """Atomically write a JSON state file (tmp + rename)."""
+        tmp = path + ".tmp"
         try:
-            with open(tmp, "w") as f:
-                json.dump({"posted": list(self._hr_posted), "clear_date": self._hr_clear_date}, f)
-            os.replace(tmp, HR_STATE_FILE)
-        except Exception as e:
-            print(f"[monitor] failed to save HR state: {e}")
-
-    def _load_summary_state(self) -> None:
-        try:
-            with open(SUMMARY_STATE_FILE) as f:
-                state = json.load(f)
-            self._summary_posted_date = state.get("date")
-            self._milb_summary_posted_date = state.get("milb_date")
-            print(f"[monitor] loaded summary state: mlb={self._summary_posted_date} milb={self._milb_summary_posted_date}")
-        except (FileNotFoundError, json.JSONDecodeError):
-            self._summary_posted_date = None
-            self._milb_summary_posted_date = None
-
-    def _save_summary_state(self) -> None:
-        tmp = SUMMARY_STATE_FILE + ".tmp"
-        try:
-            with open(tmp, "w") as f:
-                json.dump({"date": self._summary_posted_date, "milb_date": self._milb_summary_posted_date}, f)
-            os.replace(tmp, SUMMARY_STATE_FILE)
-        except Exception as e:
-            print(f"[monitor] failed to save summary state: {e}")
-
-    def _load_nh_state(self) -> None:
-        try:
-            with open(NH_STATE_FILE) as f:
-                data = json.load(f)
-            # alert_key is stored as a list [inning, half] — restore as tuple
-            self._nh_alerted = {
-                int(pk): {**v, "key": tuple(v["key"])}
-                for pk, v in data.get("nh_alerted", {}).items()
-            }
-            self._nh_broken_posted = set(int(pk) for pk in data.get("nh_broken_posted", []))
-            print(f"[monitor] loaded NH state: {len(self._nh_alerted)} active, {len(self._nh_broken_posted)} broken")
-        except (FileNotFoundError, json.JSONDecodeError):
-            self._nh_alerted = {}
-            self._nh_broken_posted = set()
-
-    def _save_nh_state(self) -> None:
-        try:
-            data = {
-                "nh_alerted": {
-                    str(pk): {**v, "key": list(v["key"])}
-                    for pk, v in self._nh_alerted.items()
-                },
-                "nh_broken_posted": list(self._nh_broken_posted),
-            }
-            tmp = NH_STATE_FILE + ".tmp"
             with open(tmp, "w") as f:
                 json.dump(data, f)
-            os.replace(tmp, NH_STATE_FILE)
+            os.replace(tmp, path)
         except Exception as e:
-            print(f"[monitor] failed to save NH state: {e}")
+            print(f"[monitor] failed to save {label} state: {e}")
+
+    def _load_hr_state(self) -> None:
+        data = self._load_json(HR_STATE_FILE)
+        if data is None:
+            self._hr_posted = set()
+            return
+        if isinstance(data, list):
+            self._hr_posted = set(data)
+            self._hr_clear_date = None
+        else:
+            self._hr_posted = set(data.get("posted", []))
+            self._hr_clear_date = data.get("clear_date")
+        print(f"[monitor] loaded {len(self._hr_posted)} posted HR key(s) from disk (clear_date={self._hr_clear_date})")
+
+    def _save_hr_state(self) -> None:
+        self._save_json(HR_STATE_FILE, {"posted": list(self._hr_posted), "clear_date": self._hr_clear_date}, "HR")
+
+    def _load_summary_state(self) -> None:
+        state = self._load_json(SUMMARY_STATE_FILE)
+        if state is None:
+            self._summary_posted_date = None
+            self._milb_summary_posted_date = None
+            return
+        self._summary_posted_date = state.get("date")
+        self._milb_summary_posted_date = state.get("milb_date")
+        print(f"[monitor] loaded summary state: mlb={self._summary_posted_date} milb={self._milb_summary_posted_date}")
+
+    def _save_summary_state(self) -> None:
+        self._save_json(SUMMARY_STATE_FILE, {"date": self._summary_posted_date, "milb_date": self._milb_summary_posted_date}, "summary")
+
+    def _load_nh_state(self) -> None:
+        data = self._load_json(NH_STATE_FILE)
+        if data is None:
+            self._nh_alerted = {}
+            self._nh_broken_posted = set()
+            return
+        # alert_key is stored as a list [inning, half] — restore as tuple
+        self._nh_alerted = {
+            int(pk): {**v, "key": tuple(v["key"])}
+            for pk, v in data.get("nh_alerted", {}).items()
+        }
+        self._nh_broken_posted = set(int(pk) for pk in data.get("nh_broken_posted", []))
+        print(f"[monitor] loaded NH state: {len(self._nh_alerted)} active, {len(self._nh_broken_posted)} broken")
+
+    def _save_nh_state(self) -> None:
+        data = {
+            "nh_alerted": {
+                str(pk): {**v, "key": list(v["key"])}
+                for pk, v in self._nh_alerted.items()
+            },
+            "nh_broken_posted": list(self._nh_broken_posted),
+        }
+        self._save_json(NH_STATE_FILE, data, "NH")
 
     def _load_walkoff_state(self) -> None:
-        try:
-            with open(WALKOFF_STATE_FILE) as f:
-                data = json.load(f)
-            self._walkoff_posted = set(int(pk) for pk in data.get("posted", []))
-            self._walkoff_clear_date = data.get("clear_date")
-            print(f"[monitor] loaded {len(self._walkoff_posted)} posted walkoff(s) from disk")
-        except (FileNotFoundError, json.JSONDecodeError):
+        data = self._load_json(WALKOFF_STATE_FILE)
+        if data is None:
             self._walkoff_posted = set()
+            return
+        self._walkoff_posted = set(int(pk) for pk in data.get("posted", []))
+        self._walkoff_clear_date = data.get("clear_date")
+        print(f"[monitor] loaded {len(self._walkoff_posted)} posted walkoff(s) from disk")
 
     def _save_walkoff_state(self) -> None:
-        tmp = WALKOFF_STATE_FILE + ".tmp"
-        try:
-            with open(tmp, "w") as f:
-                json.dump({"posted": list(self._walkoff_posted), "clear_date": self._walkoff_clear_date}, f)
-            os.replace(tmp, WALKOFF_STATE_FILE)
-        except Exception as e:
-            print(f"[monitor] failed to save walkoff state: {e}")
+        self._save_json(WALKOFF_STATE_FILE, {"posted": list(self._walkoff_posted), "clear_date": self._walkoff_clear_date}, "walkoff")
+
+    def _load_lineup_state(self) -> None:
+        data = self._load_json(LINEUP_STATE_FILE)
+        if data is None:
+            self._lineup_posted = set()
+            return
+        self._lineup_posted = set(int(pk) for pk in data.get("posted", []))
+        self._lineup_clear_date = data.get("clear_date")
+        print(f"[monitor] loaded {len(self._lineup_posted)} posted lineup(s) from disk")
+
+    def _save_lineup_state(self) -> None:
+        self._save_json(LINEUP_STATE_FILE, {"posted": list(self._lineup_posted), "clear_date": self._lineup_clear_date}, "lineup")
 
     async def _refresh_schedule(self, prune_finished: bool = False) -> None:
         """Fetch today's full MLB schedule and MERGE into the existing game cache.
@@ -577,6 +590,71 @@ class MonitorCog(commands.Cog):
         except Exception:
             pass
         return NH_ALERT_DELAY
+
+    async def _check_lineup_post(self, now_et: datetime) -> None:
+        """Post FAVORITE_TEAM's starting lineup once MLB publishes it (same format as /mlb box)."""
+        fav_team = getattr(self.bot, "favorite_team", None)
+        if not fav_team:
+            return
+        fav_upper = fav_team.upper()
+
+        for pk, info in self._scheduled_games.items():
+            if pk in self._lineup_posted or info.get("abstract_state") != "Preview":
+                continue
+            if info.get("away", "").upper() == fav_upper:
+                side = "away"
+            elif info.get("home", "").upper() == fav_upper:
+                side = "home"
+            else:
+                continue
+            start_et = info.get("start_et")
+            if not start_et or now_et < start_et - timedelta(hours=LINEUP_CHECK_HOURS):
+                continue
+
+            configured_id = getattr(self.bot, "alert_channel_id", None) or ALERT_CHANNEL_ID
+            if not configured_id:
+                return  # alerts disabled (no ALERT_CHANNEL_ID)
+            channel = await self._get_alert_channel()
+            if channel is None:
+                print(f"[monitor] lineup check: alert channel not found (ALERT_CHANNEL_ID={configured_id})")
+                return
+
+            client = self.bot.mlb_client
+            session = await client.get_session()
+            try:
+                async with session.get(f"{client.BASE_URL}/game/{pk}/boxscore") as resp:
+                    if resp.status != 200:
+                        continue
+                    box_data = await resp.json()
+            except Exception as e:
+                print(f"[monitor] lineup boxscore fetch error for {pk}: {e}")
+                continue
+
+            if len(box_data.get("teams", {}).get(side, {}).get("battingOrder", [])) < 9:
+                continue  # lineup not published yet
+
+            try:
+                await self._post_lineup(channel, box_data, side, start_et)
+            except Exception as e:
+                print(f"[monitor] failed to post lineup for {pk}: {e}")
+                continue  # retry next cycle
+            self._lineup_posted.add(pk)
+            self._save_lineup_state()
+            print(f"[monitor] posted {fav_upper} lineup for game {pk}")
+
+    async def _post_lineup(self, channel, box_data: dict, side: str, start_et: datetime = None) -> None:
+        """Send the starting-lineup embed (batting table in /mlb box format)."""
+        box = parse_box_score_side(box_data, side)
+        # Pregame the probable pitcher appears as a trailing pseudo-substitute — show starters only
+        box.batting_rows = [r for r in box.batting_rows if r.get("is_starter")]
+        embed = discord.Embed(
+            title=f"Starting Lineup — {box.title}",
+            description=f"**{box.team_name} Batting**\n```python\n{box.format_batting()}\n```",
+            color=discord.Color.blue(),
+        )
+        if start_et:
+            embed.set_footer(text=f"First pitch {start_et.strftime('%-I:%M %p')} ET")
+        await channel.send(embed=embed)
 
     async def _delayed_nh_alert(self, channel, feed: dict, game_pk: int) -> None:
         await asyncio.sleep(self._nh_remaining_delay(feed))
@@ -1448,6 +1526,11 @@ class MonitorCog(commands.Cog):
             if self._milb_schedule_date != today_str:
                 await self._refresh_milb_schedule()
 
+            # No alert channel configured → alerts disabled. Keep the schedule
+            # fresh above (test commands use it) but skip all alert work.
+            if not (getattr(self.bot, "alert_channel_id", None) or ALERT_CHANNEL_ID):
+                return
+
             # Clear HR and walkoff state at 6am ET each day
             if now_et.hour >= 6 and self._hr_clear_date != today_str:
                 self._hr_posted.clear()
@@ -1461,6 +1544,11 @@ class MonitorCog(commands.Cog):
                 self._walkoff_clear_date = today_str
                 self._save_walkoff_state()
                 print("[monitor] 6am ET — walkoff posted state cleared")
+            if now_et.hour >= 6 and self._lineup_clear_date != today_str:
+                self._lineup_posted.clear()
+                self._lineup_clear_date = today_str
+                self._save_lineup_state()
+                print("[monitor] 6am ET — lineup posted state cleared")
 
             # Morning performance summary at 8am ET
             if now_et.hour >= 8 and self._summary_posted_date != today_str:
@@ -1498,13 +1586,22 @@ class MonitorCog(commands.Cog):
                 except Exception as e:
                     print(f"[monitor] MiLB affiliate summary check error: {e}")
 
+            # Favorite-team lineup post — runs before the cheap-sleep check because
+            # lineups are published hours before games go live
+            try:
+                await self._check_lineup_post(now_et)
+            except Exception as e:
+                print(f"[monitor] lineup check error: {e}")
+
             # Sleep cheaply when no games are live or imminent
             if not self._any_game_active_or_imminent():
                 return
 
+            configured_id = getattr(self.bot, "alert_channel_id", None) or ALERT_CHANNEL_ID
             channel = await self._get_alert_channel()
             if channel is None:
-                print(f"[monitor] alert channel not found (ALERT_CHANNEL_ID={getattr(self.bot, 'alert_channel_id', None) or ALERT_CHANNEL_ID})")
+                if configured_id:
+                    print(f"[monitor] alert channel not found (ALERT_CHANNEL_ID={configured_id})")
                 return
 
             # Process all games concurrently (MLB + MiLB affiliates)
@@ -1691,6 +1788,36 @@ class MonitorCog(commands.Cog):
         mock_feed["gameData"]["flags"]["perfectGame"] = False
         await self._post_nh_broken_alert(ctx.channel, mock_feed, is_perfect, pitching_abbr=pitching_abbr)
 
+
+    @commands.command(name="lineup_test")
+    async def lineup_test(self, ctx):
+        """Test the favorite-team lineup post for today's game. Usage: !lineup_test"""
+        await ctx.message.delete()
+        fav_team = getattr(self.bot, "favorite_team", None)
+        if not fav_team:
+            await ctx.channel.send("No FAVORITE_TEAM configured.")
+            return
+        fav_upper = fav_team.upper()
+        for pk, info in self._scheduled_games.items():
+            if info.get("away", "").upper() == fav_upper:
+                side = "away"
+            elif info.get("home", "").upper() == fav_upper:
+                side = "home"
+            else:
+                continue
+            client = self.bot.mlb_client
+            session = await client.get_session()
+            async with session.get(f"{client.BASE_URL}/game/{pk}/boxscore") as resp:
+                if resp.status != 200:
+                    await ctx.channel.send(f"Boxscore fetch for game {pk} returned {resp.status}.")
+                    return
+                box_data = await resp.json()
+            if len(box_data.get("teams", {}).get(side, {}).get("battingOrder", [])) < 9:
+                await ctx.channel.send(f"Lineup for game {pk} not published yet.")
+                return
+            await self._post_lineup(ctx.channel, box_data, side, info.get("start_et"))
+            return
+        await ctx.channel.send(f"No {fav_upper} game scheduled today.")
 
     @commands.command(name="summary_test")
     async def summary_test(self, ctx, date: str = None):
