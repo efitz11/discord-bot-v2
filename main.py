@@ -80,6 +80,10 @@ class ModernNatsBot(commands.Bot):
         if os.getenv("NHL", "").lower() in ("1", "true", "yes"):
             await self.load_extension('cogs.nhl')
             print("NHL commands enabled.")
+
+        if os.getenv("WORLDCUP", "").lower() in ("1", "true", "yes"):
+            await self.load_extension('cogs.worldcup')
+            print("World Cup commands enabled.")
         
         # Sync slash commands in the background so startup isn't blocked
         async def _sync():
