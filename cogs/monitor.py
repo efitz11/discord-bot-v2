@@ -634,7 +634,7 @@ class MonitorCog(commands.Cog):
                 continue  # lineup not published yet
 
             try:
-                await self._post_lineup(channel, box_data, side, start_et)
+                await self._post_lineup(channel, box_data, side, start_et, game_pk=pk)
             except Exception as e:
                 print(f"[monitor] failed to post lineup for {pk}: {e}")
                 continue  # retry next cycle
@@ -642,14 +642,81 @@ class MonitorCog(commands.Cog):
             self._save_lineup_state()
             print(f"[monitor] posted {fav_upper} lineup for game {pk}")
 
-    async def _post_lineup(self, channel, box_data: dict, side: str, start_et: datetime = None) -> None:
+    async def _fetch_probables(self, game_pk: int) -> dict:
+        """Return both sides' probable starters from the schedule.
+
+        The schedule's ``probablePitcher`` hydrate is the reliable source for both
+        sides (the boxscore only lists a side's starter once its lineup is set).
+        Returns ``{'away': {id, name}, 'home': {id, name}}`` (a side may be empty).
+        """
+        result = {"away": {}, "home": {}}
+        client = self.bot.mlb_client
+        session = await client.get_session()
+        url = f"{client.BASE_URL}/schedule?sportId=1&gamePk={game_pk}&hydrate=probablePitcher"
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return result
+                data = await resp.json()
+        except Exception as e:
+            print(f"[monitor] probable-pitcher fetch error for {game_pk}: {e}")
+            return result
+        for date_obj in data.get("dates", []):
+            for g in date_obj.get("games", []):
+                if g.get("gamePk") != game_pk:
+                    continue
+                for side in ("away", "home"):
+                    pp = g.get("teams", {}).get(side, {}).get("probablePitcher")
+                    if pp:
+                        result[side] = {"id": pp.get("id"), "name": pp.get("fullName", "TBD")}
+        return result
+
+    @staticmethod
+    def _matchup_row(box_data: dict, side: str, probable: dict) -> dict:
+        """Build one probable-pitcher row, enriching season stats from the boxscore."""
+        if not probable:
+            return None
+        team = box_data.get("teams", {}).get(side, {})
+        player = team.get("players", {}).get(f"ID{probable.get('id')}", {})
+        ss = player.get("seasonStats", {}).get("pitching", {})
+        return {
+            "abbr": team.get("team", {}).get("abbreviation", "???"),
+            "name": probable.get("name", "TBD"),
+            "era": ss.get("era", "-"),
+            "whip": ss.get("whip", "-"),
+            "wins": ss.get("wins", 0),
+            "losses": ss.get("losses", 0),
+        }
+
+    @classmethod
+    def _format_matchup(cls, box_data: dict, probables: dict) -> str:
+        """Build the away-vs-home probable-pitcher block, or '' if neither is set."""
+        rows = [r for side in ("away", "home")
+                if (r := cls._matchup_row(box_data, side, probables.get(side)))]
+        if not rows:
+            return ""
+        name_w = max(len(r["name"]) for r in rows)
+        lines = [
+            f"{r['abbr']:<3}  {r['name']:<{name_w}}  {r['wins']}-{r['losses']}, {r['era']} ERA, {r['whip']} WHIP"
+            for r in rows
+        ]
+        return "\n".join(lines)
+
+    async def _post_lineup(self, channel, box_data: dict, side: str, start_et: datetime = None,
+                           game_pk: int = None) -> None:
         """Send the starting-lineup embed (batting table in /mlb box format)."""
         box = parse_box_score_side(box_data, side)
         # Pregame the probable pitcher appears as a trailing pseudo-substitute — show starters only
         box.batting_rows = [r for r in box.batting_rows if r.get("is_starter")]
+        probables = await self._fetch_probables(game_pk) if game_pk else {"away": {}, "home": {}}
+        matchup = self._format_matchup(box_data, probables)
+        desc = ""
+        if matchup:
+            desc += f"**Pitching Matchup**\n```\n{matchup}\n```\n"
+        desc += f"**{box.team_name} Batting**\n```python\n{box.format_batting()}\n```"
         embed = discord.Embed(
             title=f"Starting Lineup — {box.title}",
-            description=f"**{box.team_name} Batting**\n```python\n{box.format_batting()}\n```",
+            description=desc,
             color=discord.Color.blue(),
         )
         if start_et:
@@ -1815,7 +1882,7 @@ class MonitorCog(commands.Cog):
             if len(box_data.get("teams", {}).get(side, {}).get("battingOrder", [])) < 9:
                 await ctx.channel.send(f"Lineup for game {pk} not published yet.")
                 return
-            await self._post_lineup(ctx.channel, box_data, side, info.get("start_et"))
+            await self._post_lineup(ctx.channel, box_data, side, info.get("start_et"), game_pk=pk)
             return
         await ctx.channel.send(f"No {fav_upper} game scheduled today.")
 
