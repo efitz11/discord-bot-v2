@@ -683,6 +683,7 @@ class MonitorCog(commands.Cog):
             "abbr": team.get("team", {}).get("abbreviation", "???"),
             "name": probable.get("name", "TBD"),
             "era": ss.get("era", "-"),
+            "whip": ss.get("whip", "-"),
             "wins": ss.get("wins", 0),
             "losses": ss.get("losses", 0),
         }
@@ -696,7 +697,7 @@ class MonitorCog(commands.Cog):
             return ""
         name_w = max(len(r["name"]) for r in rows)
         lines = [
-            f"{r['abbr']:<3}  {r['name']:<{name_w}}  {r['wins']}-{r['losses']}, {r['era']} ERA"
+            f"{r['abbr']:<3}  {r['name']:<{name_w}}  {r['wins']}-{r['losses']}, {r['era']} ERA, {r['whip']} WHIP"
             for r in rows
         ]
         return "\n".join(lines)
