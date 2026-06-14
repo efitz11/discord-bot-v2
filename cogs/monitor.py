@@ -1278,10 +1278,6 @@ class MonitorCog(commands.Cog):
         is_nh = flags.get("noHitter", False)
 
         if is_pg or is_nh:
-            # Post once per inning transition, but only after the pitching team completes their half inning:
-            # - Home pitching (top half): alert when is_top=False (top just ended)
-            # - Away pitching (bottom half): alert when is_top=True (bottom just ended)
-            alert_key = (inning, "final" if is_final else is_top)
             stored = self._nh_alerted.get(game_pk)
 
             # Determine which team is throwing the NH so break-up alerts find the right hit
@@ -1291,8 +1287,27 @@ class MonitorCog(commands.Cog):
             nh_pitching  = nh_home_abbr if away_hits == 0 else nh_away_abbr
             home_pitching = (nh_pitching == nh_home_abbr)
 
-            # Only alert after the pitching team finishes their half inning
-            should_alert = is_final or (home_pitching and not is_top) or (not home_pitching and is_top)
+            # Alert the moment the pitching team records the 3rd out of their half, rather
+            # than waiting for the next half to begin (when isTopInning flips). inningState
+            # cycles Top → Middle → Bottom → End: "Middle" marks the top half done, "End"
+            # the bottom half done, and both appear before isTopInning flips. The
+            # isTopInning-based fallbacks (`not is_top` / `is_top`) still catch the
+            # completed half if a 60s poll misses the brief Middle/End window.
+            inning_state = linescore.get("inningState", "")
+            completed_half = None
+            if home_pitching:
+                # Home throws the top; complete once we leave the Top state (Middle onward).
+                if inning_state != "Top":
+                    completed_half = (inning, "top")
+            else:
+                # Away throws the bottom; complete at End, or once the next top has begun.
+                if inning_state == "End":
+                    completed_half = (inning, "bottom")
+                elif is_top and inning > 1:
+                    completed_half = (inning - 1, "bottom")
+
+            alert_key = ("final", inning) if is_final else completed_half
+            should_alert = is_final or completed_half is not None
 
             # Tune-in alert: fires when entering the pitching team's half inning at inning 9+
             entering_pitching_half = (home_pitching and is_top) or (not home_pitching and not is_top)
