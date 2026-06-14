@@ -112,22 +112,24 @@ class WorldCupCog(commands.Cog):
 
         # ESPN groups matches by ET calendar date, so a 12:00 AM ET kickoff lands on the
         # *next* date. The ESPN app instead shows those late-night games as part of the
-        # prior night's slate, so we pull the target date plus the early-morning games of
-        # the following date (before LATE_NIGHT_CUTOFF) and present them together.
+        # prior night's slate. We query a two-day range (one request) and assign each match
+        # to a "viewing day": kickoffs before LATE_NIGHT_CUTOFF belong to the previous night.
         LATE_NIGHT_CUTOFF = 6  # hour (ET); kickoffs before this belong to the previous night
+        next_day = target + timedelta(days=1)
+        date_range = f"{target:%Y%m%d}-{next_day:%Y%m%d}"
 
         session = await self.bot.mlb_client.get_session()
+        async with session.get(SCOREBOARD_URL, params={"dates": date_range}) as resp:
+            data = await resp.json()
+
         events = []
-        for d, in_window in (
-            (target, lambda h: h >= LATE_NIGHT_CUTOFF),
-            (target + timedelta(days=1), lambda h: h < LATE_NIGHT_CUTOFF),
-        ):
-            async with session.get(SCOREBOARD_URL, params={"dates": d.strftime("%Y%m%d")}) as resp:
-                data = await resp.json()
-            for e in data.get("events", []):
-                et = _utc_to_et(e.get("date", ""))
-                if et and in_window(et.hour):
-                    events.append(e)
+        for e in data.get("events", []):
+            et = _utc_to_et(e.get("date", ""))
+            if not et:
+                continue
+            viewing_day = et.date() if et.hour >= LATE_NIGHT_CUTOFF else et.date() - timedelta(days=1)
+            if viewing_day == target:
+                events.append(e)
         events.sort(key=lambda e: e.get("date", ""))
 
         if team:
