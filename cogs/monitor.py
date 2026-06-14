@@ -195,9 +195,9 @@ class MonitorCog(commands.Cog):
             self._nh_alerted = {}
             self._nh_broken_posted = set()
             return
-        # alert_key is stored as a list [inning, half] — restore as tuple
+        # alert_key is stored as a list [inning, half] — restore as tuple (may be null)
         self._nh_alerted = {
-            int(pk): {**v, "key": tuple(v["key"])}
+            int(pk): {**v, "key": tuple(v["key"]) if v.get("key") is not None else None}
             for pk, v in data.get("nh_alerted", {}).items()
         }
         self._nh_broken_posted = set(int(pk) for pk in data.get("nh_broken_posted", []))
@@ -206,7 +206,7 @@ class MonitorCog(commands.Cog):
     def _save_nh_state(self) -> None:
         data = {
             "nh_alerted": {
-                str(pk): {**v, "key": list(v["key"])}
+                str(pk): {**v, "key": list(v["key"]) if v.get("key") is not None else None}
                 for pk, v in self._nh_alerted.items()
             },
             "nh_broken_posted": list(self._nh_broken_posted),
@@ -735,6 +735,10 @@ class MonitorCog(commands.Cog):
         await asyncio.sleep(self._nh_remaining_delay(feed))
         await self._post_nh_tune_in_alert(channel, feed, game_pk, pitching_abbr, batting_side)
 
+    async def _delayed_pg_broken_alert(self, channel, feed: dict, pitching_abbr: str = None) -> None:
+        await asyncio.sleep(self._nh_remaining_delay(feed))
+        await self._post_pg_broken_alert(channel, feed, pitching_abbr)
+
     def _get_next_batters(self, feed: dict, batting_side: str, n: int = 3) -> list:
         live_data     = feed.get("liveData", {})
         boxscore      = live_data.get("boxscore", {})
@@ -889,6 +893,74 @@ class MonitorCog(commands.Cog):
             await channel.send(embed=embed)
         except discord.HTTPException as e:
             print(f"[monitor] failed to post NH broken alert: {e}")
+
+    # Events that put a runner on base without a hit — these end a perfect game
+    # while leaving the no-hitter intact.
+    PG_BREAK_EVENTS = ("walk", "intent_walk", "hit_by_pitch", "field_error", "catcher_interf")
+
+    async def _post_pg_broken_alert(self, channel, feed: dict, pitching_abbr: str = None) -> None:
+        """Perfect game broken (walk/HBP/error) but the no-hitter is still alive."""
+        game_data = feed.get("gameData", {})
+        live_data = feed.get("liveData", {})
+        linescore = live_data.get("linescore", {})
+
+        away_abbr = game_data.get("teams", {}).get("away", {}).get("abbreviation", "???")
+        home_abbr = game_data.get("teams", {}).get("home", {}).get("abbreviation", "???")
+
+        # The team being no-hit bats "top" if the pitching team is home, "bottom" if away.
+        if pitching_abbr == home_abbr:
+            hitting_half = "top"
+        elif pitching_abbr == away_abbr:
+            hitting_half = "bottom"
+        else:
+            hitting_half = None  # unknown — fall back to first baserunner by either team
+
+        # Find the first non-hit baserunner allowed by the team throwing the no-hitter
+        all_plays = live_data.get("plays", {}).get("allPlays", [])
+        break_play = None
+        for play in all_plays:
+            if play.get("result", {}).get("eventType") in self.PG_BREAK_EVENTS:
+                if hitting_half is None or play.get("about", {}).get("halfInning") == hitting_half:
+                    break_play = play
+                    break
+
+        if not break_play:
+            return
+
+        about   = break_play.get("about", {})
+        inning  = about.get("inning", 0)
+        is_top  = about.get("halfInning", "top") == "top"
+        outs    = about.get("outs", 0)
+        desc    = break_play.get("result", {}).get("description", "")
+        pitcher = break_play.get("matchup", {}).get("pitcher", {}).get("fullName", "")
+        batter  = break_play.get("matchup", {}).get("batter",  {}).get("fullName", "")
+
+        if not pitching_abbr:
+            pitching_abbr = home_abbr if is_top else away_abbr
+
+        away_score = linescore.get("teams", {}).get("away", {}).get("runs", 0)
+        home_score = linescore.get("teams", {}).get("home", {}).get("runs", 0)
+        score_line = f"{away_abbr} {away_score} — {home_abbr} {home_score}"
+
+        title = f"🧤 {pitching_abbr}'s perfect game is over — no-hitter still alive"
+
+        if desc and pitcher:
+            desc_fmt  = desc.replace(batter, f"**{batter}**", 1) if batter else desc
+            play_text = f"With **{pitcher}** pitching, {desc_fmt}"
+        else:
+            play_text = desc
+
+        embed = discord.Embed(title=title, color=discord.Color.blue())
+        inning_desc = _inning_label(inning, is_top) + f" | {outs} out{'s' if outs != 1 else ''}"
+        embed.add_field(name="Score",  value=score_line,  inline=True)
+        embed.add_field(name="Inning", value=inning_desc, inline=True)
+        if play_text:
+            embed.add_field(name="Play", value=play_text, inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to post PG broken alert: {e}")
 
     async def _post_nh_alert(self, channel, feed: dict, game_pk: int) -> None:
         game_data  = feed.get("gameData", {})
@@ -1287,6 +1359,23 @@ class MonitorCog(commands.Cog):
             nh_pitching  = nh_home_abbr if away_hits == 0 else nh_away_abbr
             home_pitching = (nh_pitching == nh_home_abbr)
 
+            # Perfect game broken (walk/HBP/error) but the no-hitter is still alive: post a
+            # follow-up with the same break-play info. Only once, and only if we'd already
+            # announced the perfect game.
+            pg_broken_posted = (stored or {}).get("pg_broken_posted", False)
+            fire_pg_broken = (
+                stored is not None
+                and stored.get("perfect", False)
+                and not is_pg and is_nh
+                and stored.get("alert_posted", False)
+                and not pg_broken_posted
+            )
+            if fire_pg_broken:
+                pg_pitching = stored.get("pitching_abbr", nh_pitching)
+                print(f"[monitor] perfect game broken, no-hitter continues: {pg_pitching} game={game_pk}")
+                asyncio.create_task(self._delayed_pg_broken_alert(channel, feed, pg_pitching))
+                pg_broken_posted = True
+
             # Alert the moment the pitching team records the 3rd out of their half, rather
             # than waiting for the next half to begin (when isTopInning flips). inningState
             # cycles Top → Middle → Bottom → End: "Middle" marks the top half done, "End"
@@ -1321,13 +1410,14 @@ class MonitorCog(commands.Cog):
             # (should_alert=False) or crashed during the 15-second delay before the alert sent.
             firing_alert = should_alert and (key_changed or not prev_alert_posted)
 
-            if key_changed or should_tune_in or firing_alert:
+            if key_changed or should_tune_in or firing_alert or fire_pg_broken:
                 self._nh_alerted[game_pk] = {
                     "key":           alert_key,
                     "perfect":       is_pg,
                     "pitching_abbr": nh_pitching,
                     "tune_in_inning": inning if should_tune_in else stored_tune_in,
                     "alert_posted":  prev_alert_posted or firing_alert,
+                    "pg_broken_posted": pg_broken_posted,
                 }
                 self._save_nh_state()
                 if firing_alert:

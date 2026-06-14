@@ -153,6 +153,70 @@ async def test_duplicate_nh_alert_prevention(temp_state_cog):
 
 
 @pytest.mark.asyncio
+async def test_perfect_game_broken_no_hitter_continues(temp_state_cog):
+    cog = temp_state_cog
+    game_pk = 555555
+    channel = MagicMock()
+
+    cog._delayed_pg_broken_alert = AsyncMock()
+    cog._delayed_nh_alert = AsyncMock()
+    cog._delayed_nh_tune_in_alert = AsyncMock()
+
+    # Pre-existing state: WSH's perfect game has already been announced.
+    cog._nh_alerted[game_pk] = {
+        "key": (6, "top"),
+        "perfect": True,
+        "pitching_abbr": "WSH",
+        "tune_in_inning": 0,
+        "alert_posted": True,
+        "pg_broken_posted": False,
+    }
+
+    # Now the perfect game is broken by an error, but the no-hitter is still alive.
+    mock_feed = {
+        "gameData": {
+            "status": {"abstractGameState": "Live"},
+            "flags": {"noHitter": True, "perfectGame": False},
+            "teams": {"away": {"abbreviation": "NYM"}, "home": {"abbreviation": "WSH"}},
+        },
+        "liveData": {
+            "linescore": {
+                "currentInning": 7,
+                "isTopInning": True,      # WSH (home) pitching the top
+                "inningState": "Top",
+                "outs": 1,
+                "teams": {"away": {"hits": 0, "runs": 0}, "home": {"hits": 4, "runs": 2}},
+            },
+            "plays": {
+                "allPlays": [
+                    {
+                        "about": {"inning": 7, "halfInning": "top", "outs": 1},
+                        "result": {"eventType": "field_error",
+                                   "description": "Francisco Lindor reaches on a throwing error."},
+                        "matchup": {"pitcher": {"fullName": "MacKenzie Gore"},
+                                    "batter": {"fullName": "Francisco Lindor"}},
+                    }
+                ],
+            },
+        },
+    }
+    cog._fetch_live_feed = AsyncMock(return_value=mock_feed)
+    cog._scheduled_games[game_pk] = {"away": "NYM", "home": "WSH", "abstract_state": "Live"}
+
+    await cog._process_game(game_pk, channel)
+
+    # Perfect-game-over alert fires once; the no-hitter is still intact (no break-up alert)
+    cog._delayed_pg_broken_alert.assert_called_once()
+    assert cog._nh_alerted[game_pk]["pg_broken_posted"] is True
+    assert cog._nh_alerted[game_pk]["perfect"] is False
+
+    # Repeat poll with the same state must not re-fire
+    cog._delayed_pg_broken_alert.reset_mock()
+    await cog._process_game(game_pk, channel)
+    cog._delayed_pg_broken_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_duplicate_hr_alert_prevention_logic():
     # Verify that a home run key skips processing if it's already in _hr_posted
     mock_bot = MagicMock()
