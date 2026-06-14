@@ -116,7 +116,8 @@ async def test_duplicate_nh_alert_prevention(temp_state_cog):
         "liveData": {
             "linescore": {
                 "currentInning": 8,
-                "isTopInning": True, # Away team is batting (WSH is pitching)
+                "isTopInning": True, # Away team (NYM) is batting; WSH is pitching the top
+                "inningState": "Top",
                 "teams": {
                     "away": {"hits": 0}, # NYM has 0 hits -> WSH throwing NH
                     "home": {"hits": 5}
@@ -124,22 +125,22 @@ async def test_duplicate_nh_alert_prevention(temp_state_cog):
             }
         }
     }
-    
+
     # Mock self._fetch_live_feed and check_alert to run locally
     cog._fetch_live_feed = AsyncMock(return_value=mock_feed)
     cog._scheduled_games[game_pk] = {"away": "NYM", "home": "WSH", "abstract_state": "Live"}
-    
-    # Call _process_game for the first time
-    # This is WSH pitching top of the 8th -> should_alert is false because WSH (home pitching) finishes their half in bottom of 8th.
-    # Let's adjust isTopInning to False (bottom of 8th ended, WSH completed their half-inning) -> should_alert becomes True.
-    mock_feed["liveData"]["linescore"]["isTopInning"] = False
-    
+
+    # Call _process_game for the first time.
+    # WSH (home) throws the top, so their half is complete once inningState leaves "Top".
+    # "Middle" marks the top of the 8th just ended -> WSH finished a clean half -> should_alert.
+    mock_feed["liveData"]["linescore"]["inningState"] = "Middle"
+
     await cog._process_game(game_pk, channel)
-    
+
     # It should have scheduled a delayed NH alert
     cog._delayed_nh_alert.assert_called_once()
     assert game_pk in cog._nh_alerted
-    assert cog._nh_alerted[game_pk]["key"] == (8, False)
+    assert cog._nh_alerted[game_pk]["key"] == (8, "top")
     
     # Reset mock call history
     cog._delayed_nh_alert.reset_mock()
