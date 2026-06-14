@@ -2,7 +2,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from core.utils import parse_date, et_now
 from core.models import format_table
@@ -108,13 +108,28 @@ class WorldCupCog(commands.Cog):
         await interaction.response.defer()
 
         date_str = parse_date(date)
-        params   = {"dates": date_str.replace("-", "")} if date_str else {}
+        target   = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else et_now().date()
+
+        # ESPN groups matches by ET calendar date, so a 12:00 AM ET kickoff lands on the
+        # *next* date. The ESPN app instead shows those late-night games as part of the
+        # prior night's slate, so we pull the target date plus the early-morning games of
+        # the following date (before LATE_NIGHT_CUTOFF) and present them together.
+        LATE_NIGHT_CUTOFF = 6  # hour (ET); kickoffs before this belong to the previous night
 
         session = await self.bot.mlb_client.get_session()
-        async with session.get(SCOREBOARD_URL, params=params) as resp:
-            data = await resp.json()
+        events = []
+        for d, in_window in (
+            (target, lambda h: h >= LATE_NIGHT_CUTOFF),
+            (target + timedelta(days=1), lambda h: h < LATE_NIGHT_CUTOFF),
+        ):
+            async with session.get(SCOREBOARD_URL, params={"dates": d.strftime("%Y%m%d")}) as resp:
+                data = await resp.json()
+            for e in data.get("events", []):
+                et = _utc_to_et(e.get("date", ""))
+                if et and in_window(et.hour):
+                    events.append(e)
+        events.sort(key=lambda e: e.get("date", ""))
 
-        events = data.get("events", [])
         if team:
             q = team.lower()
             events = [
@@ -163,11 +178,7 @@ class WorldCupCog(commands.Cog):
                 block += "\n" + "\n".join(details)
             blocks.append(block)
 
-        if date_str:
-            d = datetime.strptime(date_str, "%Y-%m-%d")
-        else:
-            d = et_now()
-        date_label = d.strftime("%A, %B %-d, %Y")
+        date_label = target.strftime("%A, %B %-d, %Y")
 
         embed = discord.Embed(
             title=f"🏆 World Cup — {date_label}",
