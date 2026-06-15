@@ -1840,6 +1840,8 @@ class MLBSlash(commands.Cog):
             if len(games) == 1:
                 game = games[0]
                 value = f"```python\n{game.format_score_line()}\n```"
+                if game.is_neutral_site():
+                    value += f"\n📍 {game.venue_name}"
                 last_play = game.format_last_play()
                 if last_play:
                     value += f"\n{last_play}"
@@ -1885,6 +1887,8 @@ class MLBSlash(commands.Cog):
             for game in games:
                 name = game_name(game)
                 value = f"```python\n{game.format_score_line()}\n```"
+                if game.is_neutral_site():
+                    value += f"\n📍 {game.venue_name}"
                 if team_query:
                     last_play = game.format_last_play()
                     if last_play:
