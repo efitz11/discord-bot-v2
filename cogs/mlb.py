@@ -1841,7 +1841,7 @@ class MLBSlash(commands.Cog):
                 game = games[0]
                 value = f"```python\n{game.format_score_line()}\n```"
                 if game.is_neutral_site():
-                    value += f"\n📍 {game.venue_name}"
+                    value += f"\n📍 {game.venue_label()}"
                 last_play = game.format_last_play()
                 if last_play:
                     value += f"\n{last_play}"
@@ -1888,7 +1888,7 @@ class MLBSlash(commands.Cog):
                 name = game_name(game)
                 value = f"```python\n{game.format_score_line()}\n```"
                 if game.is_neutral_site():
-                    value += f"\n📍 {game.venue_name}"
+                    value += f"\n📍 {game.venue_label()}"
                 if team_query:
                     last_play = game.format_last_play()
                     if last_play:
