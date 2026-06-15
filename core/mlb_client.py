@@ -2457,7 +2457,7 @@ class MLBClient:
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:
         session = await self.get_session()
         # Request all the expanded data your old bot was using
-        url = f"{self.BASE_URL}/schedule?sportId=1&hydrate=team,linescore(matchup,runners),previousPlay,person,stats,lineups,probablePitcher,decisions,flags"
+        url = f"{self.BASE_URL}/schedule?sportId=1&hydrate=team,venue(location),linescore(matchup,runners),previousPlay,person,stats,lineups,probablePitcher,decisions,flags"
         if date:
             url += f"&date={date}"
 

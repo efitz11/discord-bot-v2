@@ -342,6 +342,26 @@ class Game:
     perfect_game: bool = False
     no_hitter_pitchers: List[dict] = None
     level: str = ""
+    venue_name: str = ""
+    venue_id: int = 0
+    home_venue_id: int = 0
+    venue_city: str = ""
+    venue_state: str = ""
+
+    def is_neutral_site(self) -> bool:
+        """True when the game is at neither team's home park (e.g. Las Vegas).
+
+        Requires the schedule to be hydrated with team venue info; if the home
+        park is unknown we return False to avoid false positives.
+        """
+        return bool(self.venue_id and self.home_venue_id and self.venue_id != self.home_venue_id)
+
+    def venue_label(self) -> str:
+        """'Park Name — City, ST' when location is known, else just the park name."""
+        if self.venue_city:
+            loc = f"{self.venue_city}, {self.venue_state}" if self.venue_state else self.venue_city
+            return f"{self.venue_name} — {loc}"
+        return self.venue_name
 
     @classmethod
     def from_api_json(cls, data: dict):
@@ -388,6 +408,14 @@ class Game:
 
         sport_name = home_data.get('team', {}).get('sport', {}).get('name', '')
         game.level = LEVEL_ABBREVS.get(sport_name, sport_name)
+
+        game_venue = data.get('venue', {})
+        game.venue_name = game_venue.get('name', '')
+        game.venue_id = game_venue.get('id', 0)
+        game.home_venue_id = home_data.get('team', {}).get('venue', {}).get('id', 0)
+        venue_loc = game_venue.get('location', {})
+        game.venue_city = venue_loc.get('city', '')
+        game.venue_state = venue_loc.get('stateAbbrev', '')
 
         offense = ls.get('offense', {})
         defense = ls.get('defense', {})
