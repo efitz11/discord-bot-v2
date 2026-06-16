@@ -247,11 +247,13 @@ class ExtendedSlash(commands.Cog):
         is_us_zip = location.strip().replace('-', '').isdigit() and len(location.strip()) in (5, 9)
         geo_bias = "countrycodes=us" if is_us_zip else "viewbox=-125,24,-66,50&bounded=0"
         geo_url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(location)}&format=json&limit=1&{geo_bias}"
+        geo_name = None
         try:
             async with session.get(geo_url, headers={"User-Agent": "discord-bot/1.0"}) as resp:
                 geo_data = await resp.json() if resp.status == 200 else []
             if geo_data:
                 wttr_query = urllib.parse.quote(f"{geo_data[0]['lat']},{geo_data[0]['lon']}")
+                geo_name = geo_data[0].get('display_name', '').split(',')[0].strip() or None
             else:
                 wttr_query = urllib.parse.quote(location)
         except Exception:
@@ -272,9 +274,15 @@ class ExtendedSlash(commands.Cog):
         area = data.get("nearest_area", [{}])[0]
         hourly = data.get("weather", [{}])[0].get("hourly", [])
 
-        area_name = area.get("areaName", [{}])[0].get("value", location)
+        wttr_name = area.get("areaName", [{}])[0].get("value", location)
         region = area.get("region", [{}])[0].get("value", "")
         country = area.get("country", [{}])[0].get("value", "")
+        wttr_location = wttr_name
+        if region and region != wttr_name:
+            wttr_location += f", {region}"
+        if country and country not in ("United States of America", ""):
+            wttr_location += f", {country}"
+        area_name = geo_name or wttr_name
         location_str = area_name
         if region and region != area_name:
             location_str += f", {region}"
@@ -322,6 +330,9 @@ class ExtendedSlash(commands.Cog):
         if forecast_parts:
             embed.add_field(name="Today's Forecast", value="\n".join(forecast_parts), inline=False)
 
+        if geo_name and wttr_location != location_str:
+            embed.set_footer(text=f"Nearest station: {wttr_location}")
+
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="forecast", description="3-day weather forecast for a location")
@@ -334,11 +345,13 @@ class ExtendedSlash(commands.Cog):
         is_us_zip = location.strip().replace('-', '').isdigit() and len(location.strip()) in (5, 9)
         geo_bias = "countrycodes=us" if is_us_zip else "viewbox=-125,24,-66,50&bounded=0"
         geo_url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(location)}&format=json&limit=1&{geo_bias}"
+        geo_name = None
         try:
             async with session.get(geo_url, headers={"User-Agent": "discord-bot/1.0"}) as resp:
                 geo_data = await resp.json() if resp.status == 200 else []
             if geo_data:
                 wttr_query = urllib.parse.quote(f"{geo_data[0]['lat']},{geo_data[0]['lon']}")
+                geo_name = geo_data[0].get('display_name', '').split(',')[0].strip() or None
             else:
                 wttr_query = urllib.parse.quote(location)
         except Exception:
@@ -356,9 +369,15 @@ class ExtendedSlash(commands.Cog):
             return
 
         area = data.get("nearest_area", [{}])[0]
-        area_name = area.get("areaName", [{}])[0].get("value", location)
+        wttr_name = area.get("areaName", [{}])[0].get("value", location)
         region    = area.get("region", [{}])[0].get("value", "")
         country   = area.get("country", [{}])[0].get("value", "")
+        wttr_location = wttr_name
+        if region and region != wttr_name:
+            wttr_location += f", {region}"
+        if country and country not in ("United States of America", ""):
+            wttr_location += f", {country}"
+        area_name = geo_name or wttr_name
         location_str = area_name
         if region and region != area_name:
             location_str += f", {region}"
@@ -386,6 +405,9 @@ class ExtendedSlash(commands.Cog):
             icon = _desc_to_icon(desc)
             value = f"{icon} {desc}\nHigh **{max_f}°F** · Low **{min_f}°F**"
             embed.add_field(name=day_label, value=value, inline=False)
+
+        if geo_name and wttr_location != location_str:
+            embed.set_footer(text=f"Nearest station: {wttr_location}")
 
         await interaction.followup.send(embed=embed)
 
