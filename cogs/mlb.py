@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from core.utils import parse_date, et_now
 from core.mlb_client import (PERCENTILE_DISPLAY_NAMES, BATTER_PERCENTILE_CATEGORIES,
-                             PITCHER_PERCENTILE_CATEGORIES)
+                             PITCHER_PERCENTILE_CATEGORIES, player_headshot_url)
 
 class PlayerAbsView(discord.ui.View):
     def __init__(self, cog, player_id: str, date: str, milb: bool):
@@ -678,10 +678,30 @@ class MLBSlash(commands.Cog):
         year_str = p1_data.year
         p1_label = f"{p1_data.player_name} ({p1_data.team_abbrev})"
         p2_label = f"{p2_data.player_name} ({p2_data.team_abbrev})"
+
+        async def _fetch_headshot(player_id):
+            if not player_id:
+                return None
+            try:
+                session = await self.bot.mlb_client.get_session()
+                async with session.get(player_headshot_url(player_id)) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+            except Exception:
+                pass
+            return None
+
+        p1_headshot, p2_headshot = await asyncio.gather(
+            _fetch_headshot(p1_data.player_id),
+            _fetch_headshot(p2_data.player_id),
+        )
+
         buf = generate_compare_percentiles_image(
             p1_label, p2_label,
             year_str, stat_type,
             sections,
+            p1_team=p1_data.team_abbrev, p2_team=p2_data.team_abbrev,
+            p1_headshot=p1_headshot, p2_headshot=p2_headshot,
         )
         embed = discord.Embed(
             title=f"{p1_data.player_name} vs {p2_data.player_name} percentile comparison ({year_str})",

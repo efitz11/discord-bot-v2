@@ -753,6 +753,7 @@ class PlayerPercentiles:
     year: str
     stat_type: str
     percentiles: List[dict]
+    player_id: Optional[str] = None
     def apply_to_embed(self, embed) -> None:
         if not self.percentiles:
             embed.description = "No percentiles found for this year."

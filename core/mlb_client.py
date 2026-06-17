@@ -1450,7 +1450,7 @@ class MLBClient:
                 table_rows.append(d)
                 
         table_rows = sorted(table_rows, key=lambda i: i["value"], reverse=True)
-        return PlayerPercentiles(resolved['name'], team_abbrev, str(year_stats.get('year')), stat_type, table_rows)
+        return PlayerPercentiles(resolved['name'], team_abbrev, str(year_stats.get('year')), stat_type, table_rows, player_id=pid)
 
     async def get_highlights(self, query: str, date: str = None) -> List[HighlightItem]:
         session = await self.get_session()

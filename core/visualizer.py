@@ -24,10 +24,86 @@ def _pct_color(pct: int) -> Tuple[int, int, int]:
     return (200, 48, 48)
 
 
+# (primary, secondary) RGB colors keyed by MLB Stats API team abbreviation.
+TEAM_COLORS = {
+    "ARI": ((167, 25, 48),  (227, 212, 173)),
+    "ATL": ((19, 39, 79),   (206, 17, 65)),
+    "BAL": ((223, 70, 1),   (0, 0, 0)),
+    "BOS": ((189, 48, 57),  (12, 35, 64)),
+    "CHC": ((14, 51, 134),  (204, 52, 51)),
+    "CWS": ((39, 37, 31),   (196, 206, 212)),
+    "CHW": ((39, 37, 31),   (196, 206, 212)),
+    "CIN": ((198, 1, 31),   (0, 0, 0)),
+    "CLE": ((0, 56, 93),    (227, 25, 55)),
+    "COL": ((51, 0, 111),   (196, 206, 212)),
+    "DET": ((12, 35, 64),   (250, 70, 22)),
+    "HOU": ((0, 45, 98),    (235, 110, 31)),
+    "KC":  ((0, 70, 135),   (189, 155, 89)),
+    "LAA": ((186, 0, 33),   (0, 50, 99)),
+    "LAD": ((0, 90, 156),   (239, 62, 66)),
+    "MIA": ((0, 163, 224),  (239, 91, 46)),
+    "MIL": ((18, 40, 75),   (255, 197, 47)),
+    "MIN": ((0, 43, 92),    (211, 17, 69)),
+    "NYM": ((0, 45, 114),   (252, 89, 16)),
+    "NYY": ((12, 35, 64),   (196, 206, 212)),
+    "OAK": ((0, 56, 49),    (239, 178, 30)),
+    "ATH": ((0, 56, 49),    (239, 178, 30)),
+    "PHI": ((232, 24, 40),  (0, 45, 114)),
+    "PIT": ((253, 184, 39), (0, 0, 0)),
+    "SD":  ((47, 36, 29),   (255, 196, 37)),
+    "SEA": ((0, 92, 92),    (12, 44, 86)),
+    "SF":  ((253, 90, 30),  (0, 0, 0)),
+    "STL": ((196, 30, 58),  (12, 35, 64)),
+    "TB":  ((9, 44, 92),    (143, 188, 230)),
+    "TEX": ((0, 50, 120),   (192, 17, 31)),
+    "TOR": ((19, 74, 142),  (29, 45, 68)),
+    "WSH": ((171, 0, 3),    (20, 34, 90)),
+}
+_DEFAULT_COLORS = ((100, 180, 255), (255, 145, 85))  # fallback blue / orange
+
+
+def _team_colors(abbrev: Optional[str]) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+    return TEAM_COLORS.get((abbrev or "").upper(), _DEFAULT_COLORS)
+
+
+def _luminance(c: Tuple[int, int, int]) -> float:
+    return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+
+
+def _readable(color: Tuple[int, int, int], floor: int = 110) -> Tuple[int, int, int]:
+    """Lighten a color toward white if it's too dark to read on the dark background."""
+    lum = _luminance(color)
+    if lum >= floor:
+        return color
+    t = (floor - lum) / floor
+    return tuple(int(round(ch + (255 - ch) * t)) for ch in color)
+
+
+def _circle_headshot(img_bytes: bytes, size: int, ring: Tuple[int, int, int]) -> Optional[Image.Image]:
+    """Crop a headshot to a circle with a team-colored ring sitting just outside it."""
+    try:
+        base = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    except Exception:
+        return None
+    gap = 6  # space between the photo edge and the ring
+    inner = size - 2 * gap
+    w, h = base.size
+    s = min(w, h)
+    base = base.crop(((w - s) // 2, (h - s) // 2, (w - s) // 2 + s, (h - s) // 2 + s)).resize((inner, inner))
+    mask = Image.new("L", (inner, inner), 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, inner - 1, inner - 1], fill=255)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.paste(base, (gap, gap), mask)
+    ImageDraw.Draw(out).ellipse([1, 1, size - 2, size - 2], outline=ring, width=3)
+    return out
+
+
 def generate_compare_percentiles_image(
     p1_label: str, p2_label: str,
     year_str: str, stat_type: str,
     sections: list,
+    p1_team: Optional[str] = None, p2_team: Optional[str] = None,
+    p1_headshot: Optional[bytes] = None, p2_headshot: Optional[bytes] = None,
 ) -> io.BytesIO:
     """Render a side-by-side percentile comparison chart styled after Baseball Savant."""
 
@@ -39,13 +115,15 @@ def generate_compare_percentiles_image(
     BAR_W    = (W - 2 * PAD - 2 * VAL_W - CTR_W) // 2   # ≈ 245 px per bar
 
     TITLE_H  = 52
+    HEAD     = 72    # headshot diameter
+    HEAD_H   = HEAD + 6
     NAMES_H  = 38
     CAT_H    = 34
     ROW_H    = 31
 
     n_rows = sum(len(rows) for _, rows in sections)
     n_cats = len(sections)
-    total_h = TITLE_H + NAMES_H + n_cats * CAT_H + n_rows * ROW_H + PAD
+    total_h = TITLE_H + HEAD_H + NAMES_H + n_cats * CAT_H + n_rows * ROW_H + PAD
 
     # ── Colors ──────────────────────────────────────────────────
     BG       = (16, 18, 27)
@@ -54,8 +132,14 @@ def generate_compare_percentiles_image(
     TRACK    = (34, 38, 56)
     TEXT     = (224, 224, 235)
     DIM      = (110, 115, 140)
-    P1_COL   = (100, 180, 255)   # blue  — left player
-    P2_COL   = (255, 145, 85)    # orange — right player
+    # Team-derived colors: primary fills the bar, secondary outlines it so two
+    # teams sharing a primary color stay distinguishable.
+    p1_primary, p1_secondary = _team_colors(p1_team)
+    p2_primary, p2_secondary = _team_colors(p2_team)
+    P1_COL   = p1_primary        # left player bar fill
+    P2_COL   = p2_primary        # right player bar fill
+    P1_NAME  = _readable(p1_primary)   # legible-on-dark name color
+    P2_NAME  = _readable(p2_primary)
 
     # ── Fonts ───────────────────────────────────────────────────
     f_title = _dv("DejaVuSans-Bold.ttf", 17)
@@ -77,15 +161,30 @@ def generate_compare_percentiles_image(
 
     y = PAD // 2
 
+    # column centers for each player (used for headshots + names)
+    c1 = (xb1 + xctr) // 2
+    c2 = (xb2 + xv2 + VAL_W) // 2
+
     # ── Title ───────────────────────────────────────────────────
     draw.text((W // 2, y + TITLE_H // 2), f"{year_str} Percentile Comparison",
               font=f_title, fill=TEXT, anchor="mm")
     y += TITLE_H
 
+    # ── Headshots ───────────────────────────────────────────────
+    if p1_headshot:
+        hs = _circle_headshot(p1_headshot, HEAD, p1_secondary)
+        if hs:
+            img.paste(hs, (c1 - HEAD // 2, y), hs)
+    if p2_headshot:
+        hs = _circle_headshot(p2_headshot, HEAD, p2_secondary)
+        if hs:
+            img.paste(hs, (c2 - HEAD // 2, y), hs)
+    draw.text((W // 2, y + HEAD_H // 2), "vs", font=f_reg, fill=DIM, anchor="mm")
+    y += HEAD_H
+
     # ── Player name header ──────────────────────────────────────
-    draw.text((xb1, y + NAMES_H // 2), p1_label, font=f_bold, fill=P1_COL, anchor="lm")
-    draw.text((W // 2,  y + NAMES_H // 2), "vs",       font=f_reg,  fill=DIM,    anchor="mm")
-    draw.text((xv2 + VAL_W - 2, y + NAMES_H // 2), p2_label, font=f_bold, fill=P2_COL, anchor="rm")
+    draw.text((c1, y + NAMES_H // 2), p1_label, font=f_bold, fill=P1_NAME, anchor="mm")
+    draw.text((c2, y + NAMES_H // 2), p2_label, font=f_bold, fill=P2_NAME, anchor="mm")
     y += NAMES_H
 
     # ── Sections ─────────────────────────────────────────────────
@@ -113,10 +212,10 @@ def generate_compare_percentiles_image(
                 blen = max(1, round(abs(diff) / 100 * BAR_W))
                 if diff > 0:
                     draw.rounded_rectangle([xctr - blen, bar_top, xctr - 1, bar_bottom],
-                                           radius=3, fill=P1_COL)
+                                           radius=3, fill=P1_COL, outline=p1_secondary, width=2)
                 else:
                     draw.rounded_rectangle([xb2, bar_top, xb2 + blen, bar_bottom],
-                                           radius=3, fill=P2_COL)
+                                           radius=3, fill=P2_COL, outline=p2_secondary, width=2)
 
             # percentile values
             col1 = _pct_color(v1) if v1 else DIM
