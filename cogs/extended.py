@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 from PIL import Image
 
-from core.visualizer import generate_intraday_chart
+from core.visualizer import generate_price_chart
 from core.utils import ET_ZONE
 
 
@@ -114,38 +114,90 @@ class ExtendedSlash(commands.Cog):
                 return []
         return []
 
-    async def _intraday_chart(self, session, symbol: str) -> io.BytesIO | None:
-        """Build an intraday price chart from Yahoo's 5-minute chart data."""
+    # range_key -> (Yahoo interval, Yahoo range)
+    CHART_RANGES = {
+        "1H":  ("1m",  "1d"),   # fetched as 1d/1m, then sliced to the last hour
+        "1D":  ("5m",  "1d"),
+        "5D":  ("15m", "5d"),
+        "30D": ("60m", "1mo"),
+        "6M":  ("1d",  "6mo"),
+        "1Y":  ("1d",  "1y"),
+        "5Y":  ("1wk", "5y"),
+    }
+
+    # range_key -> readable label for the text line
+    RANGE_LABELS = {
+        "1H": "Past Hour", "5D": "Past 5 Days", "30D": "Past 30 Days",
+        "6M": "Past 6 Months", "1Y": "Past Year", "5Y": "Past 5 Years",
+    }
+
+    async def _price_chart(self, session, symbol: str, range_key: str):
+        """Build a price chart for the given range.
+
+        Returns (chart_buf, stats) where stats is {"baseline", "last"} for the
+        range, or (None, None) on failure.
+        """
+        interval, yrange = self.CHART_RANGES.get(range_key, self.CHART_RANGES["1D"])
         url = (
             f"https://query1.finance.yahoo.com/v8/finance/chart/"
-            f"{urllib.parse.quote(symbol)}?interval=5m&range=1d&includePrePost=false"
+            f"{urllib.parse.quote(symbol)}?interval={interval}&range={yrange}&includePrePost=false"
         )
         try:
             async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
                 if resp.status != 200:
-                    return None
+                    return None, None
                 data = await resp.json(content_type=None)
             result = (data.get("chart", {}).get("result") or [None])[0]
             if not result:
-                return None
+                return None, None
             meta = result.get("meta", {})
             timestamps = result.get("timestamp") or []
             closes = (result.get("indicators", {}).get("quote") or [{}])[0].get("close") or []
             points = [(ts, c) for ts, c in zip(timestamps, closes) if c is not None]
-            prev_close = meta.get("chartPreviousClose")
-            if len(points) < 2 or prev_close is None:
-                return None
+
+            # 1H: keep only the last 60 minutes of available data
+            if range_key == "1H" and points:
+                cutoff = points[-1][0] - 3600
+                sliced = [p for p in points if p[0] >= cutoff]
+                if len(sliced) >= 2:
+                    points = sliced
+
+            if len(points) < 2:
+                return None, None
+
+            # Baseline: previous close for the intraday view, else the range-start price
+            if range_key == "1D" and meta.get("chartPreviousClose") is not None:
+                baseline = meta["chartPreviousClose"]
+            else:
+                baseline = points[0][1]
+
+            stats = {"baseline": baseline, "last": points[-1][1]}
             loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(
-                None, generate_intraday_chart, points, prev_close, meta.get("gmtoffset", 0)
+            chart = await loop.run_in_executor(
+                None, generate_price_chart, points, baseline,
+                meta.get("gmtoffset", 0), range_key, range_key, symbol,
             )
+            return chart, stats
         except Exception as e:
-            print(f"[stock] intraday chart error for {symbol}: {e}")
-            return None
+            print(f"[stock] price chart error for {symbol} ({range_key}): {e}")
+            return None, None
 
     @app_commands.command(name="stock", description="Stock quote for a ticker, or the major indexes if omitted")
-    @app_commands.describe(ticker="Ticker symbol (e.g. AAPL); omit for Dow/S&P 500/Nasdaq")
-    async def stock(self, interaction: discord.Interaction, ticker: str = None):
+    @app_commands.describe(
+        ticker="Ticker symbol (e.g. AAPL); omit for Dow/S&P 500/Nasdaq",
+        range="Chart time range (default 1D)",
+    )
+    @app_commands.choices(range=[
+        app_commands.Choice(name="1 Hour",  value="1H"),
+        app_commands.Choice(name="1 Day",   value="1D"),
+        app_commands.Choice(name="5 Days",  value="5D"),
+        app_commands.Choice(name="30 Days", value="30D"),
+        app_commands.Choice(name="6 Months", value="6M"),
+        app_commands.Choice(name="1 Year",  value="1Y"),
+        app_commands.Choice(name="5 Years", value="5Y"),
+    ])
+    async def stock(self, interaction: discord.Interaction, ticker: str = None,
+                    range: app_commands.Choice[str] = None):
         await interaction.response.defer()
 
         session = await self.bot.mlb_client.get_session()
@@ -174,6 +226,9 @@ class ExtendedSlash(commands.Cog):
                     f" {q.get(f'{prefix}ChangePercent', 0.0):+.2f}%) ({ts})"
                 )
 
+            range_key = range.value if range else "1D"
+            chart, range_stats = await self._price_chart(session, symbol, range_key)
+
             state = q.get("marketState", "")
             lines = [quote_line("Market Hours", "regularMarket")]
             if state.startswith("PRE"):
@@ -184,6 +239,14 @@ class ExtendedSlash(commands.Cog):
                 post = quote_line("After Hours", "postMarket")
                 if post:
                     lines.insert(0, post)
+            # Range performance line (skip for the 1D intraday view, already shown above)
+            if range_key != "1D" and range_stats and range_stats["baseline"]:
+                base = range_stats["baseline"]
+                last_p = range_stats["last"]
+                r_chg = last_p - base
+                r_pct = r_chg / base * 100 if base else 0.0
+                label = self.RANGE_LABELS.get(range_key, range_key)
+                lines.append(f"{label}: {last_p:,.2f} ({r_chg:+,.2f}, {r_pct:+.2f}%)")
             lines += [
                 f"Day volume: {_abbrev_number(q.get('regularMarketVolume'))}"
                 f" ({_abbrev_number(q.get('averageDailyVolume10Day'))} 10 day avg)",
@@ -204,7 +267,6 @@ class ExtendedSlash(commands.Cog):
                 description=f"```{chr(10).join(lines)}```",
                 color=discord.Color.green() if change >= 0 else discord.Color.red(),
             )
-            chart = await self._intraday_chart(session, symbol)
             if chart:
                 embed.set_image(url="attachment://chart.png")
                 await interaction.followup.send(embed=embed, file=discord.File(chart, filename="chart.png"))

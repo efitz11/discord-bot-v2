@@ -700,16 +700,65 @@ def generate_rolling_xwoba_chart(
     return buf
 
 
-def generate_intraday_chart(
-    points: list,
-    prev_close: float,
-    tz_offset_secs: int = 0,
-) -> io.BytesIO:
-    """Render an intraday price line chart vs. previous close.
+def _price_axis_ticks(points: list, tz, range_key: str, max_ticks: int = 9) -> list:
+    """Pick x-axis tick (index, label) pairs from price points for the given range.
 
-    points: chronologically ordered list of (unix_ts, price)
+    Charts plot against point index (not real time) so overnight/weekend gaps
+    don't stretch the line; ticks mark where the calendar bucket changes.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime
+
+    def bucket(dt):
+        if range_key == "1H":
+            return (dt.year, dt.month, dt.day, dt.hour, dt.minute // 15)
+        if range_key == "1D":
+            return (dt.year, dt.month, dt.day, dt.hour)
+        if range_key in ("5D", "30D"):
+            return (dt.year, dt.month, dt.day)
+        if range_key in ("6M", "1Y"):
+            return (dt.year, dt.month)
+        return (dt.year,)  # 5Y
+
+    def label(dt):
+        if range_key == "1H":
+            return dt.strftime("%I:%M%p").lstrip("0").lower()
+        if range_key == "1D":
+            return dt.strftime("%I%p").lstrip("0").lower()
+        if range_key in ("5D", "30D"):
+            return dt.strftime("%-m/%-d")
+        if range_key in ("6M", "1Y"):
+            return dt.strftime("%b")
+        return dt.strftime("%Y")
+
+    ticks, prev = [], None
+    for i, (ts, _) in enumerate(points):
+        dt = datetime.fromtimestamp(ts, tz=tz)
+        b = bucket(dt)
+        if b != prev:
+            ticks.append((i, label(dt)))
+            prev = b
+    if len(ticks) > max_ticks:
+        stepn = math.ceil(len(ticks) / max_ticks)
+        ticks = ticks[::stepn]
+    return ticks
+
+
+def generate_price_chart(
+    points: list,
+    baseline: float,
+    tz_offset_secs: int = 0,
+    range_key: str = "1D",
+    range_label: str = "1D",
+    symbol: str = "",
+) -> io.BytesIO:
+    """Render a price line chart vs. a baseline, with a price/high/low table.
+
+    points:    chronologically ordered list of (unix_ts, price)
+    baseline:  reference value (prev close for 1D, range-start price otherwise)
+    range_key: one of 1H/1D/5D/30D/6M/1Y/5Y — controls x-axis tick granularity
+    symbol:    ticker shown in the table header so the image stands alone
+    """
+    from datetime import timezone, timedelta
 
     W, H = 720, 300
     PAD_T = 16
@@ -721,7 +770,7 @@ def generate_intraday_chart(
     plot_h = H - PAD_T - PAD_B
 
     prices = [p for _, p in points]
-    up = prices[-1] >= prev_close
+    up = prices[-1] >= baseline
 
     BG       = (30, 31, 34)        # Discord dark theme background
     LINE_COL = (35, 197, 94) if up else (239, 68, 68)
@@ -729,24 +778,24 @@ def generate_intraday_chart(
     PREV_COL = (150, 150, 150)
     GRID_COL = (55, 57, 62)
     DIM_COL  = (160, 160, 165)
+    TXT_COL  = (225, 225, 228)
 
     f_axis = _dv("DejaVuSans.ttf", 11)
 
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    # Y range — include prev_close, pad 5%
-    lo = min(min(prices), prev_close)
-    hi = max(max(prices), prev_close)
+    # Y range — include baseline, pad 5%
+    lo = min(min(prices), baseline)
+    hi = max(max(prices), baseline)
     span = (hi - lo) or max(hi * 0.01, 0.01)
     lo -= span * 0.05
     hi += span * 0.05
 
-    t0, t1 = points[0][0], points[-1][0]
-    t_span = max(t1 - t0, 1)
+    n = len(points)
 
-    def xp(ts):
-        return PAD_L + (ts - t0) / t_span * plot_w
+    def xp(i):
+        return PAD_L + (i / (n - 1) * plot_w if n > 1 else 0)
 
     def yp(v):
         return PAD_T + plot_h - (v - lo) / (hi - lo) * plot_h
@@ -765,28 +814,22 @@ def generate_intraday_chart(
         draw.text((PAD_L + plot_w + 6, y), f"{gv:,.2f}", font=f_axis, fill=DIM_COL, anchor="lm")
         gv += step
 
-    # X-axis hour labels in exchange-local time
+    # X-axis labels in exchange-local time, by calendar-bucket change
     tz = timezone(timedelta(seconds=tz_offset_secs))
-    first_dt = datetime.fromtimestamp(t0, tz=tz)
-    hour_dt = first_dt.replace(minute=0, second=0, microsecond=0)
-    if hour_dt < first_dt:
-        hour_dt += timedelta(hours=1)
-    while hour_dt.timestamp() <= t1:
-        x = xp(hour_dt.timestamp())
+    for i, lbl in _price_axis_ticks(points, tz, range_key):
+        x = xp(i)
         draw.line([(x, PAD_T), (x, PAD_T + plot_h)], fill=GRID_COL, width=1)
-        label = hour_dt.strftime("%I%p").lstrip("0").lower()
-        draw.text((x, PAD_T + plot_h + 6), label, font=f_axis, fill=DIM_COL, anchor="ma")
-        hour_dt += timedelta(hours=1)
+        draw.text((x, PAD_T + plot_h + 6), lbl, font=f_axis, fill=DIM_COL, anchor="ma")
 
-    # Previous-close dashed baseline
-    py = yp(prev_close)
+    # Baseline dashed reference line
+    py = yp(baseline)
     x = PAD_L
     while x < PAD_L + plot_w:
         draw.line([(x, py), (min(x + 6, PAD_L + plot_w), py)], fill=PREV_COL, width=1)
         x += 11
 
     # Filled area between line and baseline, then the price line on top
-    line_pts = [(xp(ts), yp(p)) for ts, p in points]
+    line_pts = [(xp(i), yp(p)) for i, p in enumerate(prices)]
     if len(line_pts) > 1:
         overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         odraw = ImageDraw.Draw(overlay)
@@ -795,6 +838,43 @@ def generate_intraday_chart(
         draw.line(line_pts, fill=LINE_COL, width=2)
         lx, ly = line_pts[-1]
         draw.ellipse([lx - 3, ly - 3, lx + 3, ly + 3], fill=LINE_COL)
+
+    # Stats table: ticker + range label, then current price / high / low.
+    f_lbl = _dv("DejaVuSans.ttf", 12)
+    f_hdr = _dv("DejaVuSans-Bold.ttf", 12)
+    header = f"{symbol} · {range_label}" if symbol else range_label
+    rows = [("Price", prices[-1]), ("High", max(prices)), ("Low", min(prices))]
+    lbl_w = max(draw.textlength(r[0], font=f_lbl) for r in rows)
+    val_w = max(draw.textlength(f"{r[1]:,.2f}", font=f_lbl) for r in rows)
+    gap, padx, pady, lh = 14, 8, 6, 16
+    box_w = max(padx * 2 + lbl_w + gap + val_w, padx * 2 + draw.textlength(header, font=f_hdr))
+    box_h = pady * 2 + lh * (len(rows) + 1)
+
+    # Place the box in whichever corner overlaps the price line the least.
+    m = 6
+    corners = [
+        (PAD_L + m, PAD_T + m),                              # top-left
+        (PAD_L + plot_w - box_w - m, PAD_T + m),             # top-right
+        (PAD_L + m, PAD_T + plot_h - box_h - m),             # bottom-left
+        (PAD_L + plot_w - box_w - m, PAD_T + plot_h - box_h - m),  # bottom-right
+    ]
+
+    def overlap(bx, by):
+        return sum(1 for px, py_ in line_pts
+                   if bx <= px <= bx + box_w and by <= py_ <= by + box_h)
+
+    bx, by = min(corners, key=lambda c: overlap(*c))
+    bx, by = int(bx), int(by)
+
+    tbl = Image.new("RGBA", (int(box_w), int(box_h)), (20, 21, 24, 205))
+    img.paste(Image.alpha_composite(
+        img.crop((bx, by, bx + int(box_w), by + int(box_h))).convert("RGBA"), tbl
+    ).convert("RGB"), (bx, by))
+    draw.text((bx + padx, by + pady), header, font=f_hdr, fill=TXT_COL)
+    for j, (lbl, val) in enumerate(rows):
+        ty = by + pady + lh * (j + 1)
+        draw.text((bx + padx, ty), lbl, font=f_lbl, fill=DIM_COL)
+        draw.text((bx + box_w - padx, ty), f"{val:,.2f}", font=f_lbl, fill=TXT_COL, anchor="ra")
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
