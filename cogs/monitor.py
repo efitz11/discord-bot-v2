@@ -1295,14 +1295,20 @@ class MonitorCog(commands.Cog):
 
             hr_num = parse_hr_number(desc)
 
+            # Score *after this play* (see MLB HR path) — avoids stamping a later
+            # score onto an earlier HR when two are detected in the same poll.
+            result    = play.get("result", {})
+            play_away = result.get("awayScore", milb_away_runs)
+            play_home = result.get("homeScore", milb_home_runs)
+
             hr_data = {
                 "batter":       batter,
                 "batter_team":  batter_team,
                 "pitcher":      pitcher,
                 "away":         away_abbr,
                 "home":         home_abbr,
-                "away_score":   milb_away_runs,
-                "home_score":   milb_home_runs,
+                "away_score":   play_away,
+                "home_score":   play_home,
                 "level":        level,
                 "dist":         dist,
                 "ev":           ev,
@@ -1505,6 +1511,14 @@ class MonitorCog(commands.Cog):
 
             pitcher_team = away_abbr if half == "bottom" else home_abbr
 
+            # Score *after this play* — falls back to the live linescore for the
+            # rare play that lacks per-play scores. Using the play's own score
+            # avoids stamping a later score onto an earlier HR when two HRs are
+            # detected in the same poll (e.g. back-to-back shots).
+            result      = play.get("result", {})
+            play_away   = result.get("awayScore", hr_away_runs)
+            play_home   = result.get("homeScore", hr_home_runs)
+
             hr_data = {
                 "batter":       batter,
                 "batter_team":  batter_team,
@@ -1512,8 +1526,8 @@ class MonitorCog(commands.Cog):
                 "pitcher_team": pitcher_team,
                 "away":         away_abbr,
                 "home":         home_abbr,
-                "away_score":   hr_away_runs,
-                "home_score":   hr_home_runs,
+                "away_score":   play_away,
+                "home_score":   play_home,
                 "dist":         dist,
                 "ev":           ev,
                 "la":           la,
