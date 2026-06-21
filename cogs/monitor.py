@@ -49,6 +49,7 @@ HR_STATE_FILE         = os.path.join(_STATE_DIR, "hr_posted.json")
 NH_STATE_FILE         = os.path.join(_STATE_DIR, "nh_state.json")
 SUMMARY_STATE_FILE    = os.path.join(_STATE_DIR, "summary_state.json")
 WALKOFF_STATE_FILE    = os.path.join(_STATE_DIR, "walkoff_state.json")
+CYCLE_STATE_FILE      = os.path.join(_STATE_DIR, "cycle_state.json")
 LINEUP_STATE_FILE     = os.path.join(_STATE_DIR, "lineup_state.json")
 LINEUP_CHECK_HOURS    = 6                   # Start polling for the lineup this many hours before first pitch
 VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
@@ -117,6 +118,10 @@ class MonitorCog(commands.Cog):
         self._walkoff_pending: dict = {}  # {game_pk: {"cycles_waited": int, "data": dict, "message": Message|None}}
         self._walkoff_posted: set = set() # game_pks already posted
         self._walkoff_clear_date = None
+
+        # Cycle tracking — keyed "{game_pk}_{batter_id}"
+        self._cycle_posted: set = set()
+        self._cycle_clear_date = None
         self._summary_posted_date = None       # date string for which we've posted the morning summary
         self._milb_summary_posted_date = None  # date string for which we've posted the MiLB affiliate summary
         self._milb_ready_since: "datetime | None" = None  # when all MLB+MiLB games first went Final
@@ -130,6 +135,7 @@ class MonitorCog(commands.Cog):
         self._load_nh_state()
         self._load_summary_state()
         self._load_walkoff_state()
+        self._load_cycle_state()
         self._load_lineup_state()
         self.monitor_loop.start()
 
@@ -224,6 +230,18 @@ class MonitorCog(commands.Cog):
 
     def _save_walkoff_state(self) -> None:
         self._save_json(WALKOFF_STATE_FILE, {"posted": list(self._walkoff_posted), "clear_date": self._walkoff_clear_date}, "walkoff")
+
+    def _load_cycle_state(self) -> None:
+        data = self._load_json(CYCLE_STATE_FILE)
+        if data is None:
+            self._cycle_posted = set()
+            return
+        self._cycle_posted = set(data.get("posted", []))
+        self._cycle_clear_date = data.get("clear_date")
+        print(f"[monitor] loaded {len(self._cycle_posted)} posted cycle(s) from disk")
+
+    def _save_cycle_state(self) -> None:
+        self._save_json(CYCLE_STATE_FILE, {"posted": list(self._cycle_posted), "clear_date": self._cycle_clear_date}, "cycle")
 
     def _load_lineup_state(self) -> None:
         data = self._load_json(LINEUP_STATE_FILE)
@@ -1178,6 +1196,88 @@ class MonitorCog(commands.Cog):
         except discord.HTTPException as e:
             print(f"[monitor] failed to post HR alert: {e}")
 
+    @staticmethod
+    def _format_abs_pbp(at_bats: list) -> str:
+        """Format a player's at-bats as a Play-by-Play block, matching /abs output."""
+        out = "### Play-by-Play\n"
+        for ab in at_bats:
+            if not ab.is_complete:
+                out += f"**{ab.inning.title()}:** Currently at bat.\n\n"
+                continue
+            scoring = "__" if ab.is_scoring else ""
+            line = f"**{ab.inning.title()}:** {scoring}With **{ab.pitcher_name}** pitching, {ab.description}{scoring}"
+            if ab.pitch_data or ab.statcast_data:
+                extras = " | ".join(filter(None, [ab.pitch_data, ab.statcast_data]))
+                line += f" *({extras})*"
+            out += line + "\n"
+            if ab.video_url:
+                out += f"> [🎥 **{ab.video_blurb}**]({ab.video_url})\n"
+            out += "\n"
+        return out
+
+    async def _post_cycle_alert(self, channel, cyc: dict) -> None:
+        batter = cyc["batter"]
+        team   = cyc["batter_team"]
+        away, home = cyc.get("away", ""), cyc.get("home", "")
+
+        # Pull the player's full game line + at-bats the same way /abs does, so the
+        # alert shows every plate appearance with pitch/Statcast/video detail.
+        stats = None
+        try:
+            stats_list = await self.bot.mlb_client.get_player_game_stats(
+                str(cyc["player_id"]), date=cyc.get("date"), include_abs=True
+            )
+            # In a doubleheader, pick the game that actually contains the cycle
+            for s in stats_list:
+                bs = s.batting_stats or {}
+                if bs.get("doubles", 0) >= 1 and bs.get("triples", 0) >= 1 and bs.get("homeRuns", 0) >= 1 and bs.get("hits", 0) >= 4:
+                    stats = s
+                    break
+            if stats is None:
+                stats = next((s for s in stats_list if s.at_bats), stats_list[0] if stats_list else None)
+        except Exception as e:
+            print(f"[monitor] cycle alert at-bat fetch failed: {e}")
+
+        # Title — prefer the matchup from cycle data; fall back to the fetched
+        # stats (used by the test command, which doesn't supply team/score).
+        if not team and stats:
+            team = stats.team_abbrev
+        if away and home:
+            matchup = f"{away} {cyc.get('away_score', 0)} @ {home} {cyc.get('home_score', 0)}"
+        elif stats:
+            matchup = f"{stats.team_abbrev} {'vs' if stats.is_home else '@'} {stats.opp_abbrev}"
+        else:
+            matchup = team
+        kind = "the natural cycle" if cyc.get("natural") else "the cycle"
+        title = f"🔄 {matchup} — ({team}) {batter} hit for {kind}!"
+
+        desc = ""
+        if cyc.get("natural"):
+            desc += "*single → double → triple → HR, in order — a natural cycle!*\n"
+        if stats and (stats.batting_stats or stats.pitching_stats):
+            desc += f"```python\n{stats.format_discord_code_block()}\n```\n"
+        if stats and stats.at_bats:
+            desc += self._format_abs_pbp(stats.at_bats)
+        else:
+            # Fallback: just the four cycle hits if at-bat detail is unavailable
+            type_labels = {"single": "Single", "double": "Double", "triple": "Triple", "home_run": "Home Run"}
+            types = cyc.get("types", {})
+            desc += "\n".join(
+                f"> **{type_labels[t]}** — inning {types[t]}"
+                for t in ("single", "double", "triple", "home_run") if t in types
+            )
+
+        if len(desc) > 4096:
+            desc = desc[:4093] + "..."
+
+        embed = discord.Embed(title=title, description=desc.strip(), color=discord.Color.gold())
+        if stats and stats.headshot_url:
+            embed.set_thumbnail(url=stats.headshot_url)
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to post cycle alert: {e}")
+
     async def _post_milb_hr_alert(self, channel, hr: dict) -> None:
         batter     = hr["batter"]
         team       = hr["batter_team"]
@@ -1587,6 +1687,71 @@ class MonitorCog(commands.Cog):
                 else:
                     self._hr_pending[hr_key]["cycles_waited"] += 1
 
+        # ── Hitting for the cycle ────────────────────────────────────────────
+        # A cycle = single + double + triple + home run by one batter in a game.
+        # Build each batter's distinct hit types from the play-by-play; the play
+        # that adds the 4th type is the completing hit.
+        CYCLE_TYPES = ("single", "double", "triple", "home_run")
+        cycle_progress: dict = {}
+        for play in all_plays:
+            ev = play.get("result", {}).get("eventType")
+            if ev not in CYCLE_TYPES:
+                continue
+            matchup = play.get("matchup", {})
+            bid = matchup.get("batter", {}).get("id")
+            if bid is None:
+                continue
+            prog = cycle_progress.setdefault(bid, {
+                "name":  matchup.get("batter", {}).get("fullName", "Unknown"),
+                "half":  play.get("about", {}).get("halfInning", "top"),
+                "types": {},      # hit type -> inning of first occurrence
+                "order": [],      # hit types in the order achieved
+                "complete_play": None,
+            })
+            if ev not in prog["types"]:
+                prog["types"][ev] = play.get("about", {}).get("inning", 0)
+                prog["order"].append(ev)
+                if len(prog["types"]) == 4:
+                    prog["complete_play"] = play
+
+        for bid, prog in cycle_progress.items():
+            if len(prog["types"]) < 4:
+                continue
+            cyc_key = f"{game_pk}_{bid}"
+            if cyc_key in self._cycle_posted:
+                continue
+
+            cp_about = prog["complete_play"].get("about", {})
+            # Skip stale cycles (bot restart > 10 min after the completing hit)
+            end_time_str = cp_about.get("endTime", "")
+            if end_time_str:
+                try:
+                    end_time = datetime.strptime(end_time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - end_time).total_seconds() > 600:
+                        self._cycle_posted.add(cyc_key)
+                        self._save_cycle_state()
+                        continue
+                except Exception:
+                    pass
+
+            half = prog["half"]
+            cp_result = prog["complete_play"].get("result", {})
+            cycle_data = {
+                "player_id":   bid,
+                "batter":      prog["name"],
+                "batter_team": home_abbr if half == "bottom" else away_abbr,
+                "away":        away_abbr,
+                "home":        home_abbr,
+                "away_score":  cp_result.get("awayScore", hr_away_runs),
+                "home_score":  cp_result.get("homeScore", hr_home_runs),
+                "types":       prog["types"],
+                "natural":     prog["order"] == list(CYCLE_TYPES),
+                "date":        None,  # live game — use the team's current schedule
+            }
+            await self._post_cycle_alert(channel, cycle_data)
+            self._cycle_posted.add(cyc_key)
+            self._save_cycle_state()
+
         # ── Walkoff detection ────────────────────────────────────────────────
         if (
             is_final
@@ -1730,6 +1895,11 @@ class MonitorCog(commands.Cog):
                 self._walkoff_clear_date = today_str
                 self._save_walkoff_state()
                 print("[monitor] 6am ET — walkoff posted state cleared")
+            if now_et.hour >= 6 and self._cycle_clear_date != today_str:
+                self._cycle_posted.clear()
+                self._cycle_clear_date = today_str
+                self._save_cycle_state()
+                print("[monitor] 6am ET — cycle posted state cleared")
             if now_et.hour >= 6 and self._lineup_clear_date != today_str:
                 self._lineup_posted.clear()
                 self._lineup_clear_date = today_str
@@ -2081,6 +2251,29 @@ class MonitorCog(commands.Cog):
         }
         await ctx.message.delete()
         await self._post_hr_alert(ctx.channel, mock_hr)
+
+    @commands.command(name="cycle_test")
+    async def cycle_test(self, ctx, player: str = "CJ Abrams", *, date: str = None):
+        """Render a cycle alert using a real player's at-bats. Usage: !cycle_test <player> [date]
+
+        Pulls the player's real game line + play-by-play (regardless of whether
+        they actually cycled) so the alert formatting can be previewed.
+        """
+        resolved = await self.bot.mlb_client.resolve_player(player)
+        if not resolved:
+            await ctx.send(f"Could not find player '{player}'.")
+            return
+        mock_cycle = {
+            "player_id":   resolved["id"],
+            "batter":      resolved["name"],
+            "batter_team": "",
+            "away":        "",
+            "home":        "",
+            "natural":     False,
+            "date":        date,
+        }
+        await ctx.message.delete()
+        await self._post_cycle_alert(ctx.channel, mock_cycle)
 
 
 async def setup(bot: commands.Bot) -> None:

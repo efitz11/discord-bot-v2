@@ -1915,14 +1915,31 @@ class MLBClient:
         if not year and et_now().month < 3:
             season -= 1
 
-        # Use the stats/season endpoint which allows fetching a larger pool to sort manually
+        # Determine sort direction up front so the API returns the correct end of
+        # the FULL pool. Sorting only locally works when every player is in the
+        # response, but large pools (ALL/ROOKIES) exceed the limit and come back
+        # as an arbitrary truncated slice — reversing that drops players.
+        lower_is_better = {
+            "earnedRunAverage", "era", "walksAndHitsPerInningPitched", "whip",
+            "hitsPer9Inn", "walksPer9Inn", "homeRunsPer9", "homeRunsPer9Inn",
+            "runsScoredPer9", "runsAllowed", "hitsAllowed", "walksAllowed",
+        }
+        hi_to_lo = stat not in lower_is_better
+        if reverse:
+            hi_to_lo = not hi_to_lo
+
+        # Use the stats/season endpoint, sorted server-side (sortStat/order) so the
+        # top — or bottom, when reversed — of the full pool comes back first
+        # regardless of how many players the pool contains.
         params = {
             "stats": "season",
             "group": stat_group,
             "sportId": "1",
             "season": season,
-            "limit": 200, # Fetch enough to cover all qualified players
-            "playerPool": player_pool.upper() if player_pool else "QUALIFIED"
+            "limit": 200,
+            "playerPool": player_pool.upper() if player_pool else "QUALIFIED",
+            "sortStat": stat,
+            "order": "desc" if hi_to_lo else "asc",
         }
         
         if team_id:
@@ -1986,13 +2003,8 @@ class MLBClient:
             except:
                 return -999999.0
 
-        # Determine if higher is better
-        lower_is_better = ["era", "earnedRunAverage", "whip", "walksAndHitsPerInningPitched", "runsAllowed", "hitsAllowed", "walksAllowed", "hitsPer9Inn", "walksPer9Inn", "homeRunsPer9Inn"]
-        hi_to_lo = api_key not in lower_is_better
-        
-        if reverse:
-            hi_to_lo = not hi_to_lo
-            
+        # Re-sort locally as a safety net for ties and any stat the API doesn't
+        # sort server-side; hi_to_lo was already computed above for the request.
         splits.sort(key=lambda x: safe_float(x.get("stat", {}).get(api_key, 0)), reverse=hi_to_lo)
         
         # Take top 10 after sort
