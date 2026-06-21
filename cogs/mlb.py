@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image, generate_rolling_xwoba_chart
+from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image, generate_rolling_xwoba_chart, generate_winprob_chart, _team_colors
 import io
 import asyncio
 import dataclasses
@@ -493,6 +493,85 @@ class MLBSlash(commands.Cog):
 
     @game_linescore.autocomplete('team')
     async def game_linescore_team_ac(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
+    @mlb_game.command(name="winprob", description="Win probability chart for a team's game.")
+    @app_commands.describe(team="The team (e.g. wsh, nationals)", date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
+    async def game_winprob(self, interaction: discord.Interaction, team: str, date: str = None):
+        await interaction.response.defer()
+        parsed_date = parse_date(date)
+
+        game, wp_plays = await self.bot.mlb_client.get_game_win_probability(team, date=parsed_date)
+        if game is None:
+            await interaction.followup.send("Could not find a game for that team on the specified date.")
+            return
+        # Keep only plays that carry a win-probability value
+        wp_plays = [p for p in (wp_plays or []) if p.get("homeTeamWinProbability") is not None]
+        if len(wp_plays) < 2:
+            await interaction.followup.send("Win probability isn't available for that game yet (it may not have started).")
+            return
+
+        team_id = await self.bot.mlb_client.get_team_id(team)
+        is_home = team_id == game.home.id
+        team_abbr = game.home.abbreviation if is_home else game.away.abbreviation
+        opp_abbr = game.away.abbreviation if is_home else game.home.abbreviation
+
+        # Win probability from the queried team's perspective
+        wp = []
+        for p in wp_plays:
+            home_wp = p["homeTeamWinProbability"]
+            wp.append(home_wp if is_home else 100.0 - home_wp)
+
+        # Inning boundary ticks
+        inning_ticks = []
+        last_inn = None
+        for i, p in enumerate(wp_plays):
+            inn = p.get("about", {}).get("inning")
+            if inn != last_inn:
+                inning_ticks.append((i, str(inn)))
+                last_inn = inn
+
+        # Biggest swing (toward either team) — only annotate if it's a real turning point
+        def _wpa(p):
+            return abs(p.get("homeTeamWinProbabilityAdded") or 0.0)
+        swing = None
+        s_i = max(range(len(wp_plays)), key=lambda i: _wpa(wp_plays[i]))
+        if _wpa(wp_plays[s_i]) >= 10:
+            s_about = wp_plays[s_i].get("about", {})
+            half = "T" if s_about.get("halfInning") == "top" else "B"
+            s_desc = wp_plays[s_i].get("result", {}).get("description", "")
+            swing = (s_i, f"{half}{s_about.get('inning', '')}: {s_desc}")
+
+        team_color = _team_colors(team_abbr)[0]
+        opp_color = _team_colors(opp_abbr)[0]
+
+        if game.abstract_state == "Final":
+            state = "Final" if game.inning == 9 else f"Final/{game.inning}"
+        elif game.abstract_state == "Live":
+            state = f"{'Top' if game.is_top_inning else 'Bot'} {game.inning}"
+        else:
+            state = game.status
+        header = f"{game.away.abbreviation} {game.away.score} @ {game.home.abbreviation} {game.home.score} ({state})"
+
+        loop = asyncio.get_event_loop()
+        buf = await loop.run_in_executor(
+            None, generate_winprob_chart, wp, inning_ticks,
+            team_abbr, opp_abbr, header, team_color, opp_color, swing,
+        )
+
+        if game.abstract_state == "Final":
+            title = f"🏁 {game.away.abbreviation} @ {game.home.abbreviation} — {state}"
+        elif game.abstract_state == "Live":
+            title = f"🔴 {game.away.abbreviation} @ {game.home.abbreviation} — {state}"
+        else:
+            title = f"🗓️ {game.away.abbreviation} @ {game.home.abbreviation} — {state}"
+
+        embed = discord.Embed(title=f"{title} · Win Probability", color=discord.Color.blue())
+        embed.set_image(url="attachment://winprob.png")
+        await interaction.followup.send(embed=embed, file=discord.File(buf, filename="winprob.png"))
+
+    @game_winprob.autocomplete('team')
+    async def game_winprob_team_ac(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
 
     @mlb.command(name="pace", description="Calculate a player's projected 162-game season totals.")
