@@ -880,3 +880,111 @@ def generate_price_chart(
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
+
+
+def generate_winprob_chart(
+    wp: list,
+    inning_ticks: list,
+    team_abbr: str,
+    opp_abbr: str,
+    header: str,
+    team_color: Tuple[int, int, int],
+    opp_color: Tuple[int, int, int],
+    swing: Optional[Tuple[int, str]] = None,
+) -> io.BytesIO:
+    """Render a win-probability chart from the queried team's perspective.
+
+    wp:            the team's win probability (0-100) in play order
+    inning_ticks:  list of (play_index, label) marking inning boundaries
+    swing:         optional (play_index, description) for the biggest WPA play
+    """
+    W, H = 760, 320
+    PAD_T, PAD_B, PAD_L, PAD_R = 16, 26, 14, 44
+
+    plot_w = W - PAD_L - PAD_R
+    plot_h = H - PAD_T - PAD_B
+
+    BG       = (30, 31, 34)
+    GRID_COL = (55, 57, 62)
+    DIM_COL  = (160, 160, 165)
+    TXT_COL  = (228, 228, 232)
+    LINE_COL = (240, 240, 245)
+
+    f_axis = _dv("DejaVuSans.ttf", 11)
+    f_lbl  = _dv("DejaVuSans-Bold.ttf", 12)
+    f_note = _dv("DejaVuSans.ttf", 11)
+
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    n = max(len(wp), 1)
+    wp = [max(0.0, min(100.0, v)) for v in wp]
+
+    def xp(i):
+        return PAD_L + (i / (n - 1) * plot_w if n > 1 else 0)
+
+    def yp(v):
+        return PAD_T + plot_h - (v / 100.0) * plot_h
+
+    # Horizontal grid at 0/25/50/75/100
+    for gv in (0, 25, 50, 75, 100):
+        y = yp(gv)
+        draw.line([(PAD_L, y), (PAD_L + plot_w, y)], fill=GRID_COL, width=1)
+        draw.text((PAD_L + plot_w + 6, y), f"{gv}", font=f_axis, fill=DIM_COL, anchor="lm")
+
+    # Inning gridlines + labels
+    for idx, lbl in inning_ticks:
+        x = xp(idx)
+        draw.line([(x, PAD_T), (x, PAD_T + plot_h)], fill=GRID_COL, width=1)
+        draw.text((x, PAD_T + plot_h + 6), lbl, font=f_axis, fill=DIM_COL, anchor="ma")
+
+    # Two-tone fill to the 50% midline: team color when favored, opponent below.
+    def _mix(c, bg, t):  # t = weight of color
+        return tuple(int(round(c[k] * t + bg[k] * (1 - t))) for k in range(3))
+    team_fill = _mix(team_color, BG, 0.55)
+    opp_fill  = _mix(opp_color, BG, 0.45)
+    y50 = yp(50)
+    for px in range(plot_w + 1):
+        frac = px / plot_w * (n - 1) if n > 1 else 0
+        i0 = int(frac)
+        i1 = min(i0 + 1, n - 1)
+        v = wp[i0] + (wp[i1] - wp[i0]) * (frac - i0)
+        x = PAD_L + px
+        draw.line([(x, y50), (x, yp(v))], fill=team_fill if v >= 50 else opp_fill, width=1)
+
+    # 50% midline (dashed) then the win-prob line
+    x = PAD_L
+    while x < PAD_L + plot_w:
+        draw.line([(x, y50), (min(x + 6, PAD_L + plot_w), y50)], fill=(120, 122, 128), width=1)
+        x += 11
+    pts = [(xp(i), yp(v)) for i, v in enumerate(wp)]
+    if len(pts) > 1:
+        draw.line(pts, fill=LINE_COL, width=2)
+        lx, ly = pts[-1]
+        draw.ellipse([lx - 3, ly - 3, lx + 3, ly + 3], fill=LINE_COL)
+
+    # Biggest-swing marker + annotation
+    if swing is not None:
+        s_idx, s_desc = swing
+        s_idx = max(0, min(s_idx, n - 1))
+        sx, sy = xp(s_idx), yp(wp[s_idx])
+        draw.ellipse([sx - 4, sy - 4, sx + 4, sy + 4], outline=(255, 214, 10), width=2)
+        note = s_desc if len(s_desc) <= 54 else s_desc[:51] + "..."
+        tw = draw.textlength(note, font=f_note)
+        nx = min(max(sx - tw / 2, PAD_L + 2), PAD_L + plot_w - tw - 2)
+        # place above the dot, or below if near the top
+        ny = sy - 18 if sy - 18 > PAD_T + 14 else sy + 8
+        draw.text((nx, ny), note, font=f_note, fill=(255, 214, 10))
+
+    # Header + legend (top-left): team color = team favored, opp color below 50%
+    draw.text((PAD_L + 6, PAD_T + 4), header, font=f_lbl, fill=TXT_COL)
+    ly0 = PAD_T + 22
+    for k, (ab, col) in enumerate(((team_abbr, team_color), (opp_abbr, opp_color))):
+        yy = ly0 + k * 16
+        draw.rectangle([PAD_L + 6, yy + 2, PAD_L + 16, yy + 12], fill=_mix(col, BG, 0.8))
+        draw.text((PAD_L + 22, yy), ab, font=f_axis, fill=DIM_COL)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf

@@ -384,6 +384,29 @@ class MLBClient:
             print(f"Error fetching linescore: {e}")
             return game, None
 
+    async def get_game_win_probability(self, team_query: str, date: str = None):
+        """Return (game, wp_plays) for a team's game.
+
+        wp_plays is the raw /winProbability play list, each entry carrying
+        homeTeamWinProbability and homeTeamWinProbabilityAdded (WPA).
+        """
+        games = await self.get_todays_games(team_query=team_query, date=date)
+        if not games:
+            return None, None
+
+        game = games[0]
+        session = await self.get_session()
+
+        url = f"{self.BASE_URL}/game/{game.game_pk}/winProbability"
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return game, None
+                return game, await resp.json()
+        except Exception as e:
+            print(f"Error fetching win probability: {e}")
+            return game, None
+
     async def get_recent_home_runs(self, date: str = None) -> List[dict]:
         session = await self.get_session()
         date_str = date or et_now().strftime("%Y-%m-%d")
