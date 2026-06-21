@@ -898,8 +898,11 @@ def generate_winprob_chart(
     inning_ticks:  list of (play_index, label) marking inning boundaries
     swing:         optional (play_index, description) for the biggest WPA play
     """
-    W, H = 760, 320
-    PAD_T, PAD_B, PAD_L, PAD_R = 16, 26, 14, 44
+    # Render at SxS supersampling, then downscale with LANCZOS so the diagonal
+    # win-prob line, fills and text come out anti-aliased.
+    S = 2
+    W, H = 760 * S, 320 * S
+    PAD_T, PAD_B, PAD_L, PAD_R = 16 * S, 26 * S, 14 * S, 44 * S
 
     plot_w = W - PAD_L - PAD_R
     plot_h = H - PAD_T - PAD_B
@@ -910,9 +913,9 @@ def generate_winprob_chart(
     TXT_COL  = (228, 228, 232)
     LINE_COL = (240, 240, 245)
 
-    f_axis = _dv("DejaVuSans.ttf", 11)
-    f_lbl  = _dv("DejaVuSans-Bold.ttf", 12)
-    f_note = _dv("DejaVuSans.ttf", 11)
+    f_axis = _dv("DejaVuSans.ttf", 11 * S)
+    f_lbl  = _dv("DejaVuSans-Bold.ttf", 12 * S)
+    f_note = _dv("DejaVuSans.ttf", 11 * S)
 
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
@@ -929,14 +932,14 @@ def generate_winprob_chart(
     # Horizontal grid at 0/25/50/75/100
     for gv in (0, 25, 50, 75, 100):
         y = yp(gv)
-        draw.line([(PAD_L, y), (PAD_L + plot_w, y)], fill=GRID_COL, width=1)
-        draw.text((PAD_L + plot_w + 6, y), f"{gv}", font=f_axis, fill=DIM_COL, anchor="lm")
+        draw.line([(PAD_L, y), (PAD_L + plot_w, y)], fill=GRID_COL, width=S)
+        draw.text((PAD_L + plot_w + 6 * S, y), f"{gv}", font=f_axis, fill=DIM_COL, anchor="lm")
 
     # Inning gridlines + labels
     for idx, lbl in inning_ticks:
         x = xp(idx)
-        draw.line([(x, PAD_T), (x, PAD_T + plot_h)], fill=GRID_COL, width=1)
-        draw.text((x, PAD_T + plot_h + 6), lbl, font=f_axis, fill=DIM_COL, anchor="ma")
+        draw.line([(x, PAD_T), (x, PAD_T + plot_h)], fill=GRID_COL, width=S)
+        draw.text((x, PAD_T + plot_h + 6 * S), lbl, font=f_axis, fill=DIM_COL, anchor="ma")
 
     # Two-tone fill to the 50% midline: team color when favored, opponent below.
     def _mix(c, bg, t):  # t = weight of color
@@ -955,35 +958,36 @@ def generate_winprob_chart(
     # 50% midline (dashed) then the win-prob line
     x = PAD_L
     while x < PAD_L + plot_w:
-        draw.line([(x, y50), (min(x + 6, PAD_L + plot_w), y50)], fill=(120, 122, 128), width=1)
-        x += 11
+        draw.line([(x, y50), (min(x + 6 * S, PAD_L + plot_w), y50)], fill=(120, 122, 128), width=S)
+        x += 11 * S
     pts = [(xp(i), yp(v)) for i, v in enumerate(wp)]
     if len(pts) > 1:
-        draw.line(pts, fill=LINE_COL, width=2)
+        draw.line(pts, fill=LINE_COL, width=2 * S, joint="curve")
         lx, ly = pts[-1]
-        draw.ellipse([lx - 3, ly - 3, lx + 3, ly + 3], fill=LINE_COL)
+        draw.ellipse([lx - 3 * S, ly - 3 * S, lx + 3 * S, ly + 3 * S], fill=LINE_COL)
 
     # Biggest-swing marker + annotation
     if swing is not None:
         s_idx, s_desc = swing
         s_idx = max(0, min(s_idx, n - 1))
         sx, sy = xp(s_idx), yp(wp[s_idx])
-        draw.ellipse([sx - 4, sy - 4, sx + 4, sy + 4], outline=(255, 214, 10), width=2)
+        draw.ellipse([sx - 4 * S, sy - 4 * S, sx + 4 * S, sy + 4 * S], outline=(255, 214, 10), width=2 * S)
         note = s_desc if len(s_desc) <= 54 else s_desc[:51] + "..."
         tw = draw.textlength(note, font=f_note)
-        nx = min(max(sx - tw / 2, PAD_L + 2), PAD_L + plot_w - tw - 2)
+        nx = min(max(sx - tw / 2, PAD_L + 2 * S), PAD_L + plot_w - tw - 2 * S)
         # place above the dot, or below if near the top
-        ny = sy - 18 if sy - 18 > PAD_T + 14 else sy + 8
+        ny = sy - 18 * S if sy - 18 * S > PAD_T + 14 * S else sy + 8 * S
         draw.text((nx, ny), note, font=f_note, fill=(255, 214, 10))
 
     # Header + legend (top-left): team color = team favored, opp color below 50%
-    draw.text((PAD_L + 6, PAD_T + 4), header, font=f_lbl, fill=TXT_COL)
-    ly0 = PAD_T + 22
+    draw.text((PAD_L + 6 * S, PAD_T + 4 * S), header, font=f_lbl, fill=TXT_COL)
+    ly0 = PAD_T + 22 * S
     for k, (ab, col) in enumerate(((team_abbr, team_color), (opp_abbr, opp_color))):
-        yy = ly0 + k * 16
-        draw.rectangle([PAD_L + 6, yy + 2, PAD_L + 16, yy + 12], fill=_mix(col, BG, 0.8))
-        draw.text((PAD_L + 22, yy), ab, font=f_axis, fill=DIM_COL)
+        yy = ly0 + k * 16 * S
+        draw.rectangle([PAD_L + 6 * S, yy + 2 * S, PAD_L + 16 * S, yy + 12 * S], fill=_mix(col, BG, 0.8))
+        draw.text((PAD_L + 22 * S, yy), ab, font=f_axis, fill=DIM_COL)
 
+    img = img.resize((W // S, H // S), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
