@@ -700,6 +700,100 @@ def generate_rolling_xwoba_chart(
     return buf
 
 
+def generate_index_chart(series: list, tz_offset_secs: int = 0) -> io.BytesIO:
+    """Overlay several intraday series normalized to % change from prev close.
+
+    series: list of {"label": str, "color": (r,g,b), "points": [(ts, pct)], "last": pct}
+    All series share a single % y-axis and a 0% baseline.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    S = 2  # supersample, then downscale for anti-aliasing
+    W, H = 760 * S, 320 * S
+    PAD_T, PAD_B, PAD_L, PAD_R = 16 * S, 26 * S, 14 * S, 52 * S
+    plot_w = W - PAD_L - PAD_R
+    plot_h = H - PAD_T - PAD_B
+
+    BG       = (30, 31, 34)
+    GRID_COL = (55, 57, 62)
+    DIM_COL  = (160, 160, 165)
+    ZERO_COL = (150, 150, 150)
+
+    f_axis = _dv("DejaVuSans.ttf", 11 * S)
+    f_lbl  = _dv("DejaVuSans-Bold.ttf", 12 * S)
+
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    # Time span across all series; y span symmetric around 0
+    all_ts  = [ts for s in series for ts, _ in s["points"]]
+    all_pct = [p for s in series for _, p in s["points"]]
+    t0, t1 = min(all_ts), max(all_ts)
+    t_span = max(t1 - t0, 1)
+    maxabs = max((abs(p) for p in all_pct), default=0.5) or 0.5
+    hi = maxabs * 1.18
+    lo = -hi
+
+    def xp(ts):
+        return PAD_L + (ts - t0) / t_span * plot_w
+
+    def yp(v):
+        return PAD_T + plot_h - (v - lo) / (hi - lo) * plot_h
+
+    # Horizontal grid + % labels at ~nice steps
+    step = (hi - lo) / 4
+    mag = 10 ** math.floor(math.log10(step))
+    for nice in (1, 2, 2.5, 5, 10):
+        if mag * nice >= step:
+            step = mag * nice
+            break
+    gv = math.ceil(lo / step) * step
+    while gv <= hi:
+        y = yp(gv)
+        draw.line([(PAD_L, y), (PAD_L + plot_w, y)], fill=GRID_COL, width=S)
+        draw.text((PAD_L + plot_w + 6 * S, y), f"{gv:+.1f}%", font=f_axis, fill=DIM_COL, anchor="lm")
+        gv += step
+
+    # X-axis hour labels in exchange-local time
+    tz = timezone(timedelta(seconds=tz_offset_secs))
+    hour_dt = datetime.fromtimestamp(t0, tz=tz).replace(minute=0, second=0, microsecond=0)
+    if hour_dt.timestamp() < t0:
+        hour_dt += timedelta(hours=1)
+    while hour_dt.timestamp() <= t1:
+        x = xp(hour_dt.timestamp())
+        draw.line([(x, PAD_T), (x, PAD_T + plot_h)], fill=GRID_COL, width=S)
+        label = hour_dt.strftime("%I%p").lstrip("0").lower()
+        draw.text((x, PAD_T + plot_h + 6 * S), label, font=f_axis, fill=DIM_COL, anchor="ma")
+        hour_dt += timedelta(hours=1)
+
+    # 0% baseline (dashed)
+    y0 = yp(0)
+    x = PAD_L
+    while x < PAD_L + plot_w:
+        draw.line([(x, y0), (min(x + 6 * S, PAD_L + plot_w), y0)], fill=ZERO_COL, width=S)
+        x += 11 * S
+
+    # Each series line
+    for s in series:
+        pts = [(xp(ts), yp(p)) for ts, p in s["points"]]
+        if len(pts) > 1:
+            draw.line(pts, fill=_readable(s["color"]), width=2 * S, joint="curve")
+
+    # Legend (top-left): colored swatch + label + last % change
+    ly = PAD_T + 6 * S
+    for s in series:
+        col = _readable(s["color"])
+        draw.rectangle([PAD_L + 6 * S, ly + 3 * S, PAD_L + 18 * S, ly + 13 * S], fill=col)
+        draw.text((PAD_L + 24 * S, ly), f"{s['label']}  {s['last']:+.2f}%", font=f_lbl, fill=col)
+        ly += 18 * S
+
+    img = img.resize((W // S, H // S), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
 def _price_axis_ticks(points: list, tz, range_key: str, max_ticks: int = 9) -> list:
     """Pick x-axis tick (index, label) pairs from price points for the given range.
 
