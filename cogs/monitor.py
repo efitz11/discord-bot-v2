@@ -50,6 +50,7 @@ NH_STATE_FILE         = os.path.join(_STATE_DIR, "nh_state.json")
 SUMMARY_STATE_FILE    = os.path.join(_STATE_DIR, "summary_state.json")
 WALKOFF_STATE_FILE    = os.path.join(_STATE_DIR, "walkoff_state.json")
 CYCLE_STATE_FILE      = os.path.join(_STATE_DIR, "cycle_state.json")
+DELAY_STATE_FILE      = os.path.join(_STATE_DIR, "delay_state.json")
 LINEUP_STATE_FILE     = os.path.join(_STATE_DIR, "lineup_state.json")
 LINEUP_CHECK_HOURS    = 6                   # Start polling for the lineup this many hours before first pitch
 VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
@@ -122,6 +123,11 @@ class MonitorCog(commands.Cog):
         # Cycle tracking — keyed "{game_pk}_{batter_id}"
         self._cycle_posted: set = set()
         self._cycle_clear_date = None
+
+        # Delay tracking for FAVORITE_TEAM — {game_pk: is_delayed} so we only
+        # alert on transitions into/out of a delay
+        self._delay_state: dict = {}
+        self._delay_clear_date = None
         self._summary_posted_date = None       # date string for which we've posted the morning summary
         self._milb_summary_posted_date = None  # date string for which we've posted the MiLB affiliate summary
         self._milb_ready_since: "datetime | None" = None  # when all MLB+MiLB games first went Final
@@ -136,6 +142,7 @@ class MonitorCog(commands.Cog):
         self._load_summary_state()
         self._load_walkoff_state()
         self._load_cycle_state()
+        self._load_delay_state()
         self._load_lineup_state()
         self.monitor_loop.start()
 
@@ -242,6 +249,18 @@ class MonitorCog(commands.Cog):
 
     def _save_cycle_state(self) -> None:
         self._save_json(CYCLE_STATE_FILE, {"posted": list(self._cycle_posted), "clear_date": self._cycle_clear_date}, "cycle")
+
+    def _load_delay_state(self) -> None:
+        data = self._load_json(DELAY_STATE_FILE)
+        if data is None:
+            self._delay_state = {}
+            return
+        self._delay_state = {str(k): bool(v) for k, v in data.get("state", {}).items()}
+        self._delay_clear_date = data.get("clear_date")
+        print(f"[monitor] loaded delay state for {len(self._delay_state)} game(s) from disk")
+
+    def _save_delay_state(self) -> None:
+        self._save_json(DELAY_STATE_FILE, {"state": self._delay_state, "clear_date": self._delay_clear_date}, "delay")
 
     def _load_lineup_state(self) -> None:
         data = self._load_json(LINEUP_STATE_FILE)
@@ -1430,6 +1449,69 @@ class MonitorCog(commands.Cog):
     # Per-game processing
     # ─────────────────────────────────────────────
 
+    async def _check_game_delay(self, game_pk: int, game_data: dict, channel) -> None:
+        """Post a delay / resume alert when FAVORITE_TEAM's game enters or leaves a
+        delay. Tracks per-game delay state so we only alert on transitions."""
+        fav = getattr(self.bot, "favorite_team", None)
+        if not fav:
+            return
+        sched_info = self._scheduled_games.get(game_pk, {})
+        fav_upper = fav.upper()
+        if sched_info.get("away", "").upper() != fav_upper and sched_info.get("home", "").upper() != fav_upper:
+            return
+
+        status     = game_data.get("status", {})
+        detailed   = status.get("detailedState", "")
+        ab_state   = status.get("abstractGameState", "Preview")
+        is_delayed = "delayed" in detailed.lower()
+
+        key  = str(game_pk)
+        prev = self._delay_state.get(key)
+
+        # First time we see this game: record the baseline silently so a restart
+        # mid-delay doesn't fire a spurious alert.
+        if prev is None:
+            self._delay_state[key] = is_delayed
+            self._save_delay_state()
+            return
+        if prev == is_delayed:
+            return
+
+        # Don't treat postponed/cancelled/suspended as a resume
+        if not is_delayed and any(w in detailed.lower() for w in ("postponed", "cancel", "suspended")):
+            self._delay_state[key] = is_delayed
+            self._save_delay_state()
+            return
+
+        away = sched_info.get("away", "???")
+        home = sched_info.get("home", "???")
+        self._delay_state[key] = is_delayed
+        self._save_delay_state()
+        print(f"[monitor] {'delay' if is_delayed else 'resume'} alert: {away}@{home} '{detailed}' game={game_pk}")
+        await self._post_delay_alert(channel, away, home, is_delayed, detailed, ab_state, status.get("reason", ""))
+
+    async def _post_delay_alert(self, channel, away: str, home: str, is_delayed: bool,
+                                detailed: str, ab_state: str, reason: str = "") -> None:
+        if is_delayed:
+            why = f" — {reason}" if reason and reason.lower() not in detailed.lower() else ""
+            title = f"⏸️ {away} @ {home} — {detailed}{why}"
+            body  = "Play has been delayed." if ab_state == "Live" else "The game has been delayed."
+            color = discord.Color.dark_gray()
+        elif ab_state == "Live":
+            title = f"▶️ {away} @ {home} — Play has resumed"
+            body  = "The delay is over and play has resumed."
+            color = discord.Color.green()
+        else:
+            title = f"▶️ {away} @ {home} — Delay lifted"
+            body  = "The delay is over — the game is about to start."
+            color = discord.Color.green()
+
+        embed = discord.Embed(title=title, description=body, color=color)
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to post delay/resume alert: {e}")
+
     async def _process_game(self, game_pk: int, channel) -> None:
         feed = await self._fetch_live_feed(game_pk)
         if not feed:
@@ -1441,6 +1523,10 @@ class MonitorCog(commands.Cog):
 
         if game_pk in self._scheduled_games:
             self._scheduled_games[game_pk]["abstract_state"] = ab_state
+
+        # Delay / resume alerts for FAVORITE_TEAM — checked before the Preview
+        # early-return since a delayed start is still abstractGameState=Preview.
+        await self._check_game_delay(game_pk, game_data, channel)
 
         if ab_state == "Preview":
             return  # Game hasn't started
@@ -1900,6 +1986,11 @@ class MonitorCog(commands.Cog):
                 self._cycle_clear_date = today_str
                 self._save_cycle_state()
                 print("[monitor] 6am ET — cycle posted state cleared")
+            if now_et.hour >= 6 and self._delay_clear_date != today_str:
+                self._delay_state.clear()
+                self._delay_clear_date = today_str
+                self._save_delay_state()
+                print("[monitor] 6am ET — delay state cleared")
             if now_et.hour >= 6 and self._lineup_clear_date != today_str:
                 self._lineup_posted.clear()
                 self._lineup_clear_date = today_str
@@ -2274,6 +2365,15 @@ class MonitorCog(commands.Cog):
         }
         await ctx.message.delete()
         await self._post_cycle_alert(ctx.channel, mock_cycle)
+
+    @commands.command(name="delay_test")
+    async def delay_test(self, ctx):
+        """Preview the delay + resume alerts. Usage: !delay_test"""
+        await ctx.message.delete()
+        await self._post_delay_alert(ctx.channel, "PHI", "WSH", True, "Delayed Start", "Preview", "Rain")
+        await self._post_delay_alert(ctx.channel, "PHI", "WSH", False, "Warmup", "Preview", "")
+        await self._post_delay_alert(ctx.channel, "PHI", "WSH", True, "Delayed", "Live", "Rain")
+        await self._post_delay_alert(ctx.channel, "PHI", "WSH", False, "In Progress", "Live", "")
 
 
 async def setup(bot: commands.Bot) -> None:
