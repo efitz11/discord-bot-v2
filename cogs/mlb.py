@@ -1292,15 +1292,19 @@ class MLBSlash(commands.Cog):
 
 
     _split_choices = [
+        app_commands.Choice(name="vs L / vs R (grouped)", value="grp_hand"),
         app_commands.Choice(name="vs Left", value="vl"),
         app_commands.Choice(name="vs Right", value="vr"),
+        app_commands.Choice(name="Home / Away (grouped)", value="grp_homeaway"),
         app_commands.Choice(name="Home", value="h"),
         app_commands.Choice(name="Away", value="a"),
+        app_commands.Choice(name="Day / Night (grouped)", value="grp_daynight"),
         app_commands.Choice(name="Day", value="d"),
         app_commands.Choice(name="Night", value="n"),
-        app_commands.Choice(name="RISP", value="risp"),
+        app_commands.Choice(name="Pre / Post All-Star (grouped)", value="grp_allstar"),
         app_commands.Choice(name="Pre All-Star", value="preas"),
         app_commands.Choice(name="Post All-Star", value="posas"),
+        app_commands.Choice(name="RISP", value="risp"),
         app_commands.Choice(name="Month by Month", value="all_months"),
         app_commands.Choice(name="Fielding Positions", value="all_positions"),
         app_commands.Choice(name="March", value="3"),
