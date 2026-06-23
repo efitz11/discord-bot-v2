@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 from PIL import Image
 
-from core.visualizer import generate_price_chart
+from core.visualizer import generate_price_chart, generate_index_chart
 from core.utils import ET_ZONE
 
 
@@ -35,6 +35,13 @@ STOCK_INDEXES = [
     ("^DJI", "Dow Jones"),
     ("^GSPC", "S&P 500"),
     ("^IXIC", "Nasdaq"),
+]
+
+# (symbol, legend label, line color) for the overlaid intraday index chart
+STOCK_INDEX_CHART = [
+    ("^DJI", "Dow", (94, 151, 246)),
+    ("^GSPC", "S&P 500", (75, 201, 122)),
+    ("^IXIC", "Nasdaq", (240, 170, 76)),
 ]
 
 
@@ -131,12 +138,9 @@ class ExtendedSlash(commands.Cog):
         "6M": "Past 6 Months", "1Y": "Past Year", "5Y": "Past 5 Years",
     }
 
-    async def _price_chart(self, session, symbol: str, range_key: str):
-        """Build a price chart for the given range.
-
-        Returns (chart_buf, stats) where stats is {"baseline", "last"} for the
-        range, or (None, None) on failure.
-        """
+    async def _fetch_chart_points(self, session, symbol: str, range_key: str):
+        """Fetch (points, meta) of (unix_ts, close) for a symbol/range from Yahoo,
+        or (None, None) on failure."""
         interval, yrange = self.CHART_RANGES.get(range_key, self.CHART_RANGES["1D"])
         url = (
             f"https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -154,6 +158,21 @@ class ExtendedSlash(commands.Cog):
             timestamps = result.get("timestamp") or []
             closes = (result.get("indicators", {}).get("quote") or [{}])[0].get("close") or []
             points = [(ts, c) for ts, c in zip(timestamps, closes) if c is not None]
+            return points, meta
+        except Exception as e:
+            print(f"[stock] chart fetch error for {symbol} ({range_key}): {e}")
+            return None, None
+
+    async def _price_chart(self, session, symbol: str, range_key: str):
+        """Build a price chart for the given range.
+
+        Returns (chart_buf, stats) where stats is {"baseline", "last"} for the
+        range, or (None, None) on failure.
+        """
+        try:
+            points, meta = await self._fetch_chart_points(session, symbol, range_key)
+            if not points:
+                return None, None
 
             # 1H: keep only the last 60 minutes of available data
             if range_key == "1H" and points:
@@ -181,6 +200,28 @@ class ExtendedSlash(commands.Cog):
         except Exception as e:
             print(f"[stock] price chart error for {symbol} ({range_key}): {e}")
             return None, None
+
+    async def _index_intraday_chart(self, session) -> io.BytesIO | None:
+        """Build an intraday chart overlaying the major indexes, each normalized
+        to % change from its previous close so they share one axis."""
+        async def one(sym, label, color):
+            points, meta = await self._fetch_chart_points(session, sym, "1D")
+            if not points or len(points) < 2:
+                return None
+            prev = meta.get("chartPreviousClose")
+            if prev is None:
+                prev = points[0][1]
+            pct = [(ts, (p / prev - 1.0) * 100.0) for ts, p in points]
+            return {"label": label, "color": color, "points": pct,
+                    "last": pct[-1][1], "gmt": meta.get("gmtoffset", 0)}
+
+        results = await asyncio.gather(*(one(s, l, c) for s, l, c in STOCK_INDEX_CHART))
+        series = [r for r in results if r]
+        if len(series) < 2:
+            return None
+        tz_off = series[0]["gmt"]
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, generate_index_chart, series, tz_off)
 
     @app_commands.command(name="stock", description="Stock quote for a ticker, or the major indexes if omitted")
     @app_commands.describe(
@@ -295,7 +336,12 @@ class ExtendedSlash(commands.Cog):
             description=f"```{chr(10).join(lines)}```",
             color=discord.Color.blurple(),
         )
-        await interaction.followup.send(embed=embed)
+        chart = await self._index_intraday_chart(session)
+        if chart:
+            embed.set_image(url="attachment://indexes.png")
+            await interaction.followup.send(embed=embed, file=discord.File(chart, filename="indexes.png"))
+        else:
+            await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="weather", description="Get the current weather for a location")
     @app_commands.describe(location="City, zip code, or address (e.g. Washington DC, 20001)")
