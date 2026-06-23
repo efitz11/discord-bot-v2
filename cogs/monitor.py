@@ -1497,14 +1497,20 @@ class MonitorCog(commands.Cog):
             title = f"⏸️ {away} @ {home} — {detailed}{why}"
             body  = "Play has been delayed." if ab_state == "Live" else "The game has been delayed."
             color = discord.Color.dark_gray()
-        elif ab_state == "Live":
-            title = f"▶️ {away} @ {home} — Play has resumed"
-            body  = "The delay is over and play has resumed."
-            color = discord.Color.green()
         else:
-            title = f"▶️ {away} @ {home} — Delay lifted"
-            body  = "The delay is over — the game is about to start."
+            # Decide by detailedState, not abstractGameState: "Warmup" reports
+            # abstractGameState=Live even though play hasn't started.
             color = discord.Color.green()
+            d = detailed.lower()
+            if "in progress" in d:
+                title = f"▶️ {away} @ {home} — Play has resumed"
+                body  = "The delay is over and play has resumed."
+            elif "warmup" in d:
+                title = f"▶️ {away} @ {home} — Warmup"
+                body  = "The delay is over — teams are warming up."
+            else:
+                title = f"▶️ {away} @ {home} — Delay lifted"
+                body  = "The delay is over — the game is about to start."
 
         embed = discord.Embed(title=title, description=body, color=color)
         try:
@@ -2371,7 +2377,7 @@ class MonitorCog(commands.Cog):
         """Preview the delay + resume alerts. Usage: !delay_test"""
         await ctx.message.delete()
         await self._post_delay_alert(ctx.channel, "PHI", "WSH", True, "Delayed Start", "Preview", "Rain")
-        await self._post_delay_alert(ctx.channel, "PHI", "WSH", False, "Warmup", "Preview", "")
+        await self._post_delay_alert(ctx.channel, "PHI", "WSH", False, "Warmup", "Live", "")
         await self._post_delay_alert(ctx.channel, "PHI", "WSH", True, "Delayed", "Live", "Rain")
         await self._post_delay_alert(ctx.channel, "PHI", "WSH", False, "In Progress", "Live", "")
 
