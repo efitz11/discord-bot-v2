@@ -1686,10 +1686,13 @@ class MLBClient:
             async with session.get(url) as resp:
                 data = await resp.json()
                 
-            splits = []
-            for sg in data.get('stats', []):
-                splits.extend(sg.get('splits', []))
-                
+            # The endpoint returns two stat groups: 'vsPlayerTotal' (one career
+            # total split) and 'vsPlayer' (per-season splits that sum to the same
+            # total). Use only one group, or they get double-counted.
+            groups = {sg.get('type', {}).get('displayName'): sg.get('splits', [])
+                      for sg in data.get('stats', [])}
+            splits = groups.get('vsPlayerTotal') or groups.get('vsPlayer') or []
+
             if not splits:
                 return BatterVsPitcher(
                     batter_name=batter_name, pa=0, ab=0, h=0, d=0, t=0, hr=0, bb=0, so=0, avg=".000", ops=".000"
