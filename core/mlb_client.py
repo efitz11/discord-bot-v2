@@ -1916,10 +1916,31 @@ class MLBClient:
             box_data = await resp.json()
 
         box = parse_box_score_side(box_data, side)
+        await self._fill_bench_handedness(box)
         box.game_status = game.status
         box.game_abstract_state = game.abstract_state
         box.game_date = game.game_date_str
         return box
+
+    async def _fill_bench_handedness(self, box) -> None:
+        """Populate each bench row's batting hand (L/R/S) via one batch lookup —
+        the boxscore payload doesn't include batSide."""
+        if not getattr(box, "bench_rows", None):
+            return
+        ids = [str(r["id"]) for r in box.bench_rows if r.get("id")]
+        if not ids:
+            return
+        session = await self.get_session()
+        try:
+            async with session.get(f"{self.BASE_URL}/people?personIds={','.join(ids)}") as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json()
+            sides = {p.get("id"): p.get("batSide", {}).get("code", "") for p in data.get("people", [])}
+            for r in box.bench_rows:
+                r["bat"] = sides.get(r.get("id"), "")
+        except Exception as e:
+            print(f"[box] bench handedness fetch error: {e}")
 
     async def get_milb_box_score(self, team_id: int, date: str = None) -> Optional["BoxScoreData"]:
         session = await self.get_session()
@@ -1951,6 +1972,7 @@ class MLBClient:
             box_data = await resp.json()
 
         box = parse_box_score_side(box_data, side)
+        await self._fill_bench_handedness(box)
         box.game_status = game_status
         box.game_abstract_state = game_abstract
         box.game_date = game_date

@@ -1056,6 +1056,7 @@ class BoxScoreData:
     team_notes: List[dict] = None
     game_info: List[dict] = None
     abs_info: List[dict] = None
+    bench_rows: List[dict] = None
     game_status: str = ""
     game_abstract_state: str = ""
     game_date: str = ""
@@ -1064,6 +1065,14 @@ class BoxScoreData:
         labels = ['name', 'pos', 'ab', 'r', 'h', 'rbi', 'bb', 'so', 'lob', 'avg', 'obp', 'slg']
         repl = {'name': '', 'pos': '', 'ab': 'AB', 'r': 'R', 'h': 'H', 'rbi': 'RBI', 'bb': 'BB', 'so': 'SO', 'lob': 'LOB', 'avg': 'AVG', 'obp': 'OBP', 'slg': 'SLG'}
         return format_table(labels, self.batting_rows, repl, {'name', 'pos'})
+
+    def format_bench(self) -> str:
+        """Season lines for position players who haven't entered the game yet."""
+        if not self.bench_rows:
+            return ""
+        labels = ['name', 'pos', 'bat', 'ab', 'hr', 'avg', 'obp', 'ops']
+        repl = {'name': '', 'pos': '', 'bat': 'B', 'ab': 'AB', 'hr': 'HR', 'avg': 'AVG', 'obp': 'OBP', 'ops': 'OPS'}
+        return format_table(labels, self.bench_rows, repl, {'name', 'pos', 'bat'})
 
     def format_pitching(self) -> str:
         labels = ['name', 'ip', 'h', 'r', 'er', 'bb', 'so', 'hr', 'era', 'p', 's', 'dec']
@@ -1188,6 +1197,24 @@ def parse_box_score_side(box_data: dict, side: str) -> "BoxScoreData":
             'dec': p_stats.get('note', ''),
         })
 
+    # Bench: position players still available (not yet in the game), with their
+    # season line so you can see who's left to pinch hit.
+    bench_rows = []
+    for bench_id in team_data.get('bench', []):
+        p_data = players.get(f'ID{bench_id}', {})
+        season = p_data.get('seasonStats', {}).get('batting', {})
+        bench_rows.append({
+            'id': bench_id,
+            'name': p_data.get('person', {}).get('boxscoreName', 'Unknown'),
+            'pos': p_data.get('position', {}).get('abbreviation', ''),
+            'bat': '',  # batting hand (L/R/S) — filled in by the client
+            'ab': str(season.get('atBats', 0)),
+            'hr': str(season.get('homeRuns', 0)),
+            'avg': season.get('avg', '.000'),
+            'obp': season.get('obp', '.000'),
+            'ops': season.get('ops', '.000'),
+        })
+
     game_info, abs_info = [], []
     for info in box_data.get('info', []):
         label = info.get('label', '').upper()
@@ -1207,6 +1234,7 @@ def parse_box_score_side(box_data: dict, side: str) -> "BoxScoreData":
         team_notes=team_data.get('info', []),
         game_info=game_info,
         abs_info=abs_info,
+        bench_rows=bench_rows,
     )
 
 
