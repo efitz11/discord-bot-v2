@@ -2204,6 +2204,7 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="All", value="all"),
         app_commands.Choice(name="Batting", value="batting"),
         app_commands.Choice(name="Pitching", value="pitching"),
+        app_commands.Choice(name="Bench", value="bench"),
         app_commands.Choice(name="Notes and Info", value="notes_info"),
         app_commands.Choice(name="ABS Challenges", value="abs")
     ])
@@ -2226,6 +2227,13 @@ class MLBSlash(commands.Cog):
 
         if show_part in ["all", "pitching"]:
             desc += f"**{box.team_name} Pitching**\n```python\n{box.format_pitching()}\n```\n"
+
+        if show_part in ["all", "bench"]:
+            bench = box.format_bench()
+            if bench:
+                desc += f"**{box.team_name} Bench**\n```python\n{bench}\n```\n"
+            elif show_part == "bench":
+                desc += "No bench players available (everyone has entered the game)."
 
         if show_part == "abs":
             desc += box.format_abs_info()
