@@ -1291,31 +1291,39 @@ class MLBSlash(commands.Cog):
         return await self.player_autocomplete(interaction, current)
 
 
-    _split_choices = [
-        app_commands.Choice(name="vs L / vs R (grouped)", value="grp_hand"),
-        app_commands.Choice(name="vs Left", value="vl"),
-        app_commands.Choice(name="vs Right", value="vr"),
-        app_commands.Choice(name="Home / Away (grouped)", value="grp_homeaway"),
-        app_commands.Choice(name="Home", value="h"),
-        app_commands.Choice(name="Away", value="a"),
-        app_commands.Choice(name="Day / Night (grouped)", value="grp_daynight"),
-        app_commands.Choice(name="Day", value="d"),
-        app_commands.Choice(name="Night", value="n"),
-        app_commands.Choice(name="Pre / Post All-Star (grouped)", value="grp_allstar"),
-        app_commands.Choice(name="Pre All-Star", value="preas"),
-        app_commands.Choice(name="Post All-Star", value="posas"),
-        app_commands.Choice(name="RISP", value="risp"),
-        app_commands.Choice(name="Month by Month", value="all_months"),
-        app_commands.Choice(name="Fielding Positions", value="all_positions"),
-        app_commands.Choice(name="March", value="3"),
-        app_commands.Choice(name="April", value="4"),
-        app_commands.Choice(name="May", value="5"),
-        app_commands.Choice(name="June", value="6"),
-        app_commands.Choice(name="July", value="7"),
-        app_commands.Choice(name="August", value="8"),
-        app_commands.Choice(name="September", value="9"),
-        app_commands.Choice(name="October", value="10"),
+    # (value, display name) for the splits autocomplete — grouped options are
+    # listed directly above their single counterparts so they're seen first.
+    # Too many entries for a static choices dropdown (25 max), so split uses
+    # autocomplete instead.
+    _SPLIT_OPTIONS = [
+        ("grp_hand", "vs L / vs R (grouped)"),
+        ("vl", "vs Left"),
+        ("vr", "vs Right"),
+        ("grp_homeaway", "Home / Away (grouped)"),
+        ("h", "Home"),
+        ("a", "Away"),
+        ("grp_daynight", "Day / Night (grouped)"),
+        ("d", "Day"),
+        ("n", "Night"),
+        ("grp_allstar", "Pre / Post All-Star (grouped)"),
+        ("preas", "Pre All-Star"),
+        ("posas", "Post All-Star"),
+        ("grp_count", "Ahead / Behind in Count (grouped)"),
+        ("ac", "Ahead in Count"),
+        ("bc", "Behind in Count"),
+        ("all_baserunners", "Baserunners (Empty/On/RISP/Loaded)"),
+        ("risp", "RISP"),
+        ("risp2", "RISP w/ 2 Outs"),
+        ("all_score", "Score State (Ahead/Tied/Behind)"),
+        ("all_order", "Batting Order (1st-9th)"),
+        ("2s", "Two Strikes"),
+        ("lc", "Late & Close"),
+        ("all_months", "Month by Month"),
+        ("all_positions", "Fielding Positions"),
+        ("3", "March"), ("4", "April"), ("5", "May"), ("6", "June"),
+        ("7", "July"), ("8", "August"), ("9", "September"), ("10", "October"),
     ]
+    _SPLIT_NAMES = {v: n for v, n in _SPLIT_OPTIONS}
 
     @mlb.command(name="splits", description="Get a player's stat splits for a season")
     @app_commands.describe(player="The player to search for")
@@ -1323,21 +1331,23 @@ class MLBSlash(commands.Cog):
     @app_commands.describe(split2="Optional second split to display alongside the first")
     @app_commands.describe(year="Season year (default: current year)")
     @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
-    @app_commands.choices(split=_split_choices)
-    @app_commands.choices(split2=_split_choices)
     @app_commands.choices(stat_type=[
         app_commands.Choice(name="Hitting", value="hitting"),
         app_commands.Choice(name="Pitching", value="pitching"),
     ])
-    async def splits(self, interaction: discord.Interaction, player: str, split: app_commands.Choice[str], split2: app_commands.Choice[str] = None, year: str = None, stat_type: app_commands.Choice[str] = None):
+    async def splits(self, interaction: discord.Interaction, player: str, split: str, split2: str = None, year: str = None, stat_type: app_commands.Choice[str] = None):
         await interaction.response.defer()
 
         s_type = stat_type.value if stat_type else None
 
+        if split not in self._SPLIT_NAMES or (split2 is not None and split2 not in self._SPLIT_NAMES):
+            await interaction.followup.send("Unknown split — pick one from the autocomplete suggestions.")
+            return
+
         if split2:
             results = await asyncio.gather(
-                self.bot.mlb_client.get_player_splits(player, split.value, year=year, stat_type=s_type),
-                self.bot.mlb_client.get_player_splits(player, split2.value, year=year, stat_type=s_type),
+                self.bot.mlb_client.get_player_splits(player, split, year=year, stat_type=s_type),
+                self.bot.mlb_client.get_player_splits(player, split2, year=year, stat_type=s_type),
             )
             r1, r2 = results
             if not r1 or not r2:
@@ -1352,16 +1362,17 @@ class MLBSlash(commands.Cog):
                 return
             _split_short = {
                 "vl": "vL", "vr": "vR", "h": "Home", "a": "Away",
-                "d": "Day", "n": "Night", "risp": "RISP",
+                "d": "Day", "n": "Night", "risp": "RISP", "risp2": "RISP2",
                 "preas": "PreAS", "posas": "PostAS", "all_months": "Month",
-                "all_positions": "Pos",
+                "all_positions": "Pos", "2s": "2Strk", "lc": "L&C",
+                "ac": "Ahead", "bc": "Behind",
                 "3": "Mar", "4": "Apr", "5": "May", "6": "Jun",
                 "7": "Jul", "8": "Aug", "9": "Sep", "10": "Oct",
             }
-            label1 = split.name
-            label2 = split2.name
-            row1 = dict(s1.stats[0]); row1['split'] = _split_short.get(split.value, split.name)
-            row2 = dict(s2.stats[0]); row2['split'] = _split_short.get(split2.value, split2.name)
+            label1 = self._SPLIT_NAMES.get(split, split)
+            label2 = self._SPLIT_NAMES.get(split2, split2)
+            row1 = dict(s1.stats[0]); row1['split'] = _split_short.get(split, label1)
+            row2 = dict(s2.stats[0]); row2['split'] = _split_short.get(split2, label2)
             combined = dataclasses.replace(s1, stats=[row1, row2])
             embed = discord.Embed(color=discord.Color.blue())
             embed.title = f"{s1.years} {label1} / {label2} {s1.stat_type.capitalize()} — {s1.player_name} ({s1.team_abbrev})"
@@ -1371,7 +1382,7 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send(embed=embed)
             return
 
-        result_list = await self.bot.mlb_client.get_player_splits(player, split.value, year=year, stat_type=s_type)
+        result_list = await self.bot.mlb_client.get_player_splits(player, split, year=year, stat_type=s_type)
 
         if not result_list:
             await interaction.followup.send("Could not find stats for that player.")
@@ -1383,7 +1394,7 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send(stats.info_message)
             return
 
-        split_label = split.name
+        split_label = self._SPLIT_NAMES.get(split, split)
         embed = discord.Embed(color=discord.Color.blue())
         embed.title = f"{stats.years} {split_label} {stats.stat_type.capitalize()} — {stats.player_name} ({stats.team_abbrev})"
         embed.description = f"{stats.info_line}\n\n```python\n{stats.format_discord_code_block()}\n```"
@@ -1395,6 +1406,23 @@ class MLBSlash(commands.Cog):
     @splits.autocomplete('player')
     async def splits_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
+
+    async def _split_autocomplete(self, interaction: discord.Interaction, current: str):
+        cur = current.lower()
+        matches = [
+            app_commands.Choice(name=name, value=value)
+            for value, name in self._SPLIT_OPTIONS
+            if cur in name.lower() or cur in value.lower()
+        ]
+        return matches[:25]
+
+    @splits.autocomplete('split')
+    async def splits_split_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self._split_autocomplete(interaction, current)
+
+    @splits.autocomplete('split2')
+    async def splits_split2_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self._split_autocomplete(interaction, current)
 
 
     @mlb.command(name="last", description="Get a player's stats over their last N games or last N days")

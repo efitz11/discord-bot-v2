@@ -1197,12 +1197,17 @@ class MLBClient:
 
         _month_abbrevs = {'3':'Mar','4':'Apr','5':'May','6':'Jun','7':'Jul','8':'Aug','9':'Sep','10':'Oct'}
         _pos_abbrevs   = {'p1':'P','p2':'C','p3':'1B','p4':'2B','p5':'3B','p6':'SS','p7':'LF','p8':'CF','p9':'RF','pD':'DH','pH':'PH'}
-        # Paired splits usually viewed together — one call, one labeled row each
+        # Grouped splits — one call, one labeled row per code, kept in this order
         _split_groups = {
             "grp_hand":     [("vl", "vL"),    ("vr", "vR")],
             "grp_homeaway": [("h", "Home"),   ("a", "Away")],
             "grp_daynight": [("d", "Day"),    ("n", "Night")],
             "grp_allstar":  [("preas", "PreAS"), ("posas", "PostAS")],
+            "grp_count":    [("ac", "Ahead"), ("bc", "Behind")],
+            "all_baserunners": [("r0", "Empty"), ("ron", "On"), ("risp", "RISP"), ("r123", "Loaded")],
+            "all_score":    [("sah", "Ahead"), ("sti", "Tied"), ("sbh", "Behind")],
+            "all_order":    [("b1", "1st"), ("b2", "2nd"), ("b3", "3rd"), ("b4", "4th"), ("b5", "5th"),
+                             ("b6", "6th"), ("b7", "7th"), ("b8", "8th"), ("b9", "9th")],
         }
         all_months     = sit_code == "all_months"
         all_positions  = sit_code == "all_positions"
