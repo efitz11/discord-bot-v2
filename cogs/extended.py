@@ -44,6 +44,20 @@ STOCK_INDEX_CHART = [
     ("^IXIC", "Nasdaq", (240, 170, 76)),
 ]
 
+# Shown in place of the indexes when the US market is closed (mirrors the
+# Yahoo Finance homepage, which swaps to futures outside regular hours)
+STOCK_FUTURES = [
+    ("YM=F", "Dow Fut"),
+    ("ES=F", "S&P Fut"),
+    ("NQ=F", "Nasdaq Fut"),
+]
+
+STOCK_FUTURES_CHART = [
+    ("YM=F", "Dow", (94, 151, 246)),
+    ("ES=F", "S&P 500", (75, 201, 122)),
+    ("NQ=F", "Nasdaq", (240, 170, 76)),
+]
+
 
 def _abbrev_number(n) -> str:
     """1234567890 -> '1.2B'"""
@@ -201,8 +215,8 @@ class ExtendedSlash(commands.Cog):
             print(f"[stock] price chart error for {symbol} ({range_key}): {e}")
             return None, None
 
-    async def _index_intraday_chart(self, session) -> io.BytesIO | None:
-        """Build an intraday chart overlaying the major indexes, each normalized
+    async def _index_intraday_chart(self, session, specs=STOCK_INDEX_CHART) -> io.BytesIO | None:
+        """Build an intraday chart overlaying the given symbols, each normalized
         to % change from its previous close so they share one axis."""
         async def one(sym, label, color):
             points, meta = await self._fetch_chart_points(session, sym, "1D")
@@ -215,7 +229,7 @@ class ExtendedSlash(commands.Cog):
             return {"label": label, "color": color, "points": pct,
                     "last": pct[-1][1], "gmt": meta.get("gmtoffset", 0)}
 
-        results = await asyncio.gather(*(one(s, l, c) for s, l, c in STOCK_INDEX_CHART))
+        results = await asyncio.gather(*(one(s, l, c) for s, l, c in specs))
         series = [r for r in results if r]
         if len(series) < 2:
             return None
@@ -315,31 +329,46 @@ class ExtendedSlash(commands.Cog):
                 await interaction.followup.send(embed=embed)
             return
 
-        # No ticker — summary of the major indexes
-        quotes = await self._fetch_quotes(session, [sym for sym, _ in STOCK_INDEXES])
-        by_symbol = {q.get("symbol"): q for q in quotes}
+        # No ticker — major indexes during regular hours, futures when closed
+        # (mirrors the Yahoo Finance homepage)
+        index_quotes = await self._fetch_quotes(session, [sym for sym, _ in STOCK_INDEXES])
+        by_symbol = {q.get("symbol"): q for q in index_quotes}
+        market_open = any(
+            (by_symbol.get(sym) or {}).get("marketState") == "REGULAR"
+            for sym, _ in STOCK_INDEXES
+        )
+
+        if market_open:
+            groups, chart_specs = STOCK_INDEXES, STOCK_INDEX_CHART
+            quotes_by, title, chart_name = by_symbol, "📊 Market Summary", "indexes.png"
+        else:
+            fut_quotes = await self._fetch_quotes(session, [sym for sym, _ in STOCK_FUTURES])
+            quotes_by = {q.get("symbol"): q for q in fut_quotes}
+            groups, chart_specs = STOCK_FUTURES, STOCK_FUTURES_CHART
+            title, chart_name = "📊 Futures", "futures.png"
+
         lines = []
-        for sym, label in STOCK_INDEXES:
-            q = by_symbol.get(sym)
+        for sym, label in groups:
+            q = quotes_by.get(sym)
             if not q or q.get("regularMarketPrice") is None:
                 continue
             lines.append(
-                f"{label:<10}{q['regularMarketPrice']:>12,.2f}"
+                f"{label:<11}{q['regularMarketPrice']:>12,.2f}"
                 f"{q.get('regularMarketChangePercent', 0.0):>+8.2f}%"
             )
         if not lines:
-            await interaction.followup.send("Could not fetch index data right now.")
+            await interaction.followup.send("Could not fetch market data right now.")
             return
 
         embed = discord.Embed(
-            title="📊 Market Summary",
+            title=title,
             description=f"```{chr(10).join(lines)}```",
             color=discord.Color.blurple(),
         )
-        chart = await self._index_intraday_chart(session)
+        chart = await self._index_intraday_chart(session, chart_specs)
         if chart:
-            embed.set_image(url="attachment://indexes.png")
-            await interaction.followup.send(embed=embed, file=discord.File(chart, filename="indexes.png"))
+            embed.set_image(url=f"attachment://{chart_name}")
+            await interaction.followup.send(embed=embed, file=discord.File(chart, filename=chart_name))
         else:
             await interaction.followup.send(embed=embed)
 
