@@ -1023,11 +1023,13 @@ def generate_winprob_chart(
     def yp(v):
         return PAD_T + plot_h - (v / 100.0) * plot_h
 
-    # Horizontal grid at 0/25/50/75/100
+    # Horizontal grid at 0/25/50/75/100. Labels are symmetric about the 50%
+    # midline: each extreme means the team on that side has a 100% chance.
     for gv in (0, 25, 50, 75, 100):
         y = yp(gv)
         draw.line([(PAD_L, y), (PAD_L + plot_w, y)], fill=GRID_COL, width=S)
-        draw.text((PAD_L + plot_w + 6 * S, y), f"{gv}", font=f_axis, fill=DIM_COL, anchor="lm")
+        lbl_val = gv if gv >= 50 else 100 - gv
+        draw.text((PAD_L + plot_w + 6 * S, y), f"{lbl_val}", font=f_axis, fill=DIM_COL, anchor="lm")
 
     # Inning gridlines + labels
     for idx, lbl in inning_ticks:
@@ -1059,6 +1061,23 @@ def generate_winprob_chart(
         draw.line(pts, fill=LINE_COL, width=2 * S, joint="curve")
         lx, ly = pts[-1]
         draw.ellipse([lx - 3 * S, ly - 3 * S, lx + 3 * S, ly + 3 * S], fill=LINE_COL)
+
+        # Label the end of the line with the current (leading team's) win prob
+        last_v = wp[-1]
+        fav_abbr = team_abbr if last_v >= 50 else opp_abbr
+        fav_col = team_color if last_v >= 50 else opp_color
+        disp = last_v if last_v >= 50 else 100 - last_v
+        elabel = f"{fav_abbr} {disp:.0f}%"
+        ew = draw.textlength(elabel, font=f_lbl)
+        eh = 16 * S
+        ex1 = lx - 7 * S
+        ex0 = ex1 - ew - 9 * S
+        ey = max(PAD_T + eh // 2, min(PAD_T + plot_h - eh // 2, ly))
+        draw.rounded_rectangle(
+            [ex0, ey - eh // 2, ex1, ey + eh // 2],
+            radius=4 * S, fill=_mix(fav_col, BG, 0.85),
+        )
+        draw.text(((ex0 + ex1) / 2, ey), elabel, font=f_lbl, fill=TXT_COL, anchor="mm")
 
     # Biggest-swing marker + annotation
     if swing is not None:
