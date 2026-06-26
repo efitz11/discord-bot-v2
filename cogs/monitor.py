@@ -739,6 +739,43 @@ class MonitorCog(commands.Cog):
         ]
         return "\n".join(lines)
 
+    @staticmethod
+    def _format_owns(matchups: list, pitcher_name: str) -> str:
+        """Build the 'hitter owns / pitcher owns' block from career matchup stats.
+
+        Mirrors the /mlb matchup buckets: OPS > 1.100 means the hitter owns the
+        pitcher, OPS < .500 means the pitcher owns the hitter (min 5 career PA).
+        """
+        hitter_owns = []
+        pitcher_owns = []
+        for m in matchups:
+            if m.pa < 5:
+                continue
+            try:
+                ops_f = float(m.ops)
+            except ValueError:
+                ops_f = 0.0
+
+            stat_parts = [f"{m.pa} PA", f"{m.h} H"]
+            if m.d > 0: stat_parts.append(f"{m.d} 2B")
+            if m.t > 0: stat_parts.append(f"{m.t} 3B")
+            if m.hr > 0: stat_parts.append(f"{m.hr} HR")
+            if m.bb > 0: stat_parts.append(f"{m.bb} BB")
+            if m.so > 0: stat_parts.append(f"{m.so} SO")
+            line = f"**{m.batter_name}** {m.avg}/{m.ops} ({', '.join(stat_parts)})"
+
+            if ops_f > 1.100:
+                hitter_owns.append(line)
+            elif ops_f < .500:
+                pitcher_owns.append(line)
+
+        block = ""
+        if hitter_owns:
+            block += f"**👑 Owns {pitcher_name}**\n" + "\n".join(hitter_owns) + "\n"
+        if pitcher_owns:
+            block += f"**🔒 Owned by {pitcher_name}**\n" + "\n".join(pitcher_owns) + "\n"
+        return block
+
     async def _post_lineup(self, channel, box_data: dict, side: str, start_et: datetime = None,
                            game_pk: int = None) -> None:
         """Send the starting-lineup embed (batting table in /mlb box format)."""
@@ -751,6 +788,22 @@ class MonitorCog(commands.Cog):
         if matchup:
             desc += f"**Pitching Matchup**\n```\n{matchup}\n```\n"
         desc += f"**{box.team_name} Batting**\n```python\n{box.format_batting()}\n```"
+
+        # Career matchups: favorite-team hitters who own / are owned by the opposing pitcher
+        opp_side = "home" if side == "away" else "away"
+        opp_pitcher = probables.get(opp_side) or {}
+        opp_pitcher_id = opp_pitcher.get("id")
+        fav_abbr = box_data.get("teams", {}).get(side, {}).get("team", {}).get("abbreviation")
+        if opp_pitcher_id and fav_abbr:
+            try:
+                data = await self.bot.mlb_client.get_matchup(fav_abbr, str(opp_pitcher_id))
+                if data and data.get("matchups"):
+                    owns = self._format_owns(data["matchups"], data["pitcher"])
+                    if owns:
+                        desc += f"\n{owns}"
+            except Exception as e:
+                print(f"[monitor] matchup-owns fetch error for game {game_pk}: {e}")
+
         embed = discord.Embed(
             title=f"Starting Lineup — {box.title}",
             description=desc,
