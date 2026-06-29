@@ -1600,7 +1600,25 @@ class MonitorCog(commands.Cog):
         is_pg = flags.get("perfectGame", False)
         is_nh = flags.get("noHitter", False)
 
-        if is_pg or is_nh:
+        # After a break-up the Stats API's noHitter/perfectGame flag can flicker back
+        # to True even though the hit is still on the board (a transient glitch). With
+        # the stored state already popped, that re-raised flag would look like a fresh
+        # no-hitter and post a duplicate alert. Distinguish a glitch from a genuine
+        # official-scoring reversal by the actual hit count: a real no-hitter has a
+        # team at 0 hits; a glitch leaves the hit recorded. Only a true 0-hit reversal
+        # clears the break-up flag and lets the no-hitter resume.
+        if (is_pg or is_nh) and game_pk in self._nh_broken_posted:
+            ls_teams = linescore.get("teams", {})
+            no_hit_live = (ls_teams.get("away", {}).get("hits", 0) == 0
+                           or ls_teams.get("home", {}).get("hits", 0) == 0)
+            if no_hit_live:
+                print(f"[monitor] no-hitter restored by scoring reversal, resuming: game={game_pk}")
+                self._nh_broken_posted.discard(game_pk)
+                self._save_nh_state()
+
+        if (is_pg or is_nh) and game_pk in self._nh_broken_posted:
+            pass  # flag glitch after break-up — hit still on the board, ignore
+        elif is_pg or is_nh:
             stored = self._nh_alerted.get(game_pk)
 
             # Determine which team is throwing the NH so break-up alerts find the right hit
