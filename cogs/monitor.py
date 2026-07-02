@@ -3,8 +3,9 @@ monitor.py — Live MLB game monitoring cog.
 
 Posts to ALERT_CHANNEL_ID automatically when:
   1. A no-hitter or perfect game is in progress (updates every inning change).
-  2. A notable home run is hit (≥420 ft, favorite team HR, ≤5-park HR, or xBA < .200),
-     once a highlight video is available.
+  2. A notable home run is hit (≥420 ft, favorite team HR, ≤5-park HR, xBA < .200, or a
+     batter's 2nd+ HR in the same game), once a highlight video is available. Multi-homer
+     alerts list every HR that batter has hit so far that game.
   3. A walkoff play ends a game (all 30 teams); alert is posted immediately then edited
      with the highlight video once MLB uploads it (up to 10 minutes).
   4. FAVORITE_TEAM's starting lineup, as soon as MLB publishes it (within
@@ -44,6 +45,7 @@ HR_DISTANCE_THRESHOLD = 420                 # Feet — minimum projected distanc
 HR_ALWAYS_ALERT_TEAM  = os.getenv("HR_ALERT_TEAM", "").upper() or None  # Always alert for this team's HRs regardless of distance
 HR_PARKS_THRESHOLD    = 5                  # Alert if HR would only be a HR in ≤ this many parks
 HR_XBA_THRESHOLD      = 0.200             # Alert if xBA is below this value
+MULTI_HR_THRESHOLD    = 2                  # Alert once a batter has hit this many HRs in the same game
 _STATE_DIR            = os.getenv("STATE_DIR", ".")
 HR_STATE_FILE         = os.path.join(_STATE_DIR, "hr_posted.json")
 NH_STATE_FILE         = os.path.join(_STATE_DIR, "nh_state.json")
@@ -1121,8 +1123,45 @@ class MonitorCog(commands.Cog):
         except discord.HTTPException as e:
             print(f"[monitor] failed to post NH alert: {e}")
 
+    @staticmethod
+    def _extract_hr_summary(play: dict) -> dict:
+        """Pull the fields needed for one line of a multi-homer alert out of a home_run play."""
+        dist = ev = la = 0
+        pitch_type = pitch_spd = ""
+        play_id = None
+        for event in play.get("playEvents", []):
+            if event.get("details", {}).get("isInPlay") and "hitData" in event:
+                hd         = event["hitData"]
+                dist       = int(hd.get("totalDistance") or 0)
+                ev         = float(hd.get("launchSpeed") or 0)
+                la         = int(hd.get("launchAngle") or 0)
+                pitch_type = event.get("details", {}).get("type", {}).get("description", "")
+                pitch_spd  = float(event.get("pitchData", {}).get("startSpeed") or 0)
+                play_id    = event.get("playId")
+                break
+
+        about = play.get("about", {})
+        half  = about.get("halfInning", "top")
+        return {
+            "pitcher":     play.get("matchup", {}).get("pitcher", {}).get("fullName", "Unknown"),
+            "desc":        play.get("result", {}).get("description", ""),
+            "inning":      f"{'bot' if half == 'bottom' else 'top'} {about.get('inning', 0)}",
+            "dist":        dist,
+            "ev":          ev,
+            "la":          la,
+            "pitch_type":  pitch_type,
+            "pitch_speed": pitch_spd,
+            "play_id":     play_id,
+            "video_url":   "",
+            "video_blurb": "",
+            "xba":         None,
+            "parks":       None,
+        }
+
     def _should_post_hr(self, hr: dict) -> bool:
         if HR_ALWAYS_ALERT_TEAM and hr["batter_team"] == HR_ALWAYS_ALERT_TEAM:
+            return True
+        if hr.get("game_hr_num", 1) >= MULTI_HR_THRESHOLD:
             return True
         if hr["dist"] >= HR_DISTANCE_THRESHOLD:
             return True
@@ -1267,6 +1306,56 @@ class MonitorCog(commands.Cog):
             await channel.send(embed=embed)
         except discord.HTTPException as e:
             print(f"[monitor] failed to post HR alert: {e}")
+
+    async def _post_multi_hr_alert(self, channel, hr: dict, homers: list) -> None:
+        """Alert for a batter's 2nd+ HR in a game — lists every HR they've hit so far."""
+        batter = hr["batter"]
+        team   = hr["batter_team"]
+        away   = hr.get("away", "")
+        home   = hr.get("home", "")
+        if away and home:
+            matchup = f"{away} {hr.get('away_score', 0)} @ {home} {hr.get('home_score', 0)}"
+        else:
+            matchup = team
+
+        n = len(homers)
+        suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+        title = f"{'💣' * n} {matchup} — ({team}) {batter}'s {n}{suffix} home run"
+
+        lines = []
+        for i, homer in enumerate(homers, start=1):
+            desc_fmt = homer["desc"].replace(batter, f"**{batter}**", 1)
+            line = f"**#{i} — {homer['inning'].title()}:** With **{homer['pitcher']}** pitching, {desc_fmt}"
+
+            stat_parts = []
+            if homer.get("pitch_type") and homer.get("pitch_speed"):
+                stat_parts.append(f"{homer['pitch_speed']:.1f} mph {homer['pitch_type']}")
+            if homer.get("ev"):
+                stat_parts.append(f"{homer['ev']:.1f} mph EV")
+            if homer.get("la"):
+                stat_parts.append(f"{homer['la']}° LA")
+            if homer.get("dist"):
+                stat_parts.append(f"{homer['dist']} ft")
+            if homer.get("xba") is not None:
+                stat_parts.append(f"xBA {homer['xba']:.3f}")
+            if homer.get("parks") is not None:
+                stat_parts.append(f"{homer['parks']}/30 parks")
+            if stat_parts:
+                line += f"\n> *{' | '.join(stat_parts)}*"
+            if homer.get("video_url"):
+                line += f"\n> [🎥 **{homer.get('video_blurb') or 'Watch'}**]({homer['video_url']})"
+
+            lines.append(line)
+
+        body = "\n\n".join(lines)
+        if len(body) > 4096:
+            body = body[:4093] + "..."
+
+        embed = discord.Embed(title=title, description=body, color=discord.Color.orange())
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException as e:
+            print(f"[monitor] failed to post multi-HR alert: {e}")
 
     @staticmethod
     def _format_abs_pbp(at_bats: list) -> str:
@@ -1725,6 +1814,19 @@ class MonitorCog(commands.Cog):
         hr_away_runs  = hr_linescore.get("away", {}).get("runs", 0)
         hr_home_runs  = hr_linescore.get("home", {}).get("runs", 0)
 
+        # Group this game's HR plays by batter (in at-bat order) so each HR can be
+        # tagged with its ordinal for that batter (2nd, 3rd, ...) — this is what
+        # drives the multi-homer-game alert and lets it list every prior shot.
+        hr_plays_by_batter: dict = {}
+        for p in all_plays:
+            if p.get("result", {}).get("eventType") != "home_run":
+                continue
+            b   = p.get("matchup", {}).get("batter", {}).get("id")
+            idx = p.get("about", {}).get("atBatIndex", 0)
+            hr_plays_by_batter.setdefault(b, []).append((idx, p))
+        for lst in hr_plays_by_batter.values():
+            lst.sort(key=lambda t: t[0])
+
         for play in all_plays:
             if play.get("result", {}).get("eventType") != "home_run":
                 continue
@@ -1782,8 +1884,13 @@ class MonitorCog(commands.Cog):
             play_away   = result.get("awayScore", hr_away_runs)
             play_home   = result.get("homeScore", hr_home_runs)
 
+            batter_id    = play.get("matchup", {}).get("batter", {}).get("id")
+            batter_hrs   = hr_plays_by_batter.get(batter_id, [])
+            game_hr_num  = next((i + 1 for i, (idx, _) in enumerate(batter_hrs) if idx == at_bat_idx), 1)
+
             hr_data = {
                 "batter":       batter,
+                "batter_id":    batter_id,
                 "batter_team":  batter_team,
                 "pitcher":      pitcher,
                 "pitcher_team": pitcher_team,
@@ -1798,6 +1905,8 @@ class MonitorCog(commands.Cog):
                 "pitch_speed":  pitch_spd,
                 "rbi":          rbi,
                 "num":          hr_num,
+                "game_hr_num":  game_hr_num,
+                "at_bat_idx":   at_bat_idx,
                 "inning":       f"{'bot' if half == 'bottom' else 'top'} {inn_num}",
                 "desc":         desc,
                 "play_id":      play_id,
@@ -1843,7 +1952,22 @@ class MonitorCog(commands.Cog):
 
                 if video_found or cycles >= VIDEO_WAIT_MAX_CYCLES:
                     if self._should_post_hr(hr):
-                        await self._post_hr_alert(channel, hr)
+                        if hr.get("game_hr_num", 1) >= MULTI_HR_THRESHOLD:
+                            homers = []
+                            for idx, prior_play in hr_plays_by_batter.get(hr.get("batter_id"), []):
+                                if idx > hr.get("at_bat_idx", -1):
+                                    break
+                                summary = self._extract_hr_summary(prior_play)
+                                if summary["play_id"] and summary["play_id"] in content_dict:
+                                    summary["video_url"]   = content_dict[summary["play_id"]]["url"]
+                                    summary["video_blurb"] = content_dict[summary["play_id"]]["blurb"]
+                                if summary["play_id"] and summary["play_id"] in savant_data:
+                                    summary["xba"]   = savant_data[summary["play_id"]]["xba"]
+                                    summary["parks"] = savant_data[summary["play_id"]]["parks"]
+                                homers.append(summary)
+                            await self._post_multi_hr_alert(channel, hr, homers)
+                        else:
+                            await self._post_hr_alert(channel, hr)
                     self._hr_posted.add(hr_key)
                     self._save_hr_state()
                     del self._hr_pending[hr_key]
@@ -2419,6 +2543,37 @@ class MonitorCog(commands.Cog):
         }
         await ctx.message.delete()
         await self._post_hr_alert(ctx.channel, mock_hr)
+
+    @commands.command(name="multi_hr_test")
+    async def multi_hr_test(self, ctx):
+        """Test the multi-homer-game alert with mock data. Usage: !multi_hr_test"""
+        base_hr = {
+            "batter":      "Mickey Moniak",
+            "batter_team": "COL",
+            "away":        "ATH",
+            "home":        "COL",
+            "away_score":  3,
+            "home_score":  5,
+        }
+        homers = [
+            {
+                "pitcher": "Corbin Burnes", "desc": "Mickey Moniak homers (11) on a fly ball to left field.",
+                "inning": "bot 2", "dist": 402, "ev": 104.1, "la": 26,
+                "pitch_type": "Sinker", "pitch_speed": 94.8, "play_id": None,
+                "video_url": "https://www.mlb.com/video/moniak-homers-11", "video_blurb": "Moniak's 11th home run of the season",
+                "xba": 0.720, "parks": 27,
+            },
+            {
+                "pitcher": "Corbin Burnes", "desc": "Mickey Moniak homers (12) on a fly ball to left center field. Charlie Blackmon scores.",
+                "inning": "bot 5", "dist": 438, "ev": 112.4, "la": 28,
+                "pitch_type": "Four-Seam Fastball", "pitch_speed": 95.2, "play_id": None,
+                "video_url": "https://www.mlb.com/video/moniak-homers-12", "video_blurb": "Moniak's 12th home run of the season",
+                "xba": 0.891, "parks": 29,
+            },
+        ]
+        mock_hr = {**base_hr, "game_hr_num": len(homers)}
+        await ctx.message.delete()
+        await self._post_multi_hr_alert(ctx.channel, mock_hr, homers)
 
     @commands.command(name="cycle_test")
     async def cycle_test(self, ctx, player: str = "CJ Abrams", *, date: str = None):
