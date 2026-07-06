@@ -4,10 +4,11 @@ monitor.py — Live MLB game monitoring cog.
 Posts to ALERT_CHANNEL_ID automatically when:
   1. A no-hitter or perfect game is in progress (updates every inning change).
   2. A notable home run is hit (≥420 ft, favorite team HR, ≤5-park HR, xBA < .200, or a
-     batter's 2nd+ HR in the same game), once a highlight video is available. Multi-homer
-     alerts list every HR that batter has hit so far that game.
+     batter's 2nd+ HR in the same game), once a highlight video is available (or after
+     VIDEO_WAIT_MAX_CYCLES minutes with no video, e.g. alternate broadcasts that delay
+     uploads). Multi-homer alerts list every HR that batter has hit so far that game.
   3. A walkoff play ends a game (all 30 teams); alert is posted immediately then edited
-     with the highlight video once MLB uploads it (up to 10 minutes).
+     with the highlight video once MLB uploads it (up to VIDEO_WAIT_MAX_CYCLES minutes).
   4. FAVORITE_TEAM's starting lineup, as soon as MLB publishes it (within
      LINEUP_CHECK_HOURS of first pitch), in the /mlb box batting format.
 
@@ -55,7 +56,7 @@ CYCLE_STATE_FILE      = os.path.join(_STATE_DIR, "cycle_state.json")
 DELAY_STATE_FILE      = os.path.join(_STATE_DIR, "delay_state.json")
 LINEUP_STATE_FILE     = os.path.join(_STATE_DIR, "lineup_state.json")
 LINEUP_CHECK_HOURS    = 6                   # Start polling for the lineup this many hours before first pitch
-VIDEO_WAIT_MAX_CYCLES = 10                  # Poll cycles to wait for highlight video
+VIDEO_WAIT_MAX_CYCLES = 5                   # Poll cycles to wait for highlight video
 NH_ALERT_DELAY        = 15                  # Seconds to delay NH alerts (stream spoiler protection)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -425,7 +426,15 @@ class MonitorCog(commands.Cog):
           - Its abstract_state is Live (covers games running past midnight), OR
           - Its scheduled start is within WAKEUP_WINDOW_MINUTES of now.
         Final games are skipped — they've been pruned or will be on next refresh.
+
+        Also stays active while an HR or walkoff alert is still waiting on a
+        highlight video, even if every tracked game has gone Final — otherwise
+        the last game of the day finishing would put the loop to sleep before
+        the pending alert's wait cycles could run out and it'd never post.
         """
+        if self._hr_pending or self._walkoff_pending:
+            return True
+
         now_et = _et_now()
         wakeup = timedelta(minutes=WAKEUP_WINDOW_MINUTES)
         for pk, info in self._scheduled_games.items():
@@ -1838,16 +1847,21 @@ class MonitorCog(commands.Cog):
             if hr_key in self._hr_posted:
                 continue
 
-            # Skip plays older than 10 minutes — catches stale HRs on restart
-            end_time_str = about.get("endTime", "")
-            if end_time_str:
-                try:
-                    end_time = datetime.strptime(end_time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-                    if (datetime.now(timezone.utc) - end_time).total_seconds() > 600:
-                        self._hr_posted.add(hr_key)
-                        continue
-                except Exception:
-                    pass
+            # Skip plays older than 10 minutes — catches stale HRs on restart.
+            # Only applies to plays we've never tracked before: once a HR is in
+            # _hr_pending it must keep going through its own cycle-based video
+            # wait/fallback, or this wall-clock check would race that fallback
+            # and silently swallow the alert before it ever posts.
+            if hr_key not in self._hr_pending:
+                end_time_str = about.get("endTime", "")
+                if end_time_str:
+                    try:
+                        end_time = datetime.strptime(end_time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                        if (datetime.now(timezone.utc) - end_time).total_seconds() > 600:
+                            self._hr_posted.add(hr_key)
+                            continue
+                    except Exception:
+                        pass
 
             # Extract Statcast metrics
             dist = ev = la = 0
