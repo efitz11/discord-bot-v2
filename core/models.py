@@ -994,12 +994,49 @@ class PlayerSeasonStats:
 
         return "\n\n".join(blocks)
 
+# (stat key, display label, direction): direction is 1 if a higher value is
+# better, -1 if lower is better, 0 if the stat isn't a head-to-head comparison
+# (e.g. counting stats like games played).
+_HITTING_STAT_DEFS = [
+    ('gamesPlayed', 'G', 0), ('atBats', 'AB', 0),
+    ('hits', 'H', 1), ('doubles', '2B', 1), ('triples', '3B', 1), ('homeRuns', 'HR', 1),
+    ('runs', 'R', 1), ('rbi', 'RBI', 1), ('baseOnBalls', 'BB', 1), ('strikeOuts', 'SO', -1),
+    ('stolenBases', 'SB', 1), ('caughtStealing', 'CS', -1),
+    ('avg', 'AVG', 1), ('obp', 'OBP', 1), ('slg', 'SLG', 1), ('ops', 'OPS', 1),
+]
+_PITCHING_STAT_DEFS = [
+    ('wins', 'W', 1), ('losses', 'L', -1),
+    ('gamesPlayed', 'G', 0), ('gamesStarted', 'GS', 0),
+    ('completeGames', 'CG', 1), ('shutouts', 'SHO', 1),
+    ('saveOpportunities', 'SVO', 0), ('saves', 'SV', 1), ('holds', 'HLD', 1),
+    ('inningsPitched', 'IP', 0),
+    ('hits', 'H', -1), ('runs', 'R', -1), ('earnedRuns', 'ER', -1), ('homeRuns', 'HR', -1),
+    ('baseOnBalls', 'BB', -1), ('strikeOuts', 'SO', 1),
+    ('era', 'ERA', -1), ('whip', 'WHIP', -1),
+    ('strikeoutsPer9Inn', 'K/9', 1), ('walksPer9Inn', 'BB/9', -1),
+    ('strikeoutWalkRatio', 'K/BB', 1), ('avg', 'AVG', -1),
+]
+
 @dataclass
 class CompareStats:
     title: str
     stat_type: str
     rows: List[dict]
     errors: List[str] = None
+
+    def image_rows(self) -> list:
+        """Flat (label, v1, v2, direction) rows for a 2-player image comparison."""
+        if len(self.rows) != 2:
+            return []
+        defs = _HITTING_STAT_DEFS if self.stat_type == "hitting" else _PITCHING_STAT_DEFS
+        r1, r2 = self.rows
+        out = []
+        for key, label, direction in defs:
+            v1, v2 = r1.get(key), r2.get(key)
+            if v1 is None and v2 is None:
+                continue
+            out.append((label, v1, v2, direction))
+        return out
 
     def format_discord_code_block(self) -> str:
         if not self.rows:

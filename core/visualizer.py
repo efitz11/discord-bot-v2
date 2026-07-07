@@ -236,6 +236,127 @@ def generate_compare_percentiles_image(
     buf.seek(0)
     return buf
 
+def _blend(fg: Tuple[int, int, int], bg: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
+    return tuple(int(round(bg[i] + (fg[i] - bg[i]) * t)) for i in range(3))
+
+
+def generate_compare_stats_image(
+    p1_label: str, p2_label: str,
+    year_str: str, stat_type: str,
+    rows: list,  # (label, v1, v2, direction) — direction: 1 higher-better, -1 lower-better, 0 neutral
+    p1_team: Optional[str] = None, p2_team: Optional[str] = None,
+    p1_headshot: Optional[bytes] = None, p2_headshot: Optional[bytes] = None,
+) -> io.BytesIO:
+    """Render a dark-mode side-by-side stat comparison table, highlighting whichever
+    player has the better value in each row."""
+
+    PAD     = 18
+    VAL_W   = 92
+    CTR_W   = 120
+    W       = 2 * PAD + 2 * VAL_W + CTR_W   # keeps the table centered — no leftover margin
+
+    TITLE_H = 46
+    HEAD    = 72
+    HEAD_H  = HEAD + 6
+    NAMES_H = 34
+    ROW_H   = 30
+
+    total_h = TITLE_H + HEAD_H + NAMES_H + len(rows) * ROW_H + PAD
+
+    BG      = (16, 18, 27)
+    ROW_ALT = (20, 23, 35)
+    TEXT    = (224, 224, 235)
+    DIM     = (110, 115, 140)
+    LABEL_C = (180, 185, 215)
+
+    p1_primary, p1_secondary = _team_colors(p1_team)
+    p2_primary, p2_secondary = _team_colors(p2_team)
+    P1_NAME = _readable(p1_primary)
+    P2_NAME = _readable(p2_primary)
+    # Lightened so dark navy/black team colors (e.g. NYY, PIT) still show up as a
+    # visible highlight against the dark background instead of blending into it.
+    P1_HILITE = _readable(p1_primary, floor=90)
+    P2_HILITE = _readable(p2_primary, floor=90)
+
+    f_title = _dv("DejaVuSans-Bold.ttf", 17)
+    f_bold  = _dv("DejaVuSans-Bold.ttf", 13)
+    f_reg   = _dv("DejaVuSans.ttf",      13)
+    f_val   = _dv("DejaVuSans-Bold.ttf", 14)
+
+    img  = Image.new("RGB", (W, total_h), BG)
+    draw = ImageDraw.Draw(img)
+
+    xv1  = PAD                 # left edge of P1 value column
+    xctr = xv1 + VAL_W         # left edge of center label column
+    xb2  = xctr + CTR_W        # left edge of P2 value column
+    xend = xb2 + VAL_W         # right edge of P2 value column
+
+    c1 = (xv1 + xctr) // 2
+    c2 = (xb2 + xend) // 2
+
+    y = PAD // 2
+    draw.text((W // 2, y + TITLE_H // 2),
+              f"{year_str} {'Hitting' if stat_type == 'hitting' else 'Pitching'} Comparison",
+              font=f_title, fill=TEXT, anchor="mm")
+    y += TITLE_H
+
+    if p1_headshot:
+        hs = _circle_headshot(p1_headshot, HEAD, p1_secondary)
+        if hs:
+            img.paste(hs, (c1 - HEAD // 2, y), hs)
+    if p2_headshot:
+        hs = _circle_headshot(p2_headshot, HEAD, p2_secondary)
+        if hs:
+            img.paste(hs, (c2 - HEAD // 2, y), hs)
+    draw.text((W // 2, y + HEAD_H // 2), "vs", font=f_reg, fill=DIM, anchor="mm")
+    y += HEAD_H
+
+    draw.text((c1, y + NAMES_H // 2), p1_label, font=f_bold, fill=P1_NAME, anchor="mm")
+    draw.text((c2, y + NAMES_H // 2), p2_label, font=f_bold, fill=P2_NAME, anchor="mm")
+    y += NAMES_H
+
+    def _num(v):
+        if v is None:
+            return None
+        try:
+            return float(str(v).replace('%', ''))
+        except ValueError:
+            return None
+
+    for j, (label, v1, v2, direction) in enumerate(rows):
+        row_bg = ROW_ALT if j % 2 == 0 else BG
+        if j % 2 == 0:
+            draw.rectangle([PAD, y, W - PAD, y + ROW_H], fill=row_bg)
+
+        winner = 0
+        if direction != 0:
+            n1, n2 = _num(v1), _num(v2)
+            if n1 is not None and n2 is not None and n1 != n2:
+                if direction == 1:
+                    winner = 1 if n1 > n2 else 2
+                else:
+                    winner = 1 if n1 < n2 else 2
+
+        if winner == 1:
+            draw.rectangle([xv1, y, xctr - 1, y + ROW_H - 1], fill=_blend(P1_HILITE, row_bg, 0.45))
+        elif winner == 2:
+            draw.rectangle([xb2, y, xend - 1, y + ROW_H - 1], fill=_blend(P2_HILITE, row_bg, 0.45))
+
+        draw.text((xctr - 8, y + ROW_H // 2), str(v1) if v1 is not None else "—",
+                  font=f_val, fill=TEXT, anchor="rm")
+        draw.text((xb2 + 8, y + ROW_H // 2), str(v2) if v2 is not None else "—",
+                  font=f_val, fill=TEXT, anchor="lm")
+        draw.text(((xctr + xb2) // 2, y + ROW_H // 2), label,
+                  font=f_reg, fill=LABEL_C, anchor="mm")
+
+        y += ROW_H
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
 # Define colors based on result
 COLORS = {
     'Ball': (46, 204, 113),      # Green
