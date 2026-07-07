@@ -1371,6 +1371,8 @@ class MLBClient:
             if player_stat:
                 player_stat['name'] = last_name
                 player_stat['team'] = team_abbrev
+                player_stat['id'] = person.get('id')
+                player_stat['full_name'] = full_name
                 rows.append(player_stat)
             else:
                 if now.month >= 4:

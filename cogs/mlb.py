@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image, generate_rolling_xwoba_chart, generate_winprob_chart, _team_colors
+from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, _team_colors
 import io
 import asyncio
 import dataclasses
@@ -1479,16 +1479,20 @@ class MLBSlash(commands.Cog):
     @app_commands.describe(year="A specific year (e.g. 2023). Leave blank for current.")
     @app_commands.describe(stat_type="Hitting or Pitching. Leave blank to auto-detect.")
     @app_commands.describe(career="Compare career totals instead of a single season")
+    @app_commands.describe(image="Show as a generated image with headshots instead of a text table (2 players only)")
     @app_commands.choices(stat_type=[
         app_commands.Choice(name="Hitting", value="hitting"),
         app_commands.Choice(name="Pitching", value="pitching")
     ])
-    async def compare(self, interaction: discord.Interaction, players: str, year: str = None, stat_type: app_commands.Choice[str] = None, career: bool = False):
+    async def compare(self, interaction: discord.Interaction, players: str, year: str = None, stat_type: app_commands.Choice[str] = None, career: bool = False, image: bool = False):
         await interaction.response.defer()
 
         player_names = [p.strip() for p in players.split('/') if p.strip()]
         if len(player_names) < 2:
             await interaction.followup.send("Please provide at least 2 players separated by `/` (e.g. `soto/abrams`).")
+            return
+        if image and len(player_names) != 2:
+            await interaction.followup.send("Image mode only supports comparing exactly 2 players.")
             return
 
         s_type = stat_type.value if stat_type else None
@@ -1497,6 +1501,48 @@ class MLBSlash(commands.Cog):
 
         if not result:
             await interaction.followup.send("Could not find stats for those players.")
+            return
+
+        if image:
+            image_rows = result.image_rows()
+            if not image_rows:
+                await interaction.followup.send("Could not find comparable stats for those players.")
+                return
+
+            r1, r2 = result.rows
+            p1_label = r1.get('full_name', r1.get('name', '?'))
+            p2_label = r2.get('full_name', r2.get('name', '?'))
+
+            async def _fetch_headshot(player_id):
+                if not player_id:
+                    return None
+                try:
+                    session = await self.bot.mlb_client.get_session()
+                    async with session.get(player_headshot_url(player_id)) as resp:
+                        if resp.status == 200:
+                            return await resp.read()
+                except Exception:
+                    pass
+                return None
+
+            p1_headshot, p2_headshot = await asyncio.gather(
+                _fetch_headshot(r1.get('id')),
+                _fetch_headshot(r2.get('id')),
+            )
+
+            year_str = "Career" if career else (year or str(datetime.now().year))
+            buf = generate_compare_stats_image(
+                p1_label, p2_label,
+                year_str, result.stat_type,
+                image_rows,
+                p1_team=r1.get('team'), p2_team=r2.get('team'),
+                p1_headshot=p1_headshot, p2_headshot=p2_headshot,
+            )
+            embed = discord.Embed(title=result.title, color=discord.Color.blue())
+            embed.set_image(url="attachment://compare.png")
+            if result.errors:
+                embed.set_footer(text="\n".join(result.errors))
+            await interaction.followup.send(embed=embed, file=discord.File(buf, filename="compare.png"))
             return
 
         embed = discord.Embed(color=discord.Color.blue())
