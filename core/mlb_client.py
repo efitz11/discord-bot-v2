@@ -2092,8 +2092,10 @@ class MLBClient:
             player_name = s.get("player", {}).get("fullName", "Unknown")
             team_id = s.get("team", {}).get("id")
             team_abbrev = abbrev_map.get(team_id, "??")
-            pos_abbrev = s.get("position", {}).get("abbreviation", "")
-            leaders.append(Leader(rank, player_name, team_abbrev, value, pos_abbrev))
+            games_played = str(stat_obj.get("gamesPlayed", ""))
+            innings_pitched = str(stat_obj.get("inningsPitched", ""))
+            plate_appearances = str(stat_obj.get("plateAppearances", ""))
+            leaders.append(Leader(rank, player_name, team_abbrev, value, games_played, innings_pitched, plate_appearances, stat_group))
 
             
         return leaders
@@ -2165,7 +2167,7 @@ class MLBClient:
             rank = i + 1
             team_name = team.get("team", {}).get("name", "Unknown")
             value = str(team.get("stat", {}).get(team_stat_key, ""))
-            leaders.append(Leader(rank, team_name, "", value, position=""))
+            leaders.append(Leader(rank, team_name, "", value))
             
         return leaders
 
