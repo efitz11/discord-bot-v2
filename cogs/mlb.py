@@ -28,6 +28,15 @@ STAT_ABBREVIATIONS = {
     "sv": "pitching|saves", "ip": "pitching|inningsPitched",
 }
 
+# Counting stats accumulate with playing time, so restricting the leaderboard
+# to the "qualified" pool (min PA/IP threshold) mostly just hides part-time
+# players who happen to lead in these — default them to the full player pool.
+COUNTING_STATS = {
+    "homeRuns", "hits", "runs", "runsBattedIn", "stolenBases", "walks", "strikeouts",
+    "wins", "saves", "doubles", "triples", "totalBases", "atBats", "gamesPlayed",
+    "inningsPitched",
+}
+
 class PlayerAbsView(discord.ui.View):
     def __init__(self, cog, player_id: str, date: str, milb: bool):
         super().__init__(timeout=600)
@@ -2457,7 +2466,10 @@ class MLBSlash(commands.Cog):
             default_pitching_stats = {"earnedRunAverage", "wins", "saves", "walksAndHitsPerInningPitched", "strikeoutsPer9Inn", "hitsPer9Inn", "walksPer9Inn", "homeRunsPer9", "strikeoutWalkRatio", "inningsPitched", "shutouts", "completeGames", "blownSaves", "holds", "balk", "wildPitch", "hitBatsman", "saveOpportunities", "runsScoredPer9"}
             group_val = stat_group.value if stat_group else ("pitching" if stat in default_pitching_stats else "hitting")
             stat_val = stat
-        
+
+        if pool_val is None and stat_val in COUNTING_STATS:
+            pool_val = "ALL"
+
         leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id, year=year, reverse=reverse)
 
 
