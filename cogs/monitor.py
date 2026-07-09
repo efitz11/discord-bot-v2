@@ -920,6 +920,7 @@ class MonitorCog(commands.Cog):
 
         embed = discord.Embed(
             title=title,
+            url=f"https://www.mlb.com/tv/g{game_pk}",
             color=discord.Color.gold() if is_perfect else discord.Color.red(),
         )
         embed.add_field(name="Score",  value=score_line,  inline=True)
