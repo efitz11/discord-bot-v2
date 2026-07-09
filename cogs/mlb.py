@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from core.utils import parse_date, et_now
 from core.mlb_client import (PERCENTILE_DISPLAY_NAMES, BATTER_PERCENTILE_CATEGORIES,
-                             PITCHER_PERCENTILE_CATEGORIES, player_headshot_url)
+                             PITCHER_PERCENTILE_CATEGORIES, player_headshot_url, Leader)
 
 # Common shorthand typed directly (not via autocomplete) for /mlb leaders and
 # /mlb team_leaders, e.g. "hr" -> "hitting|homeRuns". Without this, an
@@ -35,6 +35,16 @@ COUNTING_STATS = {
     "homeRuns", "hits", "runs", "runsBattedIn", "stolenBases", "walks", "strikeouts",
     "wins", "saves", "doubles", "triples", "totalBases", "atBats", "gamesPlayed",
     "inningsPitched",
+}
+
+# Short column header for each stat key, shown instead of a generic "STAT" label.
+STAT_ABBR_DISPLAY = {
+    "homeRuns": "HR", "battingAverage": "AVG", "runsBattedIn": "RBI",
+    "onBasePercentage": "OBP", "sluggingPercentage": "SLG", "onBasePlusSlugging": "OPS",
+    "hits": "H", "runs": "R", "stolenBases": "SB", "walks": "BB", "strikeouts": "SO",
+    "wins": "W", "earnedRunAverage": "ERA", "walksAndHitsPerInningPitched": "WHIP",
+    "saves": "SV", "inningsPitched": "IP", "gamesPlayed": "G", "doubles": "2B",
+    "triples": "3B", "atBats": "AB", "totalBases": "TB",
 }
 
 class PlayerAbsView(discord.ui.View):
@@ -2478,6 +2488,7 @@ class MLBSlash(commands.Cog):
             return
             
         desc = "```python\n"
+        desc += f"{Leader.header(stat_group=group_val, stat_label=STAT_ABBR_DISPLAY.get(stat_val, stat_val.upper()))}\n"
         for leader in leaders_list:
             desc += f"{leader.format()}\n"
         desc += "```"
