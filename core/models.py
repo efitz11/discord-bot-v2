@@ -42,7 +42,6 @@ __all__ = [
     "PlayerGameLogData",
     "BullpenData",
     "Leader",
-    "BAD_PITCHERS",
     "TEAM_ALIASES",
     "LEVEL_ABBREVS",
     "PERCENTILE_DISPLAY_NAMES",
@@ -50,12 +49,6 @@ __all__ = [
     "PITCHER_PERCENTILE_CATEGORIES",
 ]
 
-
-# Pitchers always flagged 💩 in /mlb bullpen, as (last_name, team_abbrev) pairs
-BAD_PITCHERS = {
-    ('parker', 'wsh'),
-    ('littell', 'wsh'),
-}
 
 # Common team nicknames accepted anywhere a team query is typed
 TEAM_ALIASES = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals",
@@ -1318,11 +1311,6 @@ class BullpenData:
         day_3 = counts[-3]
         total_3 = yest + day_before + day_3
 
-        # boxscoreName can be "Parker" or "Parker, M" — match on the last name only
-        pitcher_last = row.get('name', '').split(',')[0].strip().lower()
-        if (pitcher_last, self.team_abbrev.lower()) in BAD_PITCHERS:
-            return "💩"
-        
         # 3 in a row
         if yest > 0 and day_before > 0 and day_3 > 0:
             return "💀"
@@ -1347,7 +1335,7 @@ class BullpenData:
             r['status'] = self._get_status(r)
             
         # Group by status (Fresh -> Used -> Tired -> Gassed -> Bad)
-        status_order = {"🟢": 0, "🟡": 1, "🔴": 2, "💀": 3, "💩": 4}
+        status_order = {"🟢": 0, "🟡": 1, "🔴": 2, "💀": 3}
         self.bullpen.sort(key=lambda x: status_order.get(x.get('status', ''), 99))
         self.starters.sort(key=lambda x: status_order.get(x.get('status', ''), 99))
 
@@ -1397,8 +1385,6 @@ class BullpenData:
                 output.append(format_row(row))
 
         legend = "\nLegend: 🟢 Fresh | 🟡 Used | 🔴 Tired | 💀 Gassed"
-        if (self.team_abbrev.lower() == "wsh"):
-            legend += " | 💩 Bad"
         output.append(legend)
 
         if not self.bullpen and not self.starters:
