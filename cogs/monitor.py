@@ -8,7 +8,9 @@ Posts to ALERT_CHANNEL_ID automatically when:
      VIDEO_WAIT_MAX_CYCLES minutes with no video, e.g. alternate broadcasts that delay
      uploads). Multi-homer alerts list every HR that batter has hit so far that game.
   3. A walkoff play ends a game (all 30 teams); alert is posted immediately then edited
-     with the highlight video once MLB uploads it (up to VIDEO_WAIT_MAX_CYCLES minutes).
+     with the highlight video once MLB uploads it (up to WALKOFF_VIDEO_WAIT_MAX_CYCLES
+     minutes — walkoff clips are bundled with the final recap edit and take longer than
+     routine highlights).
   4. FAVORITE_TEAM's starting lineup, as soon as MLB publishes it (within
      LINEUP_CHECK_HOURS of first pitch), in the /mlb box batting format.
 
@@ -57,6 +59,8 @@ DELAY_STATE_FILE      = os.path.join(_STATE_DIR, "delay_state.json")
 LINEUP_STATE_FILE     = os.path.join(_STATE_DIR, "lineup_state.json")
 LINEUP_CHECK_HOURS    = 6                   # Start polling for the lineup this many hours before first pitch
 VIDEO_WAIT_MAX_CYCLES = 5                   # Poll cycles to wait for highlight video
+WALKOFF_VIDEO_WAIT_MAX_CYCLES = 15          # Walkoff clips are bundled with the final recap edit and
+                                             # routinely take longer than routine in-game highlights to publish
 NH_ALERT_DELAY        = 15                  # Seconds to delay NH alerts (stream spoiler protection)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2146,7 +2150,7 @@ class MonitorCog(commands.Cog):
                 self._walkoff_posted.add(game_pk)
                 self._save_walkoff_state()
                 del self._walkoff_pending[game_pk]
-            elif cycles >= VIDEO_WAIT_MAX_CYCLES:
+            elif cycles >= WALKOFF_VIDEO_WAIT_MAX_CYCLES:
                 self._walkoff_posted.add(game_pk)
                 self._save_walkoff_state()
                 del self._walkoff_pending[game_pk]

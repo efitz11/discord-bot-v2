@@ -15,6 +15,28 @@ from core.utils import parse_date, et_now
 from core.mlb_client import (PERCENTILE_DISPLAY_NAMES, BATTER_PERCENTILE_CATEGORIES,
                              PITCHER_PERCENTILE_CATEGORIES, player_headshot_url)
 
+# Common shorthand typed directly (not via autocomplete) for /mlb leaders and
+# /mlb team_leaders, e.g. "hr" -> "hitting|homeRuns". Without this, an
+# unrecognized stat key silently returns blank values from the API response.
+STAT_ABBREVIATIONS = {
+    "hr": "hitting|homeRuns", "avg": "hitting|battingAverage", "rbi": "hitting|runsBattedIn",
+    "obp": "hitting|onBasePercentage", "slg": "hitting|sluggingPercentage", "ops": "hitting|onBasePlusSlugging",
+    "sb": "hitting|stolenBases", "bb": "hitting|walks", "so": "hitting|strikeouts", "k": "hitting|strikeouts",
+    "2b": "hitting|doubles", "3b": "hitting|triples", "ab": "hitting|atBats", "tb": "hitting|totalBases",
+    "h": "hitting|hits", "r": "hitting|runs", "g": "hitting|gamesPlayed",
+    "w": "pitching|wins", "era": "pitching|earnedRunAverage", "whip": "pitching|walksAndHitsPerInningPitched",
+    "sv": "pitching|saves", "ip": "pitching|inningsPitched",
+}
+
+# Counting stats accumulate with playing time, so restricting the leaderboard
+# to the "qualified" pool (min PA/IP threshold) mostly just hides part-time
+# players who happen to lead in these — default them to the full player pool.
+COUNTING_STATS = {
+    "homeRuns", "hits", "runs", "runsBattedIn", "stolenBases", "walks", "strikeouts",
+    "wins", "saves", "doubles", "triples", "totalBases", "atBats", "gamesPlayed",
+    "inningsPitched",
+}
+
 class PlayerAbsView(discord.ui.View):
     def __init__(self, cog, player_id: str, date: str, milb: bool):
         super().__init__(timeout=600)
@@ -2435,6 +2457,7 @@ class MLBSlash(commands.Cog):
         lg_val = league.value if league else None
         pool_val = player_pool.value if player_pool else None
 
+        stat = STAT_ABBREVIATIONS.get(stat.lower(), stat)
         parts = stat.split("|")
         if len(parts) == 2:
             group_val = parts[0]
@@ -2443,7 +2466,10 @@ class MLBSlash(commands.Cog):
             default_pitching_stats = {"earnedRunAverage", "wins", "saves", "walksAndHitsPerInningPitched", "strikeoutsPer9Inn", "hitsPer9Inn", "walksPer9Inn", "homeRunsPer9", "strikeoutWalkRatio", "inningsPitched", "shutouts", "completeGames", "blownSaves", "holds", "balk", "wildPitch", "hitBatsman", "saveOpportunities", "runsScoredPer9"}
             group_val = stat_group.value if stat_group else ("pitching" if stat in default_pitching_stats else "hitting")
             stat_val = stat
-        
+
+        if pool_val is None and stat_val in COUNTING_STATS:
+            pool_val = "ALL"
+
         leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id, year=year, reverse=reverse)
 
 
@@ -2528,6 +2554,7 @@ class MLBSlash(commands.Cog):
         
         lg_val = league.value if league else None
 
+        stat = STAT_ABBREVIATIONS.get(stat.lower(), stat)
         parts = stat.split("|")
         if len(parts) == 2:
             group_val = parts[0]
