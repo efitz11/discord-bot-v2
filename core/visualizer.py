@@ -305,28 +305,28 @@ def generate_player_card_image(
     TEXT = (240, 240, 248)
     DIM = (200, 203, 220)
 
-    f_league  = _lib(True, S(13))
-    f_team    = _lib(True, S(16))
-    f_bio     = _lib(False, S(16))
-    f_ribbon  = _lib(True, S(15))
-    f_hval    = _qs(S(30))
-    f_hlbl    = _lib(True, S(12))
-    f_gval    = _qs(S(18))
-    f_glbl    = _lib(False, S(15))
-    f_footer  = _lib(False, S(10))
+    f_league  = _lib(True, S(15))
+    f_team    = _lib(True, S(19))
+    f_bio     = _lib(False, S(19))
+    f_ribbon  = _lib(True, S(18))
+    f_hval    = _qs(S(36))
+    f_hlbl    = _lib(True, S(14))
+    f_gval    = _qs(S(22))
+    f_glbl    = _lib(False, S(18))
+    f_footer  = _lib(False, S(11))
 
-    TOP_BAR   = S(40)
+    TOP_BAR   = S(44)
     HEAD      = S(160)
     HEAD_H    = HEAD + S(24)
-    NAME_H    = S(46)
-    BIO_H     = S(24)
+    NAME_H    = S(52)
+    BIO_H     = S(28)
     GAP       = S(14)
-    RIBBON_H  = S(32)
-    HEADLINE_H = S(104)
+    RIBBON_H  = S(38)
+    HEADLINE_H = S(116)
     FOOTER_H  = S(30)
 
     CELL_GAP = S(10)
-    TABLE_ROW_H = S(38)
+    TABLE_ROW_H = S(46)
     TABLE_COL_GAP = S(16)
 
     if multi_rows:
@@ -354,8 +354,9 @@ def generate_player_card_image(
     draw.text((PAD, y), league_label.upper(), font=f_league, fill=_readable(secondary, floor=160))
     badge_text = team_abbrev or "—"
     bw = draw.textlength(badge_text, font=f_team) + S(20)
-    draw.rounded_rectangle([W - PAD - bw, y - S(4), W - PAD, y - S(4) + S(26)], radius=S(13), fill=(0, 0, 0, 110), outline=ACCENT, width=S(1))
-    draw.text((W - PAD - bw / 2, y + S(9)), badge_text, font=f_team, fill=TEXT, anchor="mm")
+    badge_h = S(30)
+    draw.rounded_rectangle([W - PAD - bw, y - S(4), W - PAD, y - S(4) + badge_h], radius=badge_h // 2, fill=(0, 0, 0, 110), outline=ACCENT, width=S(1))
+    draw.text((W - PAD - bw / 2, y - S(4) + badge_h / 2), badge_text, font=f_team, fill=TEXT, anchor="mm")
     y += TOP_BAR
 
     # Headshot.
@@ -369,7 +370,7 @@ def generate_player_card_image(
     y += HEAD_H
 
     # Player name (auto-shrink to fit).
-    name_font = _fit_font(draw, player_name, _qs, W - 2 * PAD, S(34), S(18))
+    name_font = _fit_font(draw, player_name, _qs, W - 2 * PAD, S(38), S(20))
     draw.text((cx, y + NAME_H // 2), player_name, font=name_font, fill=TEXT, anchor="mm")
     y += NAME_H
 
