@@ -295,8 +295,8 @@ def generate_player_card_image(
     def S(v: float) -> int:
         return round(v * SS)
 
-    W = S(640)
-    PAD = S(24)
+    W = S(480)
+    PAD = S(20)
 
     primary, secondary = _team_colors(team_abbrev)
     ACCENT = _readable(secondary, floor=140)
@@ -316,7 +316,7 @@ def generate_player_card_image(
     f_footer  = _lib(False, S(10))
 
     TOP_BAR   = S(40)
-    HEAD      = S(208)
+    HEAD      = S(160)
     HEAD_H    = HEAD + S(24)
     NAME_H    = S(46)
     BIO_H     = S(24)
@@ -452,18 +452,26 @@ def generate_compare_stats_image(
     p1_headshot: Optional[bytes] = None, p2_headshot: Optional[bytes] = None,
 ) -> io.BytesIO:
     """Render a dark-mode side-by-side stat comparison table, highlighting whichever
-    player has the better value in each row."""
+    player has the better value in each row.
 
-    PAD     = 18
-    VAL_W   = 92
-    CTR_W   = 120
+    Drawn at 3x scale and downsampled with LANCZOS at the end for smooth headshot rings
+    and row corners, matching the /stats card renderer.
+    """
+    SS = 3
+
+    def S(v: float) -> int:
+        return round(v * SS)
+
+    PAD     = S(18)
+    VAL_W   = S(92)
+    CTR_W   = S(120)
     W       = 2 * PAD + 2 * VAL_W + CTR_W   # keeps the table centered — no leftover margin
 
-    TITLE_H = 46
-    HEAD    = 72
-    HEAD_H  = HEAD + 6
-    NAMES_H = 34
-    ROW_H   = 30
+    TITLE_H = S(46)
+    HEAD    = S(72)
+    HEAD_H  = HEAD + S(6)
+    NAMES_H = S(34)
+    ROW_H   = S(34)
 
     total_h = TITLE_H + HEAD_H + NAMES_H + len(rows) * ROW_H + PAD
 
@@ -471,7 +479,7 @@ def generate_compare_stats_image(
     ROW_ALT = (20, 23, 35)
     TEXT    = (224, 224, 235)
     DIM     = (110, 115, 140)
-    LABEL_C = (180, 185, 215)
+    LABEL_C = (185, 190, 218)
 
     p1_primary, p1_secondary = _team_colors(p1_team)
     p2_primary, p2_secondary = _team_colors(p2_team)
@@ -482,13 +490,12 @@ def generate_compare_stats_image(
     P1_HILITE = _readable(p1_primary, floor=90)
     P2_HILITE = _readable(p2_primary, floor=90)
 
-    f_title = _dv("DejaVuSans-Bold.ttf", 17)
-    f_bold  = _dv("DejaVuSans-Bold.ttf", 13)
-    f_reg   = _dv("DejaVuSans.ttf",      13)
-    f_val   = _dv("DejaVuSans-Bold.ttf", 14)
+    f_title = _qs(S(19))
+    f_reg   = _lib(False, S(15))
+    f_val   = _qs(S(17))
 
     img  = Image.new("RGB", (W, total_h), BG)
-    draw = ImageDraw.Draw(img)
+    draw = ImageDraw.Draw(img, "RGBA")
 
     xv1  = PAD                 # left edge of P1 value column
     xctr = xv1 + VAL_W         # left edge of center label column
@@ -505,18 +512,21 @@ def generate_compare_stats_image(
     y += TITLE_H
 
     if p1_headshot:
-        hs = _circle_headshot(p1_headshot, HEAD, p1_secondary)
+        hs = _circle_headshot(p1_headshot, HEAD, p1_secondary, gap=S(6), ring_width=S(3))
         if hs:
             img.paste(hs, (c1 - HEAD // 2, y), hs)
     if p2_headshot:
-        hs = _circle_headshot(p2_headshot, HEAD, p2_secondary)
+        hs = _circle_headshot(p2_headshot, HEAD, p2_secondary, gap=S(6), ring_width=S(3))
         if hs:
             img.paste(hs, (c2 - HEAD // 2, y), hs)
     draw.text((W // 2, y + HEAD_H // 2), "vs", font=f_reg, fill=DIM, anchor="mm")
     y += HEAD_H
 
-    draw.text((c1, y + NAMES_H // 2), p1_label, font=f_bold, fill=P1_NAME, anchor="mm")
-    draw.text((c2, y + NAMES_H // 2), p2_label, font=f_bold, fill=P2_NAME, anchor="mm")
+    max_name_w = W // 2 - PAD - S(10)
+    p1_font = _fit_font(draw, p1_label, lambda s: _lib(True, s), max_name_w, S(15), S(9))
+    p2_font = _fit_font(draw, p2_label, lambda s: _lib(True, s), max_name_w, S(15), S(9))
+    draw.text((c1, y + NAMES_H // 2), p1_label, font=p1_font, fill=P1_NAME, anchor="mm")
+    draw.text((c2, y + NAMES_H // 2), p2_label, font=p2_font, fill=P2_NAME, anchor="mm")
     y += NAMES_H
 
     def _num(v):
@@ -546,15 +556,16 @@ def generate_compare_stats_image(
         elif winner == 2:
             draw.rectangle([xb2, y, xend - 1, y + ROW_H - 1], fill=_blend(P2_HILITE, row_bg, 0.45))
 
-        draw.text((xctr - 8, y + ROW_H // 2), str(v1) if v1 is not None else "—",
+        draw.text((xctr - S(8), y + ROW_H // 2), str(v1) if v1 is not None else "—",
                   font=f_val, fill=TEXT, anchor="rm")
-        draw.text((xb2 + 8, y + ROW_H // 2), str(v2) if v2 is not None else "—",
+        draw.text((xb2 + S(8), y + ROW_H // 2), str(v2) if v2 is not None else "—",
                   font=f_val, fill=TEXT, anchor="lm")
         draw.text(((xctr + xb2) // 2, y + ROW_H // 2), label,
                   font=f_reg, fill=LABEL_C, anchor="mm")
 
         y += ROW_H
 
+    img = img.resize((W // SS, total_h // SS), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
