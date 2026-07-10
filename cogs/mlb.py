@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, _team_colors
+from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, generate_player_card_image, _team_colors
 import io
 import asyncio
 import dataclasses
@@ -208,6 +208,60 @@ class MLBSlash(commands.Cog):
         else:
             await interaction.followup.send(embed=embed)
 
+
+    async def _send_stat_cards(self, interaction: discord.Interaction, season_stats_list: list, league_label: str):
+        """Render one baseball-card image per stat block (hitting/pitching) and send them
+        together as a multi-embed followup."""
+        cards = [st for st in season_stats_list if st.stats]
+        if not cards:
+            await interaction.followup.send("Could not find stats to render as an image for that player.")
+            return
+
+        headshot_bytes = await self._fetch_bytes(cards[0].headshot_url)
+
+        files, embeds = [], []
+        for i, st in enumerate(cards):
+            bio_line = st.info_line.split("\n")[0]
+            level_label = None
+            if st.parent_org_abbrev:
+                level_label = f"{st.level_abbrev} - {st.parent_org_abbrev}" if st.level_abbrev else st.parent_org_abbrev
+            elif st.level_abbrev:
+                level_label = st.level_abbrev
+
+            headline, grid = st.card_headline_and_grid()
+            multi_rows = st.card_multi_rows()
+
+            buf = generate_player_card_image(
+                player_name=st.player_name,
+                team_abbrev=st.team_abbrev,
+                stat_type=st.stat_type,
+                years_label=st.years,
+                is_career=st.is_career,
+                bio_line=bio_line,
+                league_label=league_label,
+                level_label=level_label,
+                headline=headline,
+                grid=grid,
+                multi_rows=multi_rows,
+                headshot_bytes=headshot_bytes,
+            )
+            filename = f"card_{i}.png"
+            files.append(discord.File(buf, filename=filename))
+            embeds.append(discord.Embed(color=discord.Color.blue()).set_image(url=f"attachment://{filename}"))
+
+        await interaction.followup.send(files=files, embeds=embeds)
+
+    async def _fetch_bytes(self, url: str) -> Optional[bytes]:
+        if not url:
+            return None
+        try:
+            session = await self.bot.mlb_client.get_session()
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+        except Exception:
+            pass
+        return None
 
     @line.autocomplete('player')
     async def player_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -1254,11 +1308,12 @@ class MLBSlash(commands.Cog):
     @app_commands.describe(year="A specific year or range (e.g. 2020-2023). Blank for most recent.")
     @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
     @app_commands.describe(career="Get career totals instead of a single season")
+    @app_commands.describe(image="Show as a generated baseball-card style image instead of a text table")
     @app_commands.choices(stat_type=[
         app_commands.Choice(name="Hitting", value="hitting"),
         app_commands.Choice(name="Pitching", value="pitching")
     ])
-    async def stats(self, interaction: discord.Interaction, player: str, year: str = None, stat_type: app_commands.Choice[str] = None, career: bool = False):
+    async def stats(self, interaction: discord.Interaction, player: str, year: str = None, stat_type: app_commands.Choice[str] = None, career: bool = False, image: bool = False):
 
         await interaction.response.defer()
 
@@ -1270,8 +1325,12 @@ class MLBSlash(commands.Cog):
             await interaction.followup.send("Could not find stats for that player.")
             return
 
+        if image:
+            await self._send_stat_cards(interaction, season_stats_list, league_label="MLB")
+            return
+
         embed = discord.Embed(color=discord.Color.blue())
-        
+
         first_stats = season_stats_list[0]
         display_team = first_stats.team_abbrev
         if not first_stats.is_career and first_stats.stats:
@@ -1592,17 +1651,22 @@ class MLBSlash(commands.Cog):
     @app_commands.describe(year="A specific year (e.g. 2023). Leave blank for most recent.")
     @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
     @app_commands.describe(career="Get career totals instead of a single season")
+    @app_commands.describe(image="Show as a generated baseball-card style image instead of a text table")
     @app_commands.choices(stat_type=[
         app_commands.Choice(name="Hitting", value="hitting"),
         app_commands.Choice(name="Pitching", value="pitching")
     ])
-    async def milb_stats(self, interaction: discord.Interaction, player: str, year: str = None, stat_type: app_commands.Choice[str] = None, career: bool = False):
+    async def milb_stats(self, interaction: discord.Interaction, player: str, year: str = None, stat_type: app_commands.Choice[str] = None, career: bool = False, image: bool = False):
         await interaction.response.defer()
         s_type = stat_type.value if stat_type else None
         season_stats_list = await self.bot.mlb_client.get_player_season_stats(player, stat_type=s_type, year=year, career=career, milb=True)
 
         if not season_stats_list:
             await interaction.followup.send("Could not find stats for that minor league player.")
+            return
+
+        if image:
+            await self._send_stat_cards(interaction, season_stats_list, league_label="MiLB")
             return
 
         embed = discord.Embed(color=discord.Color.blue())

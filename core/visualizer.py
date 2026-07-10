@@ -79,22 +79,21 @@ def _readable(color: Tuple[int, int, int], floor: int = 110) -> Tuple[int, int, 
     return tuple(int(round(ch + (255 - ch) * t)) for ch in color)
 
 
-def _circle_headshot(img_bytes: bytes, size: int, ring: Tuple[int, int, int]) -> Optional[Image.Image]:
+def _circle_headshot(img_bytes: bytes, size: int, ring: Tuple[int, int, int], gap: int = 6, ring_width: int = 3) -> Optional[Image.Image]:
     """Crop a headshot to a circle with a team-colored ring sitting just outside it."""
     try:
         base = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
     except Exception:
         return None
-    gap = 6  # space between the photo edge and the ring
     inner = size - 2 * gap
     w, h = base.size
     s = min(w, h)
-    base = base.crop(((w - s) // 2, (h - s) // 2, (w - s) // 2 + s, (h - s) // 2 + s)).resize((inner, inner))
+    base = base.crop(((w - s) // 2, (h - s) // 2, (w - s) // 2 + s, (h - s) // 2 + s)).resize((inner, inner), Image.LANCZOS)
     mask = Image.new("L", (inner, inner), 0)
     ImageDraw.Draw(mask).ellipse([0, 0, inner - 1, inner - 1], fill=255)
     out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     out.paste(base, (gap, gap), mask)
-    ImageDraw.Draw(out).ellipse([1, 1, size - 2, size - 2], outline=ring, width=3)
+    ImageDraw.Draw(out).ellipse([1, 1, size - 2, size - 2], outline=ring, width=ring_width)
     return out
 
 
@@ -240,6 +239,211 @@ def _blend(fg: Tuple[int, int, int], bg: Tuple[int, int, int], t: float) -> Tupl
     return tuple(int(round(bg[i] + (fg[i] - bg[i]) * t)) for i in range(3))
 
 
+_LIB_DIR = "/usr/share/fonts/truetype/liberation2/"
+_QS_DIR = "/usr/share/fonts/truetype/quicksand/"
+
+
+def _lib(bold: bool, size: int) -> ImageFont.FreeTypeFont:
+    """Liberation Sans (a clean Arial-alike) — used for anything that needs to stay legible small."""
+    try:
+        return ImageFont.truetype(_LIB_DIR + ("LiberationSans-Bold.ttf" if bold else "LiberationSans-Regular.ttf"), size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _qs(size: int) -> ImageFont.FreeTypeFont:
+    """Quicksand Bold — a rounder, more distinctive display face for names/headline numbers."""
+    try:
+        return ImageFont.truetype(_QS_DIR + "Quicksand-Bold.ttf", size)
+    except Exception:
+        return _lib(True, size)
+
+
+def _fit_font(draw: "ImageDraw.ImageDraw", text: str, loader, max_w: int, start_size: int, min_size: int) -> "ImageFont.FreeTypeFont":
+    """Shrink a font (via `loader(size)`) until `text` fits within max_w."""
+    size = start_size
+    while size > min_size:
+        font = loader(size)
+        if draw.textlength(text, font=font) <= max_w:
+            return font
+        size -= 2
+    return loader(min_size)
+
+
+def generate_player_card_image(
+    player_name: str,
+    team_abbrev: str,
+    stat_type: str,             # 'hitting' or 'pitching'
+    years_label: str,
+    is_career: bool,
+    bio_line: str,
+    league_label: str,          # "MLB" or "MiLB"
+    level_label: Optional[str], # e.g. "AAA" for a MiLB player, else None
+    headline: List[Tuple[str, str]],
+    grid: List[Tuple[str, str]],
+    multi_rows: Optional[List[Tuple[str, ...]]] = None,  # (season, team, v1, v2, v3, v4) per row when >1 season
+    headshot_bytes: Optional[bytes] = None,
+) -> io.BytesIO:
+    """Render a portrait, digital-trading-card-style stat card for a single player.
+
+    Drawn at 3x scale and downsampled with LANCZOS at the end — PIL doesn't anti-alias
+    ellipses/rounded rects on its own, so this is what keeps the ring and card corners smooth
+    instead of jagged.
+    """
+    SS = 3  # supersampling factor
+
+    def S(v: float) -> int:
+        return round(v * SS)
+
+    W = S(480)
+    PAD = S(20)
+
+    primary, secondary = _team_colors(team_abbrev)
+    ACCENT = _readable(secondary, floor=140)
+    BG_TOP = primary
+    BG_BOTTOM = (10, 10, 16)
+    TEXT = (240, 240, 248)
+    DIM = (200, 203, 220)
+
+    f_league  = _lib(True, S(13))
+    f_team    = _lib(True, S(16))
+    f_bio     = _lib(False, S(16))
+    f_ribbon  = _lib(True, S(15))
+    f_hval    = _qs(S(30))
+    f_hlbl    = _lib(True, S(12))
+    f_gval    = _qs(S(18))
+    f_glbl    = _lib(False, S(15))
+    f_footer  = _lib(False, S(10))
+
+    TOP_BAR   = S(40)
+    HEAD      = S(160)
+    HEAD_H    = HEAD + S(24)
+    NAME_H    = S(46)
+    BIO_H     = S(24)
+    GAP       = S(14)
+    RIBBON_H  = S(32)
+    HEADLINE_H = S(104)
+    FOOTER_H  = S(30)
+
+    CELL_GAP = S(10)
+    TABLE_ROW_H = S(38)
+    TABLE_COL_GAP = S(16)
+
+    if multi_rows:
+        ROW_H = S(32)
+        stats_area_h = ROW_H * (len(multi_rows) + 1)
+    else:
+        rows_per_col = -(-len(grid) // 2)  # two-column label|value table, split evenly
+        stats_area_h = rows_per_col * TABLE_ROW_H
+
+    total_h = (PAD + TOP_BAR + HEAD_H + NAME_H + BIO_H + GAP + RIBBON_H + GAP +
+               (0 if multi_rows else HEADLINE_H + GAP) + stats_area_h + GAP + FOOTER_H + PAD)
+
+    img = Image.new("RGB", (W, total_h), BG_BOTTOM)
+    draw = ImageDraw.Draw(img, "RGBA")
+
+    # Vertical gradient background.
+    fade_end = min(total_h, HEAD_H + TOP_BAR + PAD + S(220))
+    for row in range(total_h):
+        t = min(1.0, row / max(1, fade_end))
+        draw.line([(0, row), (W, row)], fill=_blend(BG_TOP, BG_BOTTOM, 1 - t))
+
+    y = PAD
+
+    # Top bar: league label left, team badge right.
+    draw.text((PAD, y), league_label.upper(), font=f_league, fill=_readable(secondary, floor=160))
+    badge_text = team_abbrev or "—"
+    bw = draw.textlength(badge_text, font=f_team) + S(20)
+    draw.rounded_rectangle([W - PAD - bw, y - S(4), W - PAD, y - S(4) + S(26)], radius=S(13), fill=(0, 0, 0, 110), outline=ACCENT, width=S(1))
+    draw.text((W - PAD - bw / 2, y + S(9)), badge_text, font=f_team, fill=TEXT, anchor="mm")
+    y += TOP_BAR
+
+    # Headshot.
+    cx = W // 2
+    if headshot_bytes:
+        hs = _circle_headshot(headshot_bytes, HEAD, ACCENT, gap=S(6), ring_width=S(3))
+        if hs:
+            img.paste(hs, (cx - HEAD // 2, y), hs)
+    else:
+        draw.ellipse([cx - HEAD // 2, y, cx + HEAD // 2, y + HEAD], outline=ACCENT, width=S(3))
+    y += HEAD_H
+
+    # Player name (auto-shrink to fit).
+    name_font = _fit_font(draw, player_name, _qs, W - 2 * PAD, S(34), S(18))
+    draw.text((cx, y + NAME_H // 2), player_name, font=name_font, fill=TEXT, anchor="mm")
+    y += NAME_H
+
+    draw.text((cx, y + BIO_H // 2), bio_line, font=f_bio, fill=DIM, anchor="mm")
+    y += BIO_H + GAP
+
+    # Ribbon: season / stat type / level.
+    ribbon_label = f"{'CAREER' if is_career else years_label} • {stat_type.upper()}"
+    if level_label:
+        ribbon_label += f" • {level_label}"
+    draw.rounded_rectangle([PAD, y, W - PAD, y + RIBBON_H], radius=S(8), fill=_blend(ACCENT, (0, 0, 0), 0.35))
+    draw.text((cx, y + RIBBON_H // 2), ribbon_label, font=f_ribbon, fill=(15, 15, 20), anchor="mm")
+    y += RIBBON_H + GAP
+
+    if not multi_rows:
+        # Headline stat boxes.
+        n = len(headline) or 1
+        box_w = (W - 2 * PAD - (n - 1) * CELL_GAP) // n
+        bx = PAD
+        for label, value in headline:
+            draw.rounded_rectangle([bx, y, bx + box_w, y + HEADLINE_H], radius=S(10), fill=(255, 255, 255, 18), outline=ACCENT, width=S(1))
+            draw.text((bx + box_w / 2, y + HEADLINE_H * 0.40), str(value), font=f_hval, fill=TEXT, anchor="mm")
+            draw.text((bx + box_w / 2, y + HEADLINE_H * 0.78), label, font=f_hlbl, fill=ACCENT, anchor="mm")
+            bx += box_w + CELL_GAP
+        y += HEADLINE_H + GAP
+
+        # Detail table: two columns of label/value rows, alternating row shading. The value
+        # sits right after the widest label in its column (not stretched to the far edge) so
+        # each row reads as one tight unit instead of two words with a wide gap between them.
+        col_w = (W - 2 * PAD - TABLE_COL_GAP) // 2
+        left, right = grid[:rows_per_col], grid[rows_per_col:]
+        table_top = y
+        for col_idx, col_data in enumerate((left, right)):
+            col_x = PAD + col_idx * (col_w + TABLE_COL_GAP)
+            max_label_w = max((draw.textlength(label, font=f_glbl) for label, _ in col_data), default=0)
+            value_x = col_x + S(12) + max_label_w + S(18)
+            ry = table_top
+            for i, (label, value) in enumerate(col_data):
+                if i % 2 == 0:
+                    draw.rectangle([col_x, ry, col_x + col_w, ry + TABLE_ROW_H], fill=(255, 255, 255, 10))
+                draw.text((col_x + S(12), ry + TABLE_ROW_H // 2), label, font=f_glbl, fill=DIM, anchor="lm")
+                draw.text((value_x, ry + TABLE_ROW_H // 2), str(value), font=f_gval, fill=TEXT, anchor="lm")
+                ry += TABLE_ROW_H
+        y = table_top + stats_area_h
+    else:
+        headers = ("YEAR", "TM") + tuple(h[0] for h in headline)
+        n_cols = len(headers)
+        col_w = (W - 2 * PAD) // n_cols
+        rx = PAD
+        for h in headers:
+            draw.text((rx + col_w / 2, y + ROW_H // 2), h, font=f_glbl, fill=ACCENT, anchor="mm")
+            rx += col_w
+        y += ROW_H
+        for i, row in enumerate(multi_rows):
+            if i % 2 == 0:
+                draw.rectangle([PAD, y, W - PAD, y + ROW_H], fill=(255, 255, 255, 10))
+            rx = PAD
+            for val in row:
+                draw.text((rx + col_w / 2, y + ROW_H // 2), str(val), font=f_gval, fill=TEXT, anchor="mm")
+                rx += col_w
+            y += ROW_H
+
+    # Footer.
+    y = total_h - PAD - FOOTER_H // 2
+    draw.line([(PAD, y - FOOTER_H // 2 + S(2)), (W - PAD, y - FOOTER_H // 2 + S(2))], fill=(255, 255, 255, 30))
+    draw.text((cx, y), "MLB Stats API", font=f_footer, fill=DIM, anchor="mm")
+
+    img = img.resize((W // SS, total_h // SS), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
 def generate_compare_stats_image(
     p1_label: str, p2_label: str,
     year_str: str, stat_type: str,
@@ -248,18 +452,26 @@ def generate_compare_stats_image(
     p1_headshot: Optional[bytes] = None, p2_headshot: Optional[bytes] = None,
 ) -> io.BytesIO:
     """Render a dark-mode side-by-side stat comparison table, highlighting whichever
-    player has the better value in each row."""
+    player has the better value in each row.
 
-    PAD     = 18
-    VAL_W   = 92
-    CTR_W   = 120
+    Drawn at 3x scale and downsampled with LANCZOS at the end for smooth headshot rings
+    and row corners, matching the /stats card renderer.
+    """
+    SS = 3
+
+    def S(v: float) -> int:
+        return round(v * SS)
+
+    PAD     = S(18)
+    VAL_W   = S(92)
+    CTR_W   = S(120)
     W       = 2 * PAD + 2 * VAL_W + CTR_W   # keeps the table centered — no leftover margin
 
-    TITLE_H = 46
-    HEAD    = 72
-    HEAD_H  = HEAD + 6
-    NAMES_H = 34
-    ROW_H   = 30
+    TITLE_H = S(46)
+    HEAD    = S(72)
+    HEAD_H  = HEAD + S(6)
+    NAMES_H = S(34)
+    ROW_H   = S(34)
 
     total_h = TITLE_H + HEAD_H + NAMES_H + len(rows) * ROW_H + PAD
 
@@ -267,7 +479,7 @@ def generate_compare_stats_image(
     ROW_ALT = (20, 23, 35)
     TEXT    = (224, 224, 235)
     DIM     = (110, 115, 140)
-    LABEL_C = (180, 185, 215)
+    LABEL_C = (185, 190, 218)
 
     p1_primary, p1_secondary = _team_colors(p1_team)
     p2_primary, p2_secondary = _team_colors(p2_team)
@@ -278,13 +490,12 @@ def generate_compare_stats_image(
     P1_HILITE = _readable(p1_primary, floor=90)
     P2_HILITE = _readable(p2_primary, floor=90)
 
-    f_title = _dv("DejaVuSans-Bold.ttf", 17)
-    f_bold  = _dv("DejaVuSans-Bold.ttf", 13)
-    f_reg   = _dv("DejaVuSans.ttf",      13)
-    f_val   = _dv("DejaVuSans-Bold.ttf", 14)
+    f_title = _qs(S(19))
+    f_reg   = _lib(False, S(15))
+    f_val   = _qs(S(17))
 
     img  = Image.new("RGB", (W, total_h), BG)
-    draw = ImageDraw.Draw(img)
+    draw = ImageDraw.Draw(img, "RGBA")
 
     xv1  = PAD                 # left edge of P1 value column
     xctr = xv1 + VAL_W         # left edge of center label column
@@ -301,18 +512,21 @@ def generate_compare_stats_image(
     y += TITLE_H
 
     if p1_headshot:
-        hs = _circle_headshot(p1_headshot, HEAD, p1_secondary)
+        hs = _circle_headshot(p1_headshot, HEAD, p1_secondary, gap=S(6), ring_width=S(3))
         if hs:
             img.paste(hs, (c1 - HEAD // 2, y), hs)
     if p2_headshot:
-        hs = _circle_headshot(p2_headshot, HEAD, p2_secondary)
+        hs = _circle_headshot(p2_headshot, HEAD, p2_secondary, gap=S(6), ring_width=S(3))
         if hs:
             img.paste(hs, (c2 - HEAD // 2, y), hs)
     draw.text((W // 2, y + HEAD_H // 2), "vs", font=f_reg, fill=DIM, anchor="mm")
     y += HEAD_H
 
-    draw.text((c1, y + NAMES_H // 2), p1_label, font=f_bold, fill=P1_NAME, anchor="mm")
-    draw.text((c2, y + NAMES_H // 2), p2_label, font=f_bold, fill=P2_NAME, anchor="mm")
+    max_name_w = W // 2 - PAD - S(10)
+    p1_font = _fit_font(draw, p1_label, lambda s: _lib(True, s), max_name_w, S(15), S(9))
+    p2_font = _fit_font(draw, p2_label, lambda s: _lib(True, s), max_name_w, S(15), S(9))
+    draw.text((c1, y + NAMES_H // 2), p1_label, font=p1_font, fill=P1_NAME, anchor="mm")
+    draw.text((c2, y + NAMES_H // 2), p2_label, font=p2_font, fill=P2_NAME, anchor="mm")
     y += NAMES_H
 
     def _num(v):
@@ -342,15 +556,16 @@ def generate_compare_stats_image(
         elif winner == 2:
             draw.rectangle([xb2, y, xend - 1, y + ROW_H - 1], fill=_blend(P2_HILITE, row_bg, 0.45))
 
-        draw.text((xctr - 8, y + ROW_H // 2), str(v1) if v1 is not None else "—",
+        draw.text((xctr - S(8), y + ROW_H // 2), str(v1) if v1 is not None else "—",
                   font=f_val, fill=TEXT, anchor="rm")
-        draw.text((xb2 + 8, y + ROW_H // 2), str(v2) if v2 is not None else "—",
+        draw.text((xb2 + S(8), y + ROW_H // 2), str(v2) if v2 is not None else "—",
                   font=f_val, fill=TEXT, anchor="lm")
         draw.text(((xctr + xb2) // 2, y + ROW_H // 2), label,
                   font=f_reg, fill=LABEL_C, anchor="mm")
 
         y += ROW_H
 
+    img = img.resize((W // SS, total_h // SS), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

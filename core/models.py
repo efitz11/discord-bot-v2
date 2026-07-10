@@ -6,7 +6,7 @@ compatibility.
 """
 import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime
 
 from core.utils import utc_to_et
@@ -986,6 +986,59 @@ class PlayerSeasonStats:
             blocks.append("\n".join([line.rstrip() for line in lines]).strip('\n'))
 
         return "\n\n".join(blocks)
+
+    def card_headline_and_grid(self) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+        """Headline (big-number) and detail-grid (label, value) pairs for the most recent
+        stat row, used by the /stats `image` baseball-card renderer."""
+        if not self.stats:
+            return [], []
+        s = self.stats[-1]
+
+        def fmt(key):
+            v = s.get(key)
+            return str(v) if v not in (None, "") else "—"
+
+        if self.stat_type == "hitting":
+            headline = [('AVG', fmt('avg')), ('HR', fmt('homeRuns')), ('RBI', fmt('rbi')), ('OPS', fmt('ops'))]
+            grid_keys = [
+                ('G', 'gamesPlayed'), ('PA', 'plateAppearances'), ('AB', 'atBats'), ('R', 'runs'),
+                ('H', 'hits'), ('2B', 'doubles'), ('3B', 'triples'), ('BB', 'baseOnBalls'),
+                ('SO', 'strikeOuts'), ('SB', 'stolenBases'), ('CS', 'caughtStealing'),
+                ('IBB', 'intentionalWalks'), ('HBP', 'hitByPitch'), ('OBP', 'obp'), ('SLG', 'slg'),
+            ]
+        else:
+            headline = [('W-L', f"{s.get('wins', '—')}-{s.get('losses', '—')}"), ('ERA', fmt('era')),
+                        ('SO', fmt('strikeOuts')), ('WHIP', fmt('whip'))]
+            grid_keys = [
+                ('G', 'gamesPlayed'), ('GS', 'gamesStarted'), ('CG', 'completeGames'), ('SHO', 'shutouts'),
+                ('SVO', 'saveOpportunities'), ('SV', 'saves'), ('HLD', 'holds'), ('IP', 'inningsPitched'),
+                ('H', 'hits'), ('R', 'runs'), ('ER', 'earnedRuns'), ('HR', 'homeRuns'), ('BB', 'baseOnBalls'),
+                ('K/9', 'strikeoutsPer9Inn'), ('BB/9', 'walksPer9Inn'), ('K/BB', 'strikeoutWalkRatio'), ('AVG', 'avg'),
+            ]
+
+        grid = [(label, fmt(key)) for label, key in grid_keys]
+        return headline, grid
+
+    def card_multi_rows(self) -> Optional[List[Tuple[str, ...]]]:
+        """One row per season for the four headline stats, used when the card covers more
+        than one season (e.g. a year range). Returns None for a single-season card."""
+        if len(self.stats) <= 1:
+            return None
+
+        headline_keys = ('avg', 'homeRuns', 'rbi', 'ops') if self.stat_type == "hitting" else None
+
+        def fmt(row, key):
+            v = row.get(key)
+            return str(v) if v not in (None, "") else "—"
+
+        rows = []
+        for row in self.stats:
+            if self.stat_type == "hitting":
+                vals = tuple(fmt(row, k) for k in headline_keys)
+            else:
+                vals = (f"{row.get('wins', '—')}-{row.get('losses', '—')}", fmt(row, 'era'), fmt(row, 'strikeOuts'), fmt(row, 'whip'))
+            rows.append((str(row.get('season', '')), str(row.get('team', '')), *vals))
+        return rows
 
 # (stat key, display label, direction): direction is 1 if a higher value is
 # better, -1 if lower is better, 0 if the stat isn't a head-to-head comparison
