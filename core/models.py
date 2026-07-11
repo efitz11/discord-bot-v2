@@ -1458,11 +1458,11 @@ class Leader:
 
     def format(self, max_name_len=18, is_team=False) -> str:
         if is_team:
-            return f"{self.rank:<2} {self.name:<{max_name_len + 8}} {self.value}"
+            return f"{self.name:<{max_name_len + 8}} {self.value}"
         extra = self.innings_pitched if self.stat_group == "pitching" else self.plate_appearances
-        return f"{self.rank:<2} {self.team_abbrev:<4} {self.name:<{max_name_len}} {self.games_played:>3} {extra:>5} {self.value}"
+        return f"{self.team_abbrev:<4} {self.name:<{max_name_len}} {self.games_played:>3} {extra:>5} {self.value}"
 
     @staticmethod
     def header(max_name_len=18, stat_group="hitting", stat_label="STAT") -> str:
         extra_label = "IP" if stat_group == "pitching" else "PA"
-        return f"{'#':<2} {'TM':<4} {'NAME':<{max_name_len}} {'GP':>3} {extra_label:>5} {stat_label}"
+        return f"{'TM':<4} {'NAME':<{max_name_len}} {'GP':>3} {extra_label:>5} {stat_label}"
