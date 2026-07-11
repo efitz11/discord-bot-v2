@@ -609,10 +609,13 @@ class MLBClient:
             batting = player_stats.get('batting')
             pitching = player_stats.get('pitching')
             
-            # Pitchers usually have empty hitting dicts even in the DH era, so we filter them out
-            if batting and batting.get('atBats', 0) == 0 and batting.get('plateAppearances', 0) == 0:
+            # Pitchers usually have empty hitting dicts even in the DH era (and vice versa —
+            # the boxscore includes an empty {} for the group a player didn't take part in,
+            # not a missing key), so we null both out rather than leaving an empty dict, which
+            # would otherwise look "present" to `is not None` checks downstream.
+            if not batting or (batting.get('atBats', 0) == 0 and batting.get('plateAppearances', 0) == 0):
                 batting = None
-            if pitching and pitching.get('inningsPitched', '0.0') == '0.0' and pitching.get('battersFaced', 0) == 0:
+            if not pitching or (pitching.get('inningsPitched', '0.0') == '0.0' and pitching.get('battersFaced', 0) == 0):
                 pitching = None
                 
             if not batting and not pitching:
