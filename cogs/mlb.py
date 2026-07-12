@@ -2503,22 +2503,28 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="Catching", value="catching")
     ])
     @app_commands.describe(team="Filter by a specific team (e.g. wsh, dodgers)")
+    @app_commands.describe(split="Optional situational split (e.g. vs Left, Home, RISP)")
     async def leaders(
-        self, 
-        interaction: discord.Interaction, 
-        stat: str, 
+        self,
+        interaction: discord.Interaction,
+        stat: str,
         stat_group: app_commands.Choice[str] = None,
-        league: app_commands.Choice[str] = None, 
+        league: app_commands.Choice[str] = None,
         year: str = None,
-        position: str = None, 
+        position: str = None,
         player_pool: app_commands.Choice[str] = None,
         team: str = None,
-        reverse: bool = False
+        reverse: bool = False,
+        split: str = None,
 
     ):
 
         await interaction.response.defer()
-        
+
+        if split and split not in self._LEADER_SPLIT_NAMES:
+            await interaction.followup.send("Unknown split — pick one from the autocomplete suggestions.")
+            return
+
         team_id = None
         team_display = None
         if team:
@@ -2544,7 +2550,7 @@ class MLBSlash(commands.Cog):
         if pool_val is None and stat_val in COUNTING_STATS:
             pool_val = "ALL"
 
-        leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id, year=year, reverse=reverse)
+        leaders_list = await self.bot.mlb_client.get_leaders(stat=stat_val, stat_group=group_val, league=lg_val, position=position, player_pool=pool_val, team_id=team_id, year=year, reverse=reverse, split=split)
 
 
         if not leaders_list:
@@ -2564,6 +2570,7 @@ class MLBSlash(commands.Cog):
         if pool_val == "ROOKIES": title_parts.append("Rookie")
         if lg_val and lg_val != "all": title_parts.append(lg_val.upper())
         if position: title_parts.append(position.upper())
+        if split: title_parts.append(self._LEADER_SPLIT_NAMES.get(split, split))
         
         display_stat = stat_val.capitalize()
         stats_map_display = {
@@ -2602,6 +2609,23 @@ class MLBSlash(commands.Cog):
     @leaders.autocomplete('team')
     async def leaders_team_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
+
+    # Single (non-grouped) situational splits only — a leaderboard sorts on one
+    # split at a time, unlike /mlb splits which can show grouped pairs per player.
+    _LEADER_SPLIT_OPTIONS = [
+        (v, n) for v, n in _SPLIT_OPTIONS if not v.startswith("grp_") and not v.startswith("all_")
+    ]
+    _LEADER_SPLIT_NAMES = {v: n for v, n in _LEADER_SPLIT_OPTIONS}
+
+    @leaders.autocomplete('split')
+    async def leaders_split_autocomplete(self, interaction: discord.Interaction, current: str):
+        cur = current.lower()
+        matches = [
+            app_commands.Choice(name=name, value=value)
+            for value, name in self._LEADER_SPLIT_OPTIONS
+            if cur in name.lower() or cur in value.lower()
+        ]
+        return matches[:25]
 
 
     @mlb.command(name="team_leaders", description="View MLB team stat leaderboards")
