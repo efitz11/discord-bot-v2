@@ -2452,8 +2452,10 @@ class MLBSlash(commands.Cog):
             "Batting Average Against (BAA)": "pitching|battingAverage",
             "RBI": "hitting|runsBattedIn",
             "On Base Percentage (OBP)": "hitting|onBasePercentage",
+            "OBP Against (Pitching)": "pitching|onBasePercentage",
             "Slugging Percentage (SLG)": "hitting|sluggingPercentage",
             "OPS": "hitting|onBasePlusSlugging",
+            "OPS Against (Pitching)": "pitching|onBasePlusSlugging",
             "Hits (Hitting - H)": "hitting|hits",
             "Hits Allowed (Pitching - H)": "pitching|hits",
             "Runs (Hitting - R)": "hitting|runs",
@@ -2597,11 +2599,13 @@ class MLBSlash(commands.Cog):
                 display_stat = readable
                 break
 
-        if display_stat in ["Strikeouts", "Walks", "Home Runs", "Hits", "Runs", "Games Played", "Doubles", "Triples", "Batting Average"]:
+        if display_stat in ["Strikeouts", "Walks", "Home Runs", "Hits", "Runs", "Games Played", "Doubles", "Triples", "Batting Average", "OBP", "OPS"]:
             if group_val == 'pitching' and display_stat in ["Home Runs", "Hits", "Runs", "Doubles", "Triples"]:
                 display_stat = f"{display_stat} Allowed"
             elif group_val == 'pitching' and display_stat == "Batting Average":
                 display_stat = "Batting Average Against (BAA)"
+            elif group_val == 'pitching' and display_stat in ["OBP", "OPS"]:
+                display_stat = f"{display_stat} Against"
             else:
                 display_stat = f"{display_stat} ({group_val.capitalize()})"
                 
@@ -2714,11 +2718,13 @@ class MLBSlash(commands.Cog):
                 display_stat = readable
                 break
                 
-        if display_stat in ["Strikeouts", "Walks", "Home Runs", "Hits", "Runs", "Games Played", "Doubles", "Triples", "Batting Average"]:
+        if display_stat in ["Strikeouts", "Walks", "Home Runs", "Hits", "Runs", "Games Played", "Doubles", "Triples", "Batting Average", "OBP", "OPS"]:
             if group_val == 'pitching' and display_stat in ["Home Runs", "Hits", "Runs", "Doubles", "Triples"]:
                 display_stat = f"{display_stat} Allowed"
             elif group_val == 'pitching' and display_stat == "Batting Average":
                 display_stat = "Batting Average Against (BAA)"
+            elif group_val == 'pitching' and display_stat in ["OBP", "OPS"]:
+                display_stat = f"{display_stat} Against"
             else:
                 display_stat = f"{display_stat} ({group_val.capitalize()})"
                 
