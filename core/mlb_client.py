@@ -1211,6 +1211,8 @@ class MLBClient:
             "all_score":    [("sah", "Ahead"), ("sti", "Tied"), ("sbh", "Behind")],
             "all_order":    [("b1", "1st"), ("b2", "2nd"), ("b3", "3rd"), ("b4", "4th"), ("b5", "5th"),
                              ("b6", "6th"), ("b7", "7th"), ("b8", "8th"), ("b9", "9th")],
+            "all_innings":  [("i01", "1st"), ("i02", "2nd"), ("i03", "3rd"), ("i04", "4th"), ("i05", "5th"),
+                             ("i06", "6th"), ("i07", "7th"), ("i08", "8th"), ("i09", "9th"), ("ix", "Extra")],
         }
         all_months     = sit_code == "all_months"
         all_positions  = sit_code == "all_positions"
