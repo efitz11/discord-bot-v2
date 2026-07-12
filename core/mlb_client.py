@@ -175,15 +175,27 @@ class MLBClient:
     async def get_team_id(self, team_query: str) -> Optional[int]:
         if not team_query: return None
         query = resolve_team_alias(team_query)
-        
+
         session = await self.get_session()
         async with session.get(f"{self.BASE_URL}/teams?sportId=1") as resp:
             data = await resp.json()
             for team in data.get('teams', []):
-                if (query == team.get('abbreviation', '').lower() or 
-                    query in team.get('name', '').lower() or 
+                if (query == team.get('abbreviation', '').lower() or
+                    query in team.get('name', '').lower() or
                     query in team.get('teamName', '').lower()):
                     return team['id']
+
+        # Fall back to exhibition-only rosters (Futures Game, All-Star Game), which don't
+        # appear in the regular /teams list since they only exist for the current season.
+        season = et_now().year
+        for sport_id in ("1", "21"):
+            async with session.get(f"{self.BASE_URL}/teams?sportId={sport_id}&season={season}&allStarStatuses=Y") as resp:
+                data = await resp.json() if resp.status == 200 else {}
+                for team in data.get('teams', []):
+                    if (query == team.get('abbreviation', '').lower() or
+                        query in team.get('name', '').lower() or
+                        query in team.get('teamName', '').lower()):
+                        return team['id']
         return None
 
     async def get_team_schedule(self, team_query: str, num_games: int = 3, past: bool = False) -> List[Game]:
@@ -2570,19 +2582,34 @@ class MLBClient:
     async def get_todays_games(self, team_query: str = None, date: str = None) -> List[Game]:
         session = await self.get_session()
         # Request all the expanded data your old bot was using
-        url = f"{self.BASE_URL}/schedule?sportId=1&hydrate=team,venue(location),linescore(matchup,runners),previousPlay,person,stats,lineups,probablePitcher,decisions,flags"
+        hydrate = "hydrate=team,venue(location),linescore(matchup,runners),previousPlay,person,stats,lineups,probablePitcher,decisions,flags"
+        url = f"{self.BASE_URL}/schedule?sportId=1&{hydrate}"
         if date:
             url += f"&date={date}"
 
-        async with session.get(url) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            
-        if not data.get('dates'):
+        # Futures Game / All-Star Game are exhibitions (gameType=A) that live under a mix of
+        # sportId 1 and 21 depending on the game; filtering by gameType=A pulls in just these
+        # without flooding the results with the full MiLB slate that sportId=21 otherwise carries.
+        exhibition_url = f"{self.BASE_URL}/schedule?sportId=1,21&gameType=A&{hydrate}"
+        if date:
+            exhibition_url += f"&date={date}"
+
+        async def fetch_json(u):
+            async with session.get(u) as resp:
+                return await resp.json() if resp.status == 200 else {}
+
+        data, exhibition_data = await asyncio.gather(fetch_json(url), fetch_json(exhibition_url))
+
+        all_game_data = list(data['dates'][0]['games']) if data.get('dates') else []
+        if exhibition_data.get('dates'):
+            seen_pks = {g['gamePk'] for g in all_game_data}
+            all_game_data.extend(g for g in exhibition_data['dates'][0]['games'] if g['gamePk'] not in seen_pks)
+
+        if not all_game_data:
             return []
-            
+
         games = []
-        for game_data in data['dates'][0]['games']:
+        for game_data in all_game_data:
             game = Game.from_api_json(game_data)
             
             # Filter by team if a search query was provided
