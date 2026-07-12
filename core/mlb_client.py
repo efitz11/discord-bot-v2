@@ -1220,6 +1220,7 @@ class MLBClient:
             "grp_daynight": [("d", "Day"),    ("n", "Night")],
             "grp_allstar":  [("preas", "PreAS"), ("posas", "PostAS")],
             "grp_count":    [("ac", "Ahead"), ("bc", "Behind")],
+            "grp_role":     [("sp", "Start"), ("rp", "Relief")],
             "all_baserunners": [("r0", "Empty"), ("ron", "On"), ("risp", "RISP"), ("r123", "Loaded")],
             "all_score":    [("sah", "Ahead"), ("sti", "Tied"), ("sbh", "Behind")],
             "all_order":    [("b1", "1st"), ("b2", "2nd"), ("b3", "3rd"), ("b4", "4th"), ("b5", "5th"),
@@ -2131,7 +2132,7 @@ class MLBClient:
         return leaders
 
 
-    async def get_team_leaders(self, stat: str, stat_group: str, league: str = None, year: str = None, reverse: bool = False, split: str = None) -> List["Leader"]:
+    async def get_team_leaders(self, stat: str, stat_group: str, league: str = None, year: str = None, reverse: bool = False, split: str = None, position: str = None) -> List["Leader"]:
 
         session = await self.get_session()
         
@@ -2161,6 +2162,11 @@ class MLBClient:
         url = f"{self.BASE_URL}/teams/stats?season={season}&sportId=1&group={stat_group}&stats={stats_type}"
         if split:
             url += f"&sitCodes={split}"
+        if position:
+            if position.upper() == "OF":
+                url += "&position=LF&position=CF&position=RF&position=OF"
+            else:
+                url += f"&position={position.upper()}"
 
         async with session.get(url) as resp:
             data = await resp.json()

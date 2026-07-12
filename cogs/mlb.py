@@ -1403,6 +1403,9 @@ class MLBSlash(commands.Cog):
         ("grp_count", "Ahead / Behind in Count (grouped)"),
         ("ac", "Ahead in Count"),
         ("bc", "Behind in Count"),
+        ("grp_role", "As Starter / As Reliever (grouped)"),
+        ("sp", "As Starter"),
+        ("rp", "As Reliever"),
         ("all_baserunners", "Baserunners (Empty/On/RISP/Loaded)"),
         ("risp", "RISP"),
         ("risp2", "RISP w/ 2 Outs"),
@@ -2501,7 +2504,7 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="AL", value="al"),
         app_commands.Choice(name="NL", value="nl")
     ])
-    @app_commands.describe(position="Position filter (e.g. C, 1B, 2B, SS, 3B, OF, P, RP)")
+    @app_commands.describe(position="Position filter (e.g. C, 1B, 2B, SS, 3B, OF)")
     @app_commands.describe(player_pool="Player pool filter (Qualified, Rookies, All)")
     @app_commands.choices(player_pool=[
         app_commands.Choice(name="Qualified", value="QUALIFIED"),
@@ -2625,6 +2628,25 @@ class MLBSlash(commands.Cog):
     async def leaders_team_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
 
+    _POSITION_OPTIONS = [
+        ("C", "Catcher"), ("1B", "First Base"), ("2B", "Second Base"), ("3B", "Third Base"),
+        ("SS", "Shortstop"), ("OF", "Outfield (LF/CF/RF)"), ("LF", "Left Field"),
+        ("CF", "Center Field"), ("RF", "Right Field"), ("DH", "Designated Hitter"), ("P", "Pitcher"),
+    ]
+
+    async def position_autocomplete(self, interaction: discord.Interaction, current: str):
+        cur = current.lower()
+        matches = [
+            app_commands.Choice(name=f"{name} ({value})", value=value)
+            for value, name in self._POSITION_OPTIONS
+            if cur in name.lower() or cur in value.lower()
+        ]
+        return matches[:25]
+
+    @leaders.autocomplete('position')
+    async def leaders_position_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.position_autocomplete(interaction, current)
+
     # Single (non-grouped) situational splits only — a leaderboard sorts on one
     # split at a time, unlike /mlb splits which can show grouped pairs per player.
     _LEADER_SPLIT_OPTIONS = [
@@ -2655,6 +2677,7 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="NL", value="104")
     ])
     @app_commands.describe(split="Optional situational split (e.g. vs Left, Home, RISP)")
+    @app_commands.describe(position="Position filter (e.g. C, 1B, 2B, SS, 3B, OF) — ranks teams by that position group's combined stats")
     async def team_leaders(
         self,
         interaction: discord.Interaction,
@@ -2663,6 +2686,7 @@ class MLBSlash(commands.Cog):
         year: str = None,
         reverse: bool = False,
         split: str = None,
+        position: str = None,
 
     ):
 
@@ -2684,7 +2708,7 @@ class MLBSlash(commands.Cog):
             group_val = "pitching" if stat in default_pitching_stats else "hitting"
             stat_val = stat
 
-        leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val, year=year, reverse=reverse, split=split)
+        leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val, year=year, reverse=reverse, split=split, position=position)
 
 
 
@@ -2702,6 +2726,7 @@ class MLBSlash(commands.Cog):
         if lg_val:
             title_parts.append("AL" if lg_val == "103" else "NL")
         if split: title_parts.append(self._LEADER_SPLIT_NAMES.get(split, split))
+        if position: title_parts.append(position.upper())
 
 
         display_stat = stat_val.capitalize()
@@ -2709,16 +2734,16 @@ class MLBSlash(commands.Cog):
             "Home Runs": "homeRuns", "Batting Average": "battingAverage", "RBI": "runsBattedIn",
             "OBP": "onBasePercentage", "SLG": "sluggingPercentage", "OPS": "onBasePlusSlugging",
             "Hits": "hits", "Runs": "runs", "Stolen Bases": "stolenBases", "Walks": "walks",
-            "Strikeouts": "strikeouts", "Wins": "wins", "ERA": "earnedRunAverage", 
+            "Strikeouts": "strikeouts", "Wins": "wins", "ERA": "earnedRunAverage",
             "WHIP": "walksAndHitsPerInningPitched", "Saves": "saves", "Innings Pitched": "inningsPitched",
-            "Games Played": "gamesPlayed", "Doubles": "doubles", "Triples": "triples", 
+            "Games Played": "gamesPlayed", "Doubles": "doubles", "Triples": "triples",
             "At Bats": "atBats", "Total Bases": "totalBases"
         }
         for readable, stat_id in stats_map_display.items():
             if stat_id == stat_val:
                 display_stat = readable
                 break
-                
+
         if display_stat in ["Strikeouts", "Walks", "Home Runs", "Hits", "Runs", "Games Played", "Doubles", "Triples", "Batting Average", "OBP", "OPS"]:
             if group_val == 'pitching' and display_stat in ["Home Runs", "Hits", "Runs", "Doubles", "Triples"]:
                 display_stat = f"{display_stat} Allowed"
@@ -2728,7 +2753,7 @@ class MLBSlash(commands.Cog):
                 display_stat = f"{display_stat} Against"
             else:
                 display_stat = f"{display_stat} ({group_val.capitalize()})"
-                
+
         title_parts.append(display_stat + " Team Leaders")
         title_str = " ".join(title_parts)
 
@@ -2742,6 +2767,10 @@ class MLBSlash(commands.Cog):
     @team_leaders.autocomplete('split')
     async def team_leaders_split_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.leaders_split_autocomplete(interaction, current)
+
+    @team_leaders.autocomplete('position')
+    async def team_leaders_position_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.position_autocomplete(interaction, current)
 
 
 
