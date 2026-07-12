@@ -2639,18 +2639,24 @@ class MLBSlash(commands.Cog):
         app_commands.Choice(name="AL", value="103"),
         app_commands.Choice(name="NL", value="104")
     ])
+    @app_commands.describe(split="Optional situational split (e.g. vs Left, Home, RISP)")
     async def team_leaders(
-        self, 
-        interaction: discord.Interaction, 
-        stat: str, 
+        self,
+        interaction: discord.Interaction,
+        stat: str,
         league: app_commands.Choice[str] = None,
         year: str = None,
-        reverse: bool = False
+        reverse: bool = False,
+        split: str = None,
 
     ):
 
         await interaction.response.defer()
-        
+
+        if split and split not in self._LEADER_SPLIT_NAMES:
+            await interaction.followup.send("Unknown split — pick one from the autocomplete suggestions.")
+            return
+
         lg_val = league.value if league else None
 
         stat = STAT_ABBREVIATIONS.get(stat.lower(), stat)
@@ -2663,7 +2669,7 @@ class MLBSlash(commands.Cog):
             group_val = "pitching" if stat in default_pitching_stats else "hitting"
             stat_val = stat
 
-        leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val, year=year, reverse=reverse)
+        leaders_list = await self.bot.mlb_client.get_team_leaders(stat=stat_val, stat_group=group_val, league=lg_val, year=year, reverse=reverse, split=split)
 
 
 
@@ -2680,8 +2686,9 @@ class MLBSlash(commands.Cog):
         if year: title_parts.append(year)
         if lg_val:
             title_parts.append("AL" if lg_val == "103" else "NL")
+        if split: title_parts.append(self._LEADER_SPLIT_NAMES.get(split, split))
 
-            
+
         display_stat = stat_val.capitalize()
         stats_map_display = {
             "Home Runs": "homeRuns", "Batting Average": "battingAverage", "RBI": "runsBattedIn",
@@ -2714,6 +2721,10 @@ class MLBSlash(commands.Cog):
     @team_leaders.autocomplete('stat')
     async def team_leaders_stat_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.stat_autocomplete(interaction, current)
+
+    @team_leaders.autocomplete('split')
+    async def team_leaders_split_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.leaders_split_autocomplete(interaction, current)
 
 
 

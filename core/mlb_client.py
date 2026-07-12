@@ -2109,7 +2109,7 @@ class MLBClient:
         return leaders
 
 
-    async def get_team_leaders(self, stat: str, stat_group: str, league: str = None, year: str = None, reverse: bool = False) -> List["Leader"]:
+    async def get_team_leaders(self, stat: str, stat_group: str, league: str = None, year: str = None, reverse: bool = False, split: str = None) -> List["Leader"]:
 
         session = await self.get_session()
         
@@ -2135,17 +2135,22 @@ class MLBClient:
             if et_now().month < 3:
                 season -= 1
             
-        url = f"{self.BASE_URL}/teams/stats?season={season}&sportId=1&group={stat_group}&stats=season"
+        stats_type = "statSplits" if split else "season"
+        url = f"{self.BASE_URL}/teams/stats?season={season}&sportId=1&group={stat_group}&stats={stats_type}"
+        if split:
+            url += f"&sitCodes={split}"
 
-        
         async with session.get(url) as resp:
             data = await resp.json()
-            
+
         if not data.get("stats") or not data["stats"][0].get("splits"):
             return []
-            
+
         teams = data["stats"][0]["splits"]
-        
+
+        if split:
+            teams = [t for t in teams if team_stat_key in t.get("stat", {})]
+
         # Filter by league
         if league:
             teams = [t for t in teams if str(t.get("team", {}).get("league", {}).get("id", "")) == league or str(t.get("league", {}).get("id", "")) == (league)]
