@@ -433,7 +433,8 @@ class MLBSlash(commands.Cog):
             if game.scoring_plays:
                 desc += "### Scoring Plays\n"
                 for sp in game.scoring_plays:
-                    desc += f"**{sp.inning.title()}:** {sp.description}\n"
+                    pitching = f"With **{sp.pitcher_name}** pitching, " if sp.pitcher_name else ""
+                    desc += f"**{sp.inning.title()}:** {pitching}{sp.description}\n"
                     if sp.video_url: desc += f"> [🎥 **{sp.video_blurb}**]({sp.video_url})\n"
                     desc += "\n"
             else:

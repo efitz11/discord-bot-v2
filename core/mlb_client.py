@@ -287,7 +287,8 @@ class MLBClient:
                 vid_url, vid_blurb = "", ""
                 if play.get('playEvents') and (play_id := play['playEvents'][-1].get('playId')) and play_id in content_dict:
                     vid_url, vid_blurb = content_dict[play_id]['url'], content_dict[play_id]['blurb']
-                game.scoring_plays.append(ScoringPlay(inning, desc, vid_url, vid_blurb))
+                pitcher_name = play.get('matchup', {}).get('pitcher', {}).get('fullName', '')
+                game.scoring_plays.append(ScoringPlay(inning, desc, vid_url, vid_blurb, pitcher_name))
 
         await asyncio.gather(*(process_game(g) for g in games))
         return games
