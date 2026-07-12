@@ -2005,6 +2005,13 @@ class MLBClient:
             "hitsPer9Inn", "walksPer9Inn", "homeRunsPer9", "homeRunsPer9Inn",
             "runsScoredPer9", "runsAllowed", "hitsAllowed", "walksAllowed",
         }
+        # Rate stats shared between groups flip desirability for pitching (e.g.
+        # a low batting average *against* is good, unlike a low batting average).
+        pitching_lower_is_better = {
+            "battingAverage", "onBasePercentage", "onBasePlusSlugging", "sluggingPercentage",
+        }
+        if stat_group == "pitching":
+            lower_is_better = lower_is_better | pitching_lower_is_better
         hi_to_lo = stat not in lower_is_better
         if reverse:
             hi_to_lo = not hi_to_lo
