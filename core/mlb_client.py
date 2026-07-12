@@ -1986,7 +1986,7 @@ class MLBClient:
         box.game_date = game_date
         return box
 
-    async def get_leaders(self, stat: str, stat_group: str = None, team_id: str = None, year: str = None, league: str = None, player_pool: str = None, position: str = None, reverse: bool = False) -> List["Leader"]:
+    async def get_leaders(self, stat: str, stat_group: str = None, team_id: str = None, year: str = None, league: str = None, player_pool: str = None, position: str = None, reverse: bool = False, split: str = None) -> List["Leader"]:
         session = await self.get_session()
         
         stat_group = stat_group or "hitting"
@@ -2011,7 +2011,7 @@ class MLBClient:
         # top — or bottom, when reversed — of the full pool comes back first
         # regardless of how many players the pool contains.
         params = {
-            "stats": "season",
+            "stats": "statSplits" if split else "season",
             "group": stat_group,
             "sportId": "1",
             "season": season,
@@ -2020,7 +2020,9 @@ class MLBClient:
             "sortStat": stat,
             "order": "desc" if hi_to_lo else "asc",
         }
-        
+        if split:
+            params["sitCodes"] = split
+
         if team_id:
             params["teamId"] = team_id
 
@@ -2072,7 +2074,10 @@ class MLBClient:
         }
         
         api_key = stat_keys.get(stat, stat)
-        
+
+        if split:
+            splits = [s for s in splits if api_key in s.get("stat", {})]
+
         def safe_float(val):
             try:
                 txt = str(val).replace(',', '')
