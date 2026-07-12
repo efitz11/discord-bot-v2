@@ -1413,6 +1413,12 @@ class MLBSlash(commands.Cog):
         ("all_positions", "Fielding Positions"),
         ("3", "March"), ("4", "April"), ("5", "May"), ("6", "June"),
         ("7", "July"), ("8", "August"), ("9", "September"), ("10", "October"),
+        ("all_innings", "Inning by Inning"),
+        ("i01", "1st Inning"), ("i02", "2nd Inning"), ("i03", "3rd Inning"),
+        ("i04", "4th Inning"), ("i05", "5th Inning"), ("i06", "6th Inning"),
+        ("i07", "7th Inning"), ("i08", "8th Inning"), ("i09", "9th Inning"),
+        ("ix", "Extra Innings"),
+        ("ig07", "7th Inning or Later"), ("ig08", "8th Inning or Later"), ("ig09", "9th Inning or Later"),
     ]
     _SPLIT_NAMES = {v: n for v, n in _SPLIT_OPTIONS}
 
@@ -1459,6 +1465,10 @@ class MLBSlash(commands.Cog):
                 "ac": "Ahead", "bc": "Behind",
                 "3": "Mar", "4": "Apr", "5": "May", "6": "Jun",
                 "7": "Jul", "8": "Aug", "9": "Sep", "10": "Oct",
+                "all_innings": "Inning",
+                "i01": "1st", "i02": "2nd", "i03": "3rd", "i04": "4th", "i05": "5th",
+                "i06": "6th", "i07": "7th", "i08": "8th", "i09": "9th", "ix": "Extra",
+                "ig07": "7th+", "ig08": "8th+", "ig09": "9th+",
             }
             label1 = self._SPLIT_NAMES.get(split, split)
             label2 = self._SPLIT_NAMES.get(split2, split2)
