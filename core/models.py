@@ -656,6 +656,7 @@ class ScoringPlay:
     description: str
     video_url: str
     video_blurb: str
+    pitcher_name: str = ""
 
 @dataclass
 class PlayerGameStats:
