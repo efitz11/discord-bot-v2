@@ -630,29 +630,42 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     def get_y(pz):
         return base_y - (pz * scale)
 
-    # Draw ground line
+    # Ground plane in fake perspective (catcher's view, like Gameday): depth d
+    # in feet toward the viewer maps to pixels below ground level, heavily
+    # foreshortened, with lines fanning outward slightly as they get closer
     ground_y = get_y(0)
-    draw.line([50, ground_y, zone_area_width - 50, ground_y], fill=(50, 60, 70), width=4)
+    box_front_d = 0.708 + 3.0  # deepest chalk: 3 ft in front of plate center
+    # px per foot of depth, flattened further if a tall zone leaves little room
+    depth_scale = min(48, (height - 20 - ground_y) / box_front_d)
+    spread = 0.03      # lateral spread per foot of depth
 
-    # Draw Plate
-    plate_y = ground_y + 15
-    plate_w_feet = 0.708 
+    def ground_pt(x_ft, d_ft):
+        return (zone_area_width // 2 + x_ft * scale * (1 + spread * d_ft),
+                ground_y + d_ft * depth_scale)
+
+    # Home plate flat on the ground: 17" back edge at d=0, 8.5" parallel
+    # sides, point toward the catcher (17" total depth)
+    plate_w_feet = 0.708
     draw.polygon([
-        (get_x(0), plate_y + 35),
-        (get_x(-plate_w_feet), plate_y + 10),
-        (get_x(-plate_w_feet), plate_y - 12),
-        (get_x(plate_w_feet), plate_y - 12),
-        (get_x(plate_w_feet), plate_y + 10)
+        ground_pt(-plate_w_feet, 0),
+        ground_pt(plate_w_feet, 0),
+        ground_pt(plate_w_feet, 0.708),
+        ground_pt(0, 1.417),
+        ground_pt(-plate_w_feet, 0.708),
     ], fill=(180, 180, 185))
 
-    # Draw batter's box inner edges: 6 inches outside each edge of home plate
+    # Batter's boxes: inner chalk line 6" outside the plate, running from 3 ft
+    # behind to 3 ft in front of the plate's center; the front line runs
+    # outward to the edge only, so no chalk crosses in front of home plate
     box_color = (65, 80, 95)
-    bx_left = get_x(-(plate_w_feet + 0.5))
-    bx_right = get_x(plate_w_feet + 0.5)
-    by_top = get_y(0)   # ground line / front of plate
-    by_bot = height
-    draw.line([bx_left, by_top, bx_left, by_bot], fill=box_color, width=4)
-    draw.line([bx_right, by_top, bx_right, by_bot], fill=box_color, width=4)
+    box_inner = plate_w_feet + 0.5
+    box_back_d = 0.708 - 3.0
+    for side in (-1, 1):
+        inner_back = ground_pt(side * box_inner, box_back_d)
+        inner_front = ground_pt(side * box_inner, box_front_d)
+        outer_x = 10 if side < 0 else zone_area_width - 10
+        draw.line([inner_back, inner_front], fill=box_color, width=4)
+        draw.line([inner_front, (outer_x, inner_front[1])], fill=box_color, width=4)
 
     # Draw 3x3 strike zone
     zx_left = get_x(-0.708)
@@ -692,6 +705,17 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     font_small = get_font(42)
     font_bold = get_font(42, bold=True)
 
+    # Legend layout: single column, rows shrink to fit the pitch count.
+    # Two-line rows need ~100px; below that switch to compact one-line rows
+    # with proportionally scaled fonts/markers (floored at 60% size)
+    legend_top = 100
+    row_h = min(140, (height - 2 * legend_top) / len(pitches))
+    compact = row_h < 100
+    lg_scale = max(0.6, row_h / 140)
+    rl = int(35 * lg_scale) if compact else 35
+    font_lg_bold = get_font(int(42 * lg_scale), bold=True) if compact else font_bold
+    font_lg_small = get_font(int(42 * lg_scale)) if compact else font_small
+
     # Draw Batter indicator
     bat_color = (60, 70, 80)
     bat_y = get_y(sz_top) - 120
@@ -720,31 +744,40 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         draw.text((px - tw/2, py - th/2 - 5), num_str, fill=(255, 255, 255), font=font_bold)
         
-        # Legend (on the right)
+        # Legend (single column on the right)
         lx = 880
+        ly = legend_top + i * row_h
 
-        ly = 100 + (i * 140)
-        
-        # In case too many pitches, start a second column
-        if ly > height - 150:
-            lx += 320
-            ly = 100 + ((i - 8) * 140)
-        
-        # Pitch marker in legend - perfect circle
-        rl = 35
-        lcx, lcy = lx + rl, ly + 45
-        draw.ellipse([lcx-rl, lcy-rl, lcx+rl, lcy+rl], fill=color, outline=(255, 255, 255), width=4)
-        # Center number in legend circle
-        bbox_l = draw.textbbox((0, 0), num_str, font=font_bold)
-        twl, thl = bbox_l[2] - bbox_l[0], bbox_l[3] - bbox_l[1]
-        draw.text((lcx - twl/2, lcy - thl/2 - 5), num_str, fill=(255, 255, 255), font=font_bold)
-        
-        # Result and Count
-        draw.text((lx + 100, ly), f"{p.description}", fill=(255, 255, 255), font=font_bold)
-        draw.text((width - 100, ly), f"{p.count}", fill=(200, 200, 200), font=font_small)
-        
-        # Speed and Type
-        draw.text((lx + 100, ly + 50), f"{p.speed} mph {p.type}", fill=(180, 180, 180), font=font_small)
+        if compact:
+            # One line per pitch: ● Description · speed type        count
+            lcy = ly + row_h / 2
+            lcx = lx + rl
+            draw.ellipse([lcx-rl, lcy-rl, lcx+rl, lcy+rl], fill=color, outline=(255, 255, 255), width=3)
+            draw.text((lcx, lcy), num_str, fill=(255, 255, 255), font=font_lg_bold, anchor="mm")
+
+            count_x = width - 60
+            draw.text((count_x, lcy), p.count, fill=(200, 200, 200), font=font_lg_small, anchor="rm")
+
+            text_x = lx + 2 * rl + 30
+            detail = f" · {p.speed} mph {p.type}"
+            max_w = count_x - draw.textlength(p.count, font=font_lg_small) - 40 - text_x
+            desc = p.description
+            while desc and draw.textlength(desc + "…", font=font_lg_bold) + draw.textlength(detail, font=font_lg_small) > max_w:
+                desc = desc[:-1].rstrip()
+            if desc != p.description:
+                desc += "…"
+            dw = draw.textlength(desc, font=font_lg_bold)
+            draw.text((text_x, lcy), desc, fill=(255, 255, 255), font=font_lg_bold, anchor="lm")
+            draw.text((text_x + dw, lcy), detail, fill=(180, 180, 180), font=font_lg_small, anchor="lm")
+        else:
+            # Two-line rows: description + count, speed/type below
+            lcx, lcy = lx + rl, ly + 45
+            draw.ellipse([lcx-rl, lcy-rl, lcx+rl, lcy+rl], fill=color, outline=(255, 255, 255), width=4)
+            draw.text((lcx, lcy), num_str, fill=(255, 255, 255), font=font_bold, anchor="mm")
+
+            draw.text((lx + 100, ly), f"{p.description}", fill=(255, 255, 255), font=font_bold)
+            draw.text((width - 60, ly), f"{p.count}", fill=(200, 200, 200), font=font_small, anchor="ra")
+            draw.text((lx + 100, ly + 50), f"{p.speed} mph {p.type}", fill=(180, 180, 180), font=font_small)
 
     buffer = io.BytesIO()
     img.save(buffer, format='PNG')
