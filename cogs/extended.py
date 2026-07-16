@@ -86,6 +86,21 @@ def _desc_to_icon(d: str) -> str:
     return "🌡️"
 
 
+def _aqi_category(aqi: int) -> tuple[str, str]:
+    """US AQI value -> (label, emoji)."""
+    if aqi <= 50:
+        return "Good", "🟢"
+    elif aqi <= 100:
+        return "Moderate", "🟡"
+    elif aqi <= 150:
+        return "Unhealthy for Sensitive Groups", "🟠"
+    elif aqi <= 200:
+        return "Unhealthy", "🔴"
+    elif aqi <= 300:
+        return "Very Unhealthy", "🟣"
+    return "Hazardous", "🟤"
+
+
 class ExtendedSlash(commands.Cog):
 
     def __init__(self, bot):
@@ -385,11 +400,13 @@ class ExtendedSlash(commands.Cog):
         geo_bias = "countrycodes=us" if is_us_zip else "viewbox=-125,24,-66,50&bounded=0"
         geo_url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(location)}&format=json&limit=1&{geo_bias}"
         geo_name = None
+        geo_lat = geo_lon = None
         try:
             async with session.get(geo_url, headers={"User-Agent": "discord-bot/1.0"}) as resp:
                 geo_data = await resp.json() if resp.status == 200 else []
             if geo_data:
-                wttr_query = urllib.parse.quote(f"{geo_data[0]['lat']},{geo_data[0]['lon']}")
+                geo_lat, geo_lon = geo_data[0]['lat'], geo_data[0]['lon']
+                wttr_query = urllib.parse.quote(f"{geo_lat},{geo_lon}")
                 geo_name = geo_data[0].get('display_name', '').split(',')[0].strip() or None
             else:
                 wttr_query = urllib.parse.quote(location)
@@ -406,6 +423,20 @@ class ExtendedSlash(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"Error fetching weather: {e}")
             return
+
+        aqi = None
+        if geo_lat is not None:
+            try:
+                aqi_url = (
+                    "https://air-quality-api.open-meteo.com/v1/air-quality"
+                    f"?latitude={geo_lat}&longitude={geo_lon}&current=us_aqi"
+                )
+                async with session.get(aqi_url) as resp:
+                    if resp.status == 200:
+                        aqi_data = await resp.json()
+                        aqi = aqi_data.get("current", {}).get("us_aqi")
+            except Exception:
+                aqi = None
 
         current = data.get("current_condition", [{}])[0]
         area = data.get("nearest_area", [{}])[0]
@@ -454,6 +485,9 @@ class ExtendedSlash(commands.Cog):
         embed.add_field(name="Visibility", value=f"{visibility} mi", inline=True)
         if float(precip) > 0:
             embed.add_field(name="Precipitation", value=f"{precip} in", inline=True)
+        if aqi is not None and aqi > 50:
+            aqi_label, aqi_emoji = _aqi_category(round(aqi))
+            embed.add_field(name="Air Quality", value=f"{aqi_emoji} {round(aqi)} ({aqi_label})", inline=True)
 
         hourly_by_time = {h.get("time"): h for h in hourly}
         forecast_parts = []
