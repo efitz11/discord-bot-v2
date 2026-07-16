@@ -425,16 +425,15 @@ class ExtendedSlash(commands.Cog):
             return
 
         aqi = None
-        if geo_lat is not None:
+        waqi_token = os.environ.get("WAQI_TOKEN")
+        if geo_lat is not None and waqi_token:
             try:
-                aqi_url = (
-                    "https://air-quality-api.open-meteo.com/v1/air-quality"
-                    f"?latitude={geo_lat}&longitude={geo_lon}&current=us_aqi"
-                )
+                aqi_url = f"https://api.waqi.info/feed/geo:{geo_lat};{geo_lon}/?token={waqi_token}"
                 async with session.get(aqi_url) as resp:
                     if resp.status == 200:
                         aqi_data = await resp.json()
-                        aqi = aqi_data.get("current", {}).get("us_aqi")
+                        if aqi_data.get("status") == "ok":
+                            aqi = aqi_data.get("data", {}).get("aqi")
             except Exception:
                 aqi = None
 
@@ -485,7 +484,7 @@ class ExtendedSlash(commands.Cog):
         embed.add_field(name="Visibility", value=f"{visibility} mi", inline=True)
         if float(precip) > 0:
             embed.add_field(name="Precipitation", value=f"{precip} in", inline=True)
-        if aqi is not None and aqi > 50:
+        if isinstance(aqi, (int, float)) and aqi > 50:
             aqi_label, aqi_emoji = _aqi_category(round(aqi))
             embed.add_field(name="Air Quality", value=f"{aqi_emoji} {round(aqi)} ({aqi_label})", inline=True)
 
