@@ -342,6 +342,7 @@ class MLBClient:
         content_dict = extract_highlight_videos(content_data)
 
         plays = []
+        outs_so_far = 0
         for play in pbp_data.get('allPlays', []):
             about = play.get('about', {})
             if about.get('halfInning') != team_half:
@@ -360,7 +361,10 @@ class MLBClient:
             count = play.get('count', {})
             balls = count.get('balls', 0)
             strikes = count.get('strikes', 0)
-            outs_before = about.get('startOuts', 0)
+            # count.outs reflects the out total AFTER this play resolves, so the
+            # outs entering the play is whatever we'd accumulated so far this half-inning.
+            outs_before = outs_so_far
+            outs_so_far = count.get('outs', outs_so_far)
 
             vid_url, vid_blurb = '', ''
             events = play.get('playEvents', [])
