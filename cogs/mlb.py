@@ -450,12 +450,12 @@ class MLBSlash(commands.Cog):
         return await self.team_autocomplete(interaction, current)
 
     @mlb_game.command(name="plays", description="Get play-by-play for a team's batting side of a specific inning.")
-    @app_commands.describe(team="The team (e.g. wsh, nationals)", inning="Inning number", date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
-    async def game_plays(self, interaction: discord.Interaction, team: str, inning: int, date: str = None):
+    @app_commands.describe(team="The team (e.g. wsh, nationals)", inning="Inning number (defaults to the most recent inning)", date="A specific date (e.g. 4/7/26, yesterday, +2, -5)")
+    async def game_plays(self, interaction: discord.Interaction, team: str, inning: int = None, date: str = None):
         await interaction.response.defer()
         parsed_date = parse_date(date)
 
-        game, plays, team_abbrev, team_half = await self.bot.mlb_client.get_game_plays_for_inning(team, inning, date=parsed_date)
+        game, plays, team_abbrev, team_half, inning = await self.bot.mlb_client.get_game_plays_for_inning(team, inning, date=parsed_date)
 
         if game is None:
             await interaction.followup.send("Could not find a game for that team on the specified date.")

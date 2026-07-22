@@ -305,16 +305,22 @@ class MLBClient:
         await asyncio.gather(*(process_game(g) for g in games))
         return games
 
-    async def get_game_plays_for_inning(self, team_query: str, inning: int, date: str = None):
-        """Return (game, plays, team_abbrev, team_half) for a team's batting side of a given inning."""
+    async def get_game_plays_for_inning(self, team_query: str, inning: int = None, date: str = None):
+        """Return (game, plays, team_abbrev, team_half) for a team's batting side of a given inning.
+
+        If inning is not specified, defaults to the game's current (or most recently completed) inning.
+        """
         games = await self.get_todays_games(team_query=team_query, date=date)
         if not games:
-            return None, None, None, None
+            return None, None, None, None, None
 
         game = games[0]
+        if inning is None:
+            inning = game.inning if game.inning and game.inning > 0 else 1
+
         team_id = await self.get_team_id(team_query)
         if not team_id:
-            return game, [], game.away.abbreviation, 'top'
+            return game, [], game.away.abbreviation, 'top', inning
 
         team_side = 'away' if game.away.id == team_id else 'home'
         team_half = 'top' if team_side == 'away' else 'bottom'
@@ -331,7 +337,7 @@ class MLBClient:
                 content_data = await resp.json() if resp.status == 200 else {}
         except Exception as e:
             print(f"Error fetching plays for inning: {e}")
-            return game, [], team_abbrev, team_half
+            return game, [], team_abbrev, team_half, inning
 
         content_dict = extract_highlight_videos(content_data)
 
@@ -376,7 +382,7 @@ class MLBClient:
                 'rbi': result.get('rbi', 0),
             })
 
-        return game, plays, team_abbrev, team_half
+        return game, plays, team_abbrev, team_half, inning
 
     async def get_game_linescore_data(self, team_query: str, date: str = None):
         """Return (game, linescore_json) for a team's game."""
