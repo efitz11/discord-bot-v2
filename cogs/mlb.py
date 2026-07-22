@@ -1532,22 +1532,82 @@ class MLBSlash(commands.Cog):
 
     @mlb.command(name="last", description="Get a player's stats over their last N games or last N days")
     @app_commands.describe(player="The player to search for")
-    @app_commands.describe(games="Number of recent games to aggregate (default 10, max 50)")
-    @app_commands.describe(days="Number of recent days to aggregate (overrides games if provided)")
+    @app_commands.describe(games="Number of recent games to aggregate (default 10, max 50). Multiple spans separated by / (e.g. 5/10/20)")
+    @app_commands.describe(days="Number of recent days to aggregate (overrides games if provided). Multiple spans separated by / (e.g. 7/14/30)")
     @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
     @app_commands.choices(stat_type=[
         app_commands.Choice(name="Hitting", value="hitting"),
         app_commands.Choice(name="Pitching", value="pitching")
     ])
-    async def last_games(self, interaction: discord.Interaction, player: str, games: int = 10, days: int = None, stat_type: app_commands.Choice[str] = None):
+    async def last_games(self, interaction: discord.Interaction, player: str, games: str = "10", days: str = None, stat_type: app_commands.Choice[str] = None):
         await self._send_player_last(interaction, player, games, days, stat_type, milb=False)
 
-    async def _send_player_last(self, interaction: discord.Interaction, player: str, games: int, days, stat_type, milb: bool):
+    @staticmethod
+    def _parse_span_list(raw: str, max_val: int) -> List[int]:
+        vals = []
+        for part in str(raw).split('/'):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                n = int(part)
+            except ValueError:
+                continue
+            n = max(1, min(max_val, n))
+            if n not in vals:
+                vals.append(n)
+        return vals
+
+    async def _send_player_last(self, interaction: discord.Interaction, player: str, games: str, days, stat_type, milb: bool):
         await interaction.response.defer()
-        num_games = max(1, min(50, games))
         s_type = stat_type.value if stat_type else None
 
-        stats_list = await self.bot.mlb_client.get_player_last_games(player, num_games=num_games, stat_type=s_type, milb=milb, days=days)
+        is_days = bool(days)
+        spans = self._parse_span_list(days, 365) if is_days else (self._parse_span_list(games, 50) or [10])
+
+        if not spans:
+            await interaction.followup.send("Please provide a valid number of games or days.")
+            return
+
+        per_span_results = await asyncio.gather(*(
+            self.bot.mlb_client.get_player_last_games(
+                player,
+                num_games=(10 if is_days else n),
+                stat_type=s_type,
+                milb=milb,
+                days=(n if is_days else None),
+            )
+            for n in spans
+        ))
+
+        if not any(per_span_results):
+            await interaction.followup.send("Could not find stats for that player.")
+            return
+
+        if len(spans) == 1:
+            stats_list = per_span_results[0]
+        else:
+            by_stat_type = {}
+            for n, stats_for_span in zip(spans, per_span_results):
+                for st in stats_for_span or []:
+                    by_stat_type.setdefault(st.stat_type, []).append((n, st))
+
+            unit = "D" if is_days else "G"
+            stats_list = []
+            for stat_type_key, items in by_stat_type.items():
+                rows = []
+                for n, st in items:
+                    if st.stats:
+                        row = dict(st.stats[0])
+                        row['split'] = f"{n}{unit}"
+                        rows.append(row)
+                base = items[0][1]
+                spans_str = "/".join(str(n) for n, _ in items)
+                period_label = f"Last {spans_str} {'Days' if is_days else 'Games'}"
+                if rows:
+                    stats_list.append(dataclasses.replace(base, stats=rows, years=period_label))
+                else:
+                    stats_list.append(dataclasses.replace(base, years=period_label))
 
         if not stats_list:
             await interaction.followup.send("Could not find stats for that player.")
@@ -1556,7 +1616,7 @@ class MLBSlash(commands.Cog):
         embed = discord.Embed(color=discord.Color.blue())
 
         first_stats = stats_list[0]
-        period_label = first_stats.years  # e.g. "Last 10 Games" or "Last 30 Days"
+        period_label = first_stats.years  # e.g. "Last 10 Games" or "Last 5/10/20 Games"
         if len(stats_list) > 1:
             embed.title = f"{period_label} for {first_stats.player_name} ({first_stats.team_abbrev})"
         else:
@@ -1758,14 +1818,14 @@ class MLBSlash(commands.Cog):
 
     @milb.command(name="last", description="Get a minor league player's aggregated stats over their last N games or last N days")
     @app_commands.describe(player="The minor league player to search for")
-    @app_commands.describe(games="Number of recent games to aggregate (default 10, max 50)")
-    @app_commands.describe(days="Number of recent days to aggregate (overrides games if provided)")
+    @app_commands.describe(games="Number of recent games to aggregate (default 10, max 50). Multiple spans separated by / (e.g. 5/10/20)")
+    @app_commands.describe(days="Number of recent days to aggregate (overrides games if provided). Multiple spans separated by / (e.g. 7/14/30)")
     @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
     @app_commands.choices(stat_type=[
         app_commands.Choice(name="Hitting", value="hitting"),
         app_commands.Choice(name="Pitching", value="pitching")
     ])
-    async def milb_last(self, interaction: discord.Interaction, player: str, games: int = 10, days: int = None, stat_type: app_commands.Choice[str] = None):
+    async def milb_last(self, interaction: discord.Interaction, player: str, games: str = "10", days: str = None, stat_type: app_commands.Choice[str] = None):
         await self._send_player_last(interaction, player, games, days, stat_type, milb=True)
 
     @milb_last.autocomplete('player')
