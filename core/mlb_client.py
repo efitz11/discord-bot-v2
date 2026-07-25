@@ -2453,6 +2453,40 @@ class MLBClient:
             'scoreboard': data.get('scoreboard', {}),
         }
 
+    async def get_game_spray_chart_data(self, team_query: str, date: str = None) -> Optional[dict]:
+        """Fetch every batted ball (both teams) from a game's Baseball Savant feed, for a game-level spray chart."""
+        games = await self.get_todays_games(team_query=team_query, date=date)
+        if not games:
+            return None
+        game = games[0]
+
+        session = await self.get_session()
+        url = f"https://baseballsavant.mlb.com/gf?game_pk={game.game_pk}"
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json(content_type=None)
+        except Exception:
+            return None
+
+        events = [e for e in data.get('exit_velocity', []) if e.get('hc_x_ft') is not None and e.get('hc_y_ft') is not None]
+        if not events:
+            return None
+
+        venue_id = data.get('venue_id')
+        field_info = await self.get_venue_field_info(venue_id) if venue_id else None
+
+        return {
+            'game_pk': game.game_pk,
+            'away': game.away.abbreviation,
+            'home': game.home.abbreviation,
+            'events': events,
+            'game_label': game.status,
+            'venue_name': field_info['venue_name'] if field_info else None,
+            'field_info': field_info['field_info'] if field_info else None,
+        }
+
     async def get_pitcher_game_feed(self, team_query: str, date: str = None, player_id: int = None) -> dict:
         """
         Returns pitcher pitch data from the Baseball Savant game feed for a team.

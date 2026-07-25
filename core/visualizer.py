@@ -981,21 +981,25 @@ _WALL_POINTS = [
 ]
 
 
-def generate_spray_chart(data: dict) -> io.BytesIO:
-    """Render a batted-ball spray chart for a batter, shaped to their home park's real wall distances."""
-    events = data['events']
-    player_name = data['player_name']
-    year = data['year']
-    venue_name = data.get('venue_name')
-    field_info = data.get('field_info')
+def _spray_field_font(size, bold=False):
+    candidates = (
+        ["arialbd.ttf", "DejaVuSans-Bold.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+        if bold else
+        ["arial.ttf", "DejaVuSans.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    )
+    for f in candidates:
+        try:
+            return ImageFont.truetype(f, size)
+        except:
+            continue
+    return ImageFont.load_default()
 
-    W = 1200
-    side_margin = 50
-    field_top = 140
-    bottom_reserve = 160   # legend + padding below home plate
-    max_plot_height = 850  # caps canvas height when the batted-ball spread is narrow
 
-    # Real per-park wall distances when available, else a generic 400ft fence.
+def _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft):
+    """Compute canvas height and plate/scale for a spray-chart field, sized to fit both
+    the real (or generic) outfield wall and every plotted point without clipping."""
     wall_points_ft = None
     if field_info:
         try:
@@ -1009,12 +1013,7 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
     else:
         raw_pts_ft = [(generic_radius_ft * math.sin(math.radians(a)), generic_radius_ft * math.cos(math.radians(a)))
                       for a in (-45, 0, 45)]
-
-    for e in events:
-        try:
-            raw_pts_ft.append((float(e['hc_x_ft']), float(e['hc_y_ft'])))
-        except (KeyError, TypeError, ValueError):
-            continue
+    raw_pts_ft.extend(event_points_ft)
 
     margin_ft = 20
     max_dx_ft = max(abs(x) for x, y in raw_pts_ft) + margin_ft
@@ -1027,42 +1026,20 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
     plate_y = field_top + max_dy_ft * scale
     H = int(plate_y + bottom_reserve)
 
-    bg = (18, 25, 33)
-    img = Image.new('RGB', (W, H), color=bg)
-    draw = ImageDraw.Draw(img)
+    return {
+        'wall_points_ft': wall_points_ft,
+        'generic_radius_ft': generic_radius_ft,
+        'scale': scale,
+        'plate_x': plate_x,
+        'plate_y': plate_y,
+        'H': H,
+    }
 
-    def get_font(size, bold=False):
-        candidates = (
-            ["arialbd.ttf", "DejaVuSans-Bold.ttf",
-             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
-            if bold else
-            ["arial.ttf", "DejaVuSans.ttf",
-             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
-        )
-        for f in candidates:
-            try:
-                return ImageFont.truetype(f, size)
-            except:
-                continue
-        return ImageFont.load_default()
 
-    font_title    = get_font(40, bold=True)
-    font_sub      = get_font(26)
-    font_legend   = get_font(22)
-    font_distance = get_font(19, bold=True)
-
-    title = f"{player_name}  ·  Spray Chart  ·  {year}"
-    bbox = draw.textbbox((0, 0), title, font=font_title)
-    draw.text(((W - (bbox[2] - bbox[0])) // 2, 20), title, fill=(230, 230, 230), font=font_title)
-
-    subtitle = f"{len(events)} batted ball{'s' if len(events) != 1 else ''}"
-    if venue_name:
-        subtitle += f"  ·  {venue_name}"
-    bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
-    draw.text(((W - (bbox[2] - bbox[0])) // 2, 68), subtitle, fill=(150, 150, 150), font=font_sub)
-
-    def to_canvas(hc_x_ft, hc_y_ft):
-        return plate_x + hc_x_ft * scale, plate_y - hc_y_ft * scale
+def _draw_spray_field(draw, layout, font_distance):
+    """Draw foul lines, outfield wall (+ distance labels), infield diamond, and home plate."""
+    scale, plate_x, plate_y = layout['scale'], layout['plate_x'], layout['plate_y']
+    wall_points_ft, generic_radius_ft = layout['wall_points_ft'], layout['generic_radius_ft']
 
     def polar_to_canvas(angle_deg, distance_ft):
         rad = math.radians(angle_deg)
@@ -1105,8 +1082,56 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
     # Home plate marker
     draw.ellipse([plate_x - 5, plate_y - 5, plate_x + 5, plate_y + 5], fill=(200, 200, 205))
 
+
+def generate_spray_chart(data: dict) -> io.BytesIO:
+    """Render a batted-ball spray chart for a batter, shaped to their home park's real wall distances."""
+    events = data['events']
+    player_name = data['player_name']
+    year = data['year']
+    venue_name = data.get('venue_name')
+    field_info = data.get('field_info')
+
+    W = 1200
+    side_margin = 50
+    field_top = 140
+    bottom_reserve = 160   # legend + padding below home plate
+    max_plot_height = 850  # caps canvas height when the batted-ball spread is narrow
+
+    event_points_ft = []
+    for e in events:
+        try:
+            event_points_ft.append((float(e['hc_x_ft']), float(e['hc_y_ft'])))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    layout = _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft)
+    scale, plate_x, plate_y, H = layout['scale'], layout['plate_x'], layout['plate_y'], layout['H']
+
+    bg = (18, 25, 33)
+    img = Image.new('RGB', (W, H), color=bg)
+    draw = ImageDraw.Draw(img)
+
+    font_title    = _spray_field_font(40, bold=True)
+    font_sub      = _spray_field_font(26)
+    font_legend   = _spray_field_font(22)
+    font_distance = _spray_field_font(19, bold=True)
+
+    title = f"{player_name}  ·  Spray Chart  ·  {year}"
+    bbox = draw.textbbox((0, 0), title, font=font_title)
+    draw.text(((W - (bbox[2] - bbox[0])) // 2, 20), title, fill=(230, 230, 230), font=font_title)
+
+    subtitle = f"{len(events)} batted ball{'s' if len(events) != 1 else ''}"
+    if venue_name:
+        subtitle += f"  ·  {venue_name}"
+    bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
+    draw.text(((W - (bbox[2] - bbox[0])) // 2, 68), subtitle, fill=(150, 150, 150), font=font_sub)
+
+    def to_canvas(hc_x_ft, hc_y_ft):
+        return plate_x + hc_x_ft * scale, plate_y - hc_y_ft * scale
+
+    _draw_spray_field(draw, layout, font_distance)
+
     # Plot each batted ball
-    seen_events = set()
     for e in events:
         try:
             x_ft = float(e['hc_x_ft'])
@@ -1116,7 +1141,6 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
         cx, cy = to_canvas(x_ft, y_ft)
         outcome = e.get('events') or ''
         label, color = _SPRAY_EVENT_STYLE.get(outcome, (None, _SPRAY_OUT_COLOR))
-        seen_events.add(outcome if label else '__out__')
         r = 6 if label else 4
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color, outline=(18, 25, 33), width=1)
 
@@ -1130,6 +1154,117 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
     ly = H - 34
     for label, color in legend_items:
         draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color)
+        draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
+        bbox = draw.textbbox((0, 0), label, font=font_legend)
+        lx += 20 + (bbox[2] - bbox[0]) + 30
+
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    return buf
+
+
+_GAME_SPRAY_HIT_EVENTS = {'single', 'double', 'triple', 'home_run'}
+
+
+def generate_game_spray_chart(data: dict) -> io.BytesIO:
+    """Render a game-level spray chart with every batted ball from both teams, colored by batting team."""
+    events = data['events']
+    away, home = data['away'], data['home']
+    venue_name = data.get('venue_name')
+    field_info = data.get('field_info')
+    game_label = data.get('game_label', '')
+
+    away_color = _readable(_team_colors(away)[0])
+    home_color = _readable(_team_colors(home)[0])
+    # Keep the two teams visually distinct if both primaries lightened toward the same pale shade.
+    if _luminance(away_color) > 100 and _luminance(home_color) > 100 and \
+            sum(abs(a - h) for a, h in zip(away_color, home_color)) < 60:
+        home_color = _readable(_team_colors(home)[1] or home_color, floor=110)
+
+    W = 1200
+    side_margin = 50
+    field_top = 150
+    bottom_reserve = 170
+    max_plot_height = 850
+
+    event_points_ft = []
+    for e in events:
+        try:
+            event_points_ft.append((float(e['hc_x_ft']), float(e['hc_y_ft'])))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    layout = _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft)
+    scale, plate_x, plate_y, H = layout['scale'], layout['plate_x'], layout['plate_y'], layout['H']
+
+    bg = (18, 25, 33)
+    img = Image.new('RGB', (W, H), color=bg)
+    draw = ImageDraw.Draw(img)
+
+    font_title    = _spray_field_font(40, bold=True)
+    font_sub      = _spray_field_font(26)
+    font_legend   = _spray_field_font(22)
+    font_distance = _spray_field_font(19, bold=True)
+
+    title = f"{away} @ {home}  ·  Spray Chart"
+    bbox = draw.textbbox((0, 0), title, font=font_title)
+    draw.text(((W - (bbox[2] - bbox[0])) // 2, 20), title, fill=(230, 230, 230), font=font_title)
+
+    subtitle = f"{len(events)} batted ball{'s' if len(events) != 1 else ''}"
+    if game_label:
+        subtitle += f"  ·  {game_label}"
+    if venue_name:
+        subtitle += f"  ·  {venue_name}"
+    bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
+    draw.text(((W - (bbox[2] - bbox[0])) // 2, 68), subtitle, fill=(150, 150, 150), font=font_sub)
+
+    def to_canvas(hc_x_ft, hc_y_ft):
+        return plate_x + hc_x_ft * scale, plate_y - hc_y_ft * scale
+
+    _draw_spray_field(draw, layout, font_distance)
+
+    # Plot each batted ball — filled = hit, hollow = out/other, larger ring = home run.
+    for e in events:
+        try:
+            x_ft = float(e['hc_x_ft'])
+            y_ft = float(e['hc_y_ft'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        cx, cy = to_canvas(x_ft, y_ft)
+        team_batting = e.get('team_batting') or ''
+        color = home_color if team_batting == home else away_color
+        outcome = (e.get('events') or '').lower().replace(' ', '_')
+        is_hr = outcome == 'home_run'
+        is_hit = outcome in _GAME_SPRAY_HIT_EVENTS
+
+        if is_hr:
+            draw.ellipse([cx - 9, cy - 9, cx + 9, cy + 9], fill=color, outline=(255, 215, 0), width=2)
+        elif is_hit:
+            draw.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=color, outline=(18, 25, 33), width=1)
+        else:
+            draw.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], outline=color, width=2)
+
+    # Legend — team colors, then marker meaning.
+    lx = 40
+    ly = H - 66
+    for label, color in ((away, away_color), (home, home_color)):
+        draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color)
+        draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
+        bbox = draw.textbbox((0, 0), label, font=font_legend)
+        lx += 20 + (bbox[2] - bbox[0]) + 40
+
+    lx = 40
+    ly = H - 34
+    marker_items = [('Hit', 'filled'), ('Out/Other', 'hollow'), ('HR', 'gold_ring')]
+    for label, kind in marker_items:
+        neutral = (170, 178, 188)
+        if kind == 'filled':
+            draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=neutral)
+        elif kind == 'hollow':
+            draw.ellipse([lx, ly - 6, lx + 12, ly + 6], outline=neutral, width=2)
+        else:
+            draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=neutral, outline=(255, 215, 0), width=2)
         draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
         bbox = draw.textbbox((0, 0), label, font=font_legend)
         lx += 20 + (bbox[2] - bbox[0]) + 30
