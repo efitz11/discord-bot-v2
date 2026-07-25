@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_spray_chart, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, generate_player_card_image, _team_colors
+from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_spray_chart, generate_game_spray_chart, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, generate_player_card_image, _team_colors
 import io
 import asyncio
 import dataclasses
@@ -1113,9 +1113,10 @@ class MLBSlash(commands.Cog):
     @savant.command(name="game", description="Get Statcast exit velocity data for a team's game or a player's at-bats today")
     @app_commands.describe(
         query="Team abbreviation/name (shows last 5 batted balls) or player name (shows all their ABs)",
-        date="A specific date (e.g. 4/7/26, yesterday, +2, -5)"
+        date="A specific date (e.g. 4/7/26, yesterday, +2, -5)",
+        spray_chart="For a team query, also attach a game-level spray chart of every batted ball (default: false)"
     )
-    async def game(self, interaction: discord.Interaction, query: str, date: str = None):
+    async def game(self, interaction: discord.Interaction, query: str, date: str = None, spray_chart: bool = False):
         await interaction.response.defer()
         parsed_date = parse_date(date)
 
@@ -1194,6 +1195,17 @@ class MLBSlash(commands.Cog):
             desc += f"```python\n{chr(10).join(lines)}\n```"
             desc += f"\n[Baseball Savant ↗]({savant_url})"
             embed = discord.Embed(title=title, description=desc, color=discord.Color.red())
+
+            if spray_chart:
+                spray_data = await self.bot.mlb_client.get_game_spray_chart_data(query, date=parsed_date)
+                if spray_data:
+                    loop = asyncio.get_event_loop()
+                    img_buffer = await loop.run_in_executor(None, generate_game_spray_chart, spray_data)
+                    filename = f"spraychart_{spray_data['away']}_{spray_data['home']}_{spray_data['game_pk']}.png"
+                    embed.set_image(url=f"attachment://{filename}")
+                    await interaction.followup.send(embed=embed, file=discord.File(fp=img_buffer, filename=filename))
+                    return
+
             await interaction.followup.send(embed=embed)
 
         else:
