@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, generate_player_card_image, _team_colors
+from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_spray_chart, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, generate_player_card_image, _team_colors
 import io
 import asyncio
 import dataclasses
@@ -2874,6 +2874,35 @@ class MLBSlash(commands.Cog):
 
     @zoneplot_command.autocomplete('player')
     async def zoneplot_player_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
+    @savant.command(name="spraychart", description="Show a batter's batted-ball spray chart from Baseball Savant")
+    @app_commands.describe(player="Batter name", year="Season year (default: current season), or 'career' for all seasons")
+    async def spraychart_command(self, interaction: discord.Interaction, player: str, year: str = None):
+        await interaction.response.defer()
+        data = await self.bot.mlb_client.get_spray_chart_data(player, year=year)
+        if not data:
+            msg = f"No spray data found for **{player}**"
+            msg += f" in {year}." if year and year.strip().lower() != 'career' else "."
+            await interaction.followup.send(msg)
+            return
+
+        loop = asyncio.get_event_loop()
+        img_buffer = await loop.run_in_executor(None, generate_spray_chart, data)
+
+        safe_name = data['player_name'].replace(' ', '_').lower()
+        safe_year = str(data['year']).replace(' ', '_').lower()
+        filename = f"spraychart_{safe_name}_{safe_year}.png"
+
+        embed = discord.Embed(
+            title=f"{data['player_name']} — Spray Chart ({data['year']})",
+            color=discord.Color.red()
+        )
+        embed.set_image(url=f"attachment://{filename}")
+        await interaction.followup.send(embed=embed, file=discord.File(fp=img_buffer, filename=filename))
+
+    @spraychart_command.autocomplete('player')
+    async def spraychart_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
     @mlb.command(name="homeruns", description="Get home runs across the league today")

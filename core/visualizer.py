@@ -962,6 +962,184 @@ def generate_zone_plot(data: dict) -> io.BytesIO:
     return buf
 
 
+# Event → (label, dot color) for spray chart legend/coloring.
+_SPRAY_EVENT_STYLE = {
+    'single':     ('1B', (70, 150, 230)),
+    'double':     ('2B', (240, 170, 40)),
+    'triple':     ('3B', (180, 90, 220)),
+    'home_run':   ('HR', (220, 50, 50)),
+}
+_SPRAY_OUT_COLOR = (120, 128, 138)
+
+
+# Angle (degrees from center field, negative = toward left field line) for each
+# MLB Stats API fieldInfo measurement, used to shape the outfield wall.
+_WALL_POINTS = [
+    ('leftLine', -45), ('left', -30), ('leftCenter', -15),
+    ('center', 0),
+    ('rightCenter', 15), ('right', 30), ('rightLine', 45),
+]
+
+
+def generate_spray_chart(data: dict) -> io.BytesIO:
+    """Render a batted-ball spray chart for a batter, shaped to their home park's real wall distances."""
+    events = data['events']
+    player_name = data['player_name']
+    year = data['year']
+    venue_name = data.get('venue_name')
+    field_info = data.get('field_info')
+
+    W = 1200
+    side_margin = 50
+    field_top = 140
+    bottom_reserve = 160   # legend + padding below home plate
+    max_plot_height = 850  # caps canvas height when the batted-ball spread is narrow
+
+    # Real per-park wall distances when available, else a generic 400ft fence.
+    wall_points_ft = None
+    if field_info:
+        try:
+            wall_points_ft = [(angle, float(field_info[key])) for key, angle in _WALL_POINTS if field_info.get(key)]
+        except (TypeError, ValueError):
+            wall_points_ft = None
+
+    generic_radius_ft = 400.0
+    if wall_points_ft:
+        raw_pts_ft = [(d * math.sin(math.radians(a)), d * math.cos(math.radians(a))) for a, d in wall_points_ft]
+    else:
+        raw_pts_ft = [(generic_radius_ft * math.sin(math.radians(a)), generic_radius_ft * math.cos(math.radians(a)))
+                      for a in (-45, 0, 45)]
+
+    for e in events:
+        try:
+            raw_pts_ft.append((float(e['hc_x_ft']), float(e['hc_y_ft'])))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    margin_ft = 20
+    max_dx_ft = max(abs(x) for x, y in raw_pts_ft) + margin_ft
+    max_dy_ft = max(y for x, y in raw_pts_ft) + margin_ft
+
+    avail_half_width = W / 2 - side_margin
+    scale = min(avail_half_width / max_dx_ft, max_plot_height / max_dy_ft)
+
+    plate_x = W / 2
+    plate_y = field_top + max_dy_ft * scale
+    H = int(plate_y + bottom_reserve)
+
+    bg = (18, 25, 33)
+    img = Image.new('RGB', (W, H), color=bg)
+    draw = ImageDraw.Draw(img)
+
+    def get_font(size, bold=False):
+        candidates = (
+            ["arialbd.ttf", "DejaVuSans-Bold.ttf",
+             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+            if bold else
+            ["arial.ttf", "DejaVuSans.ttf",
+             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+        )
+        for f in candidates:
+            try:
+                return ImageFont.truetype(f, size)
+            except:
+                continue
+        return ImageFont.load_default()
+
+    font_title    = get_font(40, bold=True)
+    font_sub      = get_font(26)
+    font_legend   = get_font(22)
+    font_distance = get_font(19, bold=True)
+
+    title = f"{player_name}  ·  Spray Chart  ·  {year}"
+    bbox = draw.textbbox((0, 0), title, font=font_title)
+    draw.text(((W - (bbox[2] - bbox[0])) // 2, 20), title, fill=(230, 230, 230), font=font_title)
+
+    subtitle = f"{len(events)} batted ball{'s' if len(events) != 1 else ''}"
+    if venue_name:
+        subtitle += f"  ·  {venue_name}"
+    bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
+    draw.text(((W - (bbox[2] - bbox[0])) // 2, 68), subtitle, fill=(150, 150, 150), font=font_sub)
+
+    def to_canvas(hc_x_ft, hc_y_ft):
+        return plate_x + hc_x_ft * scale, plate_y - hc_y_ft * scale
+
+    def polar_to_canvas(angle_deg, distance_ft):
+        rad = math.radians(angle_deg)
+        return plate_x + distance_ft * math.sin(rad) * scale, plate_y - distance_ft * math.cos(rad) * scale
+
+    max_range_ft = generic_radius_ft if not wall_points_ft else max(d for _, d in wall_points_ft)
+
+    # Foul lines (45° from home plate) — length matches the wall at that angle, or the generic radius.
+    foul_len_l = dict(wall_points_ft).get(-45, max_range_ft) if wall_points_ft else max_range_ft
+    foul_len_r = dict(wall_points_ft).get(45, max_range_ft) if wall_points_ft else max_range_ft
+    draw.line([(plate_x, plate_y), polar_to_canvas(-45, foul_len_l)], fill=(90, 100, 112), width=3)
+    draw.line([(plate_x, plate_y), polar_to_canvas(45, foul_len_r)], fill=(90, 100, 112), width=3)
+
+    # Outfield wall — real per-park shape when available, else a generic arc.
+    if wall_points_ft:
+        wall_pixels = [polar_to_canvas(angle, dist) for angle, dist in wall_points_ft]
+        draw.line(wall_pixels, fill=(90, 100, 112), width=3, joint='curve')
+
+        # Distance labels, offset outward along each point's radial direction.
+        for angle, dist in wall_points_ft:
+            lx, ly = polar_to_canvas(angle, dist + 22)
+            label = f"{dist:.0f}'"
+            bbox = draw.textbbox((0, 0), label, font=font_distance)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            draw.text((lx - tw / 2, ly - th / 2), label, fill=(170, 178, 188), font=font_distance)
+    else:
+        arc_r = max_range_ft * scale
+        draw.arc([plate_x - arc_r, plate_y - arc_r, plate_x + arc_r, plate_y + arc_r], start=225, end=315,
+                  fill=(90, 100, 112), width=3)
+
+    # Infield dirt (rough diamond)
+    infield_r = 95 * scale
+    draw.polygon([
+        (plate_x, plate_y),
+        (plate_x - infield_r, plate_y - infield_r),
+        (plate_x, plate_y - 2 * infield_r),
+        (plate_x + infield_r, plate_y - infield_r),
+    ], outline=(90, 100, 112), width=2)
+
+    # Home plate marker
+    draw.ellipse([plate_x - 5, plate_y - 5, plate_x + 5, plate_y + 5], fill=(200, 200, 205))
+
+    # Plot each batted ball
+    seen_events = set()
+    for e in events:
+        try:
+            x_ft = float(e['hc_x_ft'])
+            y_ft = float(e['hc_y_ft'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        cx, cy = to_canvas(x_ft, y_ft)
+        outcome = e.get('events') or ''
+        label, color = _SPRAY_EVENT_STYLE.get(outcome, (None, _SPRAY_OUT_COLOR))
+        seen_events.add(outcome if label else '__out__')
+        r = 6 if label else 4
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color, outline=(18, 25, 33), width=1)
+
+    # Legend
+    legend_items = [('1B', _SPRAY_EVENT_STYLE['single'][1]),
+                     ('2B', _SPRAY_EVENT_STYLE['double'][1]),
+                     ('3B', _SPRAY_EVENT_STYLE['triple'][1]),
+                     ('HR', _SPRAY_EVENT_STYLE['home_run'][1]),
+                     ('Out/Other', _SPRAY_OUT_COLOR)]
+    lx = 40
+    ly = H - 34
+    for label, color in legend_items:
+        draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color)
+        draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
+        bbox = draw.textbbox((0, 0), label, font=font_legend)
+        lx += 20 + (bbox[2] - bbox[0]) + 30
+
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    return buf
+
+
 def generate_rolling_xwoba_chart(
     points: list,
     player_name: str,

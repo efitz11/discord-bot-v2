@@ -2854,6 +2854,89 @@ class MLBClient:
             'cells': cells,
         }
 
+    async def get_venue_field_info(self, venue_id: int) -> Optional[dict]:
+        """Fetch real outfield wall distances for an MLB venue."""
+        session = await self.get_session()
+        async with session.get(f"{self.BASE_URL}/venues/{venue_id}?hydrate=fieldInfo") as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+        venues = data.get('venues', [])
+        if not venues:
+            return None
+        venue = venues[0]
+        field_info = venue.get('fieldInfo')
+        if not field_info:
+            return None
+        return {'venue_id': venue_id, 'venue_name': venue.get('name'), 'field_info': field_info}
+
+    async def get_player_home_field_info(self, player_id) -> Optional[dict]:
+        """Look up a player's current team's home venue and its real outfield dimensions."""
+        session = await self.get_session()
+        async with session.get(f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam") as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+        people = data.get('people', [])
+        if not people:
+            return None
+        team_id = people[0].get('currentTeam', {}).get('id')
+        if not team_id:
+            return None
+
+        async with session.get(f"{self.BASE_URL}/teams/{team_id}") as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+        teams = data.get('teams', [])
+        if not teams:
+            return None
+        venue_id = teams[0].get('venue', {}).get('id')
+        if not venue_id:
+            return None
+
+        return await self.get_venue_field_info(venue_id)
+
+    async def get_spray_chart_data(self, player_id_or_name: str, year: str = None) -> Optional[dict]:
+        """Fetch a batter's batted-ball spray data from Baseball Savant.
+
+        Defaults to the current season; pass year='career' for all seasons.
+        """
+        resolved = await self.resolve_player(player_id_or_name)
+        if not resolved:
+            return None
+        player_id = resolved['id']
+        player_name = resolved['name']
+
+        session = await self.get_session()
+        url = f"https://baseballsavant.mlb.com/player/full_spray?playerId={player_id}&playerType=batter"
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                return None
+            events = await resp.json(content_type=None)
+
+        if not events:
+            return None
+
+        is_career = year and year.strip().lower() == 'career'
+        target_year = None if is_career else (year or str(et_now().year))
+
+        if target_year:
+            events = [e for e in events if str(e.get('year')) == str(target_year)]
+            if not events:
+                return None
+
+        field_info = await self.get_player_home_field_info(player_id)
+
+        return {
+            'player_name': player_name,
+            'player_id': player_id,
+            'year': target_year or 'Career',
+            'events': events,
+            'venue_name': field_info['venue_name'] if field_info else None,
+            'field_info': field_info['field_info'] if field_info else None,
+        }
+
     async def get_player_transactions(self, player_id_or_name: str, year: int = None) -> Optional[dict]:
         """Fetch all transactions for a player in a given year."""
         player = await self.resolve_player(player_id_or_name)
