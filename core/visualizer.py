@@ -1015,7 +1015,14 @@ def _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_heig
                       for a in (-45, 0, 45)]
     raw_pts_ft.extend(event_points_ft)
 
-    margin_ft = 20
+    # The painted field extends past the wall/foul lines by the foul-ground apron; keep it in frame.
+    lines = dict(wall_points_ft or {})
+    line_ft = max(lines.get(-45) or generic_radius_ft, lines.get(45) or generic_radius_ft)
+    apron_edge = (line_ft + _FOUL_GROUND_FT)
+    raw_pts_ft.append((apron_edge * math.sin(math.radians(_FOUL_SPREAD_DEG)),
+                       apron_edge * math.cos(math.radians(_FOUL_SPREAD_DEG))))
+
+    margin_ft = 38   # room for the wall distance labels
     max_dx_ft = max(abs(x) for x, y in raw_pts_ft) + margin_ft
     max_dy_ft = max(y for x, y in raw_pts_ft) + margin_ft
 
@@ -1036,51 +1043,152 @@ def _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_heig
     }
 
 
-def _draw_spray_field(draw, layout, font_distance):
-    """Draw foul lines, outfield wall (+ distance labels), infield diamond, and home plate."""
+# Ballpark surface colors, tuned for the dark chart background.
+_FIELD_GRASS       = (36, 82, 54)
+_FIELD_GRASS_LIGHT = (41, 89, 59)   # mown band, alternates with _FIELD_GRASS
+_FIELD_FOUL        = (30, 40, 50)   # foul ground / backstop apron
+_FIELD_DIRT        = (128, 91, 62)
+_FIELD_TRACK       = (110, 78, 54)
+_FIELD_CHALK       = (232, 236, 240)
+_FIELD_WALL        = (196, 204, 214)
+
+# Real-field dimensions (feet) used to lay out the infield.
+_BASE_PATH_FT      = 90.0
+_MOUND_CENTER_FT   = 59.0    # from the back of home plate, along center field
+_MOUND_RADIUS_FT   = 9.0
+_INFIELD_ARC_FT    = 95.0    # dirt arc radius, measured from the mound center
+_HOME_CIRCLE_FT    = 13.0
+_BASE_PATH_WIDTH_FT = 7.0
+_WARNING_TRACK_FT  = 16.0
+_FOUL_GROUND_FT    = 22.0    # apron drawn outside the wall / foul lines
+_BACKSTOP_FT       = 46.0
+_FOUL_SPREAD_DEG   = 52.0    # apron half-angle, past the 45° foul lines
+
+
+def _draw_spray_field(img, draw, layout, font_distance):
+    """Paint the ballpark — grass, warning track, infield dirt, basepaths, mound, bases,
+    foul lines and outfield wall — then label the wall distances."""
     scale, plate_x, plate_y = layout['scale'], layout['plate_x'], layout['plate_y']
     wall_points_ft, generic_radius_ft = layout['wall_points_ft'], layout['generic_radius_ft']
 
-    def polar_to_canvas(angle_deg, distance_ft):
+    max_range_ft = max(d for _, d in wall_points_ft) if wall_points_ft else generic_radius_ft
+
+    def wall_dist_at(angle_deg):
+        """Wall distance for any angle, linearly interpolated between the park's measurements."""
+        if not wall_points_ft:
+            return generic_radius_ft
+        pts = sorted(wall_points_ft)
+        if angle_deg <= pts[0][0]:
+            return pts[0][1]
+        if angle_deg >= pts[-1][0]:
+            return pts[-1][1]
+        for (a0, d0), (a1, d1) in zip(pts, pts[1:]):
+            if a0 <= angle_deg <= a1:
+                t = 0.0 if a1 == a0 else (angle_deg - a0) / (a1 - a0)
+                return d0 + t * (d1 - d0)
+        return pts[-1][1]
+
+    # The field is painted on a supersampled layer so the curves and chalk lines come out smooth.
+    SS = 2
+    layer = Image.new('RGBA', (img.width * SS, img.height * SS), (0, 0, 0, 0))
+    fd = ImageDraw.Draw(layer)
+
+    def pt(x_ft, y_ft):
+        return ((plate_x + x_ft * scale) * SS, (plate_y - y_ft * scale) * SS)
+
+    def polar(angle_deg, dist_ft):
         rad = math.radians(angle_deg)
-        return plate_x + distance_ft * math.sin(rad) * scale, plate_y - distance_ft * math.cos(rad) * scale
+        return pt(dist_ft * math.sin(rad), dist_ft * math.cos(rad))
 
-    max_range_ft = generic_radius_ft if not wall_points_ft else max(d for _, d in wall_points_ft)
+    def circle(cx_ft, cy_ft, r_ft, **kw):
+        x0, y0 = pt(cx_ft - r_ft, cy_ft + r_ft)
+        x1, y1 = pt(cx_ft + r_ft, cy_ft - r_ft)
+        fd.ellipse([x0, y0, x1, y1], **kw)
 
-    # Foul lines (45° from home plate) — length matches the wall at that angle, or the generic radius.
-    foul_len_l = dict(wall_points_ft).get(-45, max_range_ft) if wall_points_ft else max_range_ft
-    foul_len_r = dict(wall_points_ft).get(45, max_range_ft) if wall_points_ft else max_range_ft
-    draw.line([(plate_x, plate_y), polar_to_canvas(-45, foul_len_l)], fill=(90, 100, 112), width=3)
-    draw.line([(plate_x, plate_y), polar_to_canvas(45, foul_len_r)], fill=(90, 100, 112), width=3)
+    angles = [a / 2 for a in range(-90, 91)]   # -45°..45° in half-degree steps
+    wall_ft = [(a, wall_dist_at(a)) for a in angles]
 
-    # Outfield wall — real per-park shape when available, else a generic arc.
+    # Foul ground: the fair region pushed out past the wall and widened past each foul
+    # line, plus a rounded apron behind the plate.
+    spread = int(_FOUL_SPREAD_DEG * 2)
+    apron = [(a / 2, wall_dist_at(min(max(a / 2, -45), 45)) + _FOUL_GROUND_FT)
+             for a in range(-spread, spread + 1)]
+    fd.polygon([pt(0, 0)] + [polar(a, d) for a, d in apron], fill=_FIELD_FOUL)
+    circle(0, 0, _BACKSTOP_FT, fill=_FIELD_FOUL)
+
+    # Grass out to the wall, with alternating mown wedges for depth.
+    fd.polygon([pt(0, 0)] + [polar(a, d) for a, d in wall_ft], fill=_FIELD_GRASS)
+    for i in range(0, len(wall_ft) - 1):
+        if (i // 20) % 2:
+            a0, d0 = wall_ft[i]
+            a1, d1 = wall_ft[i + 1]
+            fd.polygon([pt(0, 0), polar(a0, d0), polar(a1, d1)], fill=_FIELD_GRASS_LIGHT)
+
+    # Warning track: a band just inside the wall.
+    track_outer = [polar(a, d) for a, d in wall_ft]
+    track_inner = [polar(a, max(d - _WARNING_TRACK_FT, 1)) for a, d in reversed(wall_ft)]
+    fd.polygon(track_outer + track_inner, fill=_FIELD_TRACK)
+
+    # Infield dirt: the arc swept 95 ft around the mound, cut off by the two foul lines.
+    #   t along a foul line where it meets that arc (law of cosines, foul line at 45°).
+    proj = _MOUND_CENTER_FT * math.cos(math.radians(45))
+    foul_cut_ft = proj + math.sqrt(max(_INFIELD_ARC_FT ** 2 - (_MOUND_CENTER_FT ** 2 - proj ** 2), 0.0))
+    arc_pts = []
+    for deg in range(-180, 181, 2):
+        rad = math.radians(deg)
+        x = _INFIELD_ARC_FT * math.sin(rad)
+        y = _MOUND_CENTER_FT + _INFIELD_ARC_FT * math.cos(rad)
+        if y > 0 and abs(math.degrees(math.atan2(x, y))) <= 45:
+            arc_pts.append((math.degrees(math.atan2(x, y)), x, y))
+    arc_pts.sort()   # sweep left foul line → right foul line
+    fd.polygon([pt(0, 0), polar(-45, foul_cut_ft)] +
+               [pt(x, y) for _, x, y in arc_pts] +
+               [polar(45, foul_cut_ft)], fill=_FIELD_DIRT)
+
+    # Grass inside the basepaths — the infield diamond, inset so the paths read as dirt.
+    half = _BASE_PATH_FT / math.sqrt(2)
+    diamond = [(0.0, 0.0), (half, half), (0.0, 2 * half), (-half, half)]
+    cx_d, cy_d = 0.0, half
+    shrink = 1 - _BASE_PATH_WIDTH_FT / (half / math.sqrt(2))   # centroid→edge distance
+    fd.polygon([pt(cx_d + (x - cx_d) * shrink, cy_d + (y - cy_d) * shrink) for x, y in diamond],
+               fill=_FIELD_GRASS)
+
+    # Home plate circle and pitcher's mound.
+    circle(0, 0, _HOME_CIRCLE_FT, fill=_FIELD_DIRT)
+    circle(0, _MOUND_CENTER_FT, _MOUND_RADIUS_FT, fill=_FIELD_DIRT)
+    rub_x, rub_y = pt(-1.0, _MOUND_CENTER_FT + 1.5)
+    rub_x1, rub_y1 = pt(1.0, _MOUND_CENTER_FT + 0.7)
+    fd.rectangle([rub_x, rub_y, max(rub_x1, rub_x + SS), max(rub_y1, rub_y + SS)], fill=_FIELD_CHALK)
+
+    # Foul lines out to the wall, and the bases.
+    chalk_w = max(int(0.9 * scale * SS), 2)
+    for side in (-45, 45):
+        fd.line([pt(0, 0), polar(side, wall_dist_at(side))], fill=_FIELD_CHALK, width=chalk_w)
+
+    base_half = max(1.4 * scale * SS, 3)
+    for bx, by in ((half, half), (0.0, 2 * half), (-half, half)):
+        bcx, bcy = pt(bx, by)
+        fd.rectangle([bcx - base_half, bcy - base_half, bcx + base_half, bcy + base_half], fill=_FIELD_CHALK)
+    hx, hy = pt(0, 0)
+    fd.polygon([(hx - base_half, hy - base_half), (hx + base_half, hy - base_half),
+                (hx + base_half, hy), (hx, hy + base_half), (hx - base_half, hy)], fill=_FIELD_CHALK)
+
+    # Outfield wall.
+    fd.line([polar(a, d) for a, d in wall_ft], fill=_FIELD_WALL, width=max(int(2 * SS), 2), joint='curve')
+
+    flat = layer.resize(img.size, Image.LANCZOS)
+    img.paste(flat, (0, 0), flat)
+
+    # Wall distance labels, offset outward along each measurement's radial direction.
     if wall_points_ft:
-        wall_pixels = [polar_to_canvas(angle, dist) for angle, dist in wall_points_ft]
-        draw.line(wall_pixels, fill=(90, 100, 112), width=3, joint='curve')
-
-        # Distance labels, offset outward along each point's radial direction.
         for angle, dist in wall_points_ft:
-            lx, ly = polar_to_canvas(angle, dist + 22)
+            rad = math.radians(angle)
+            lx = plate_x + (dist + 32) * math.sin(rad) * scale
+            ly = plate_y - (dist + 32) * math.cos(rad) * scale
             label = f"{dist:.0f}'"
             bbox = draw.textbbox((0, 0), label, font=font_distance)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
             draw.text((lx - tw / 2, ly - th / 2), label, fill=(170, 178, 188), font=font_distance)
-    else:
-        arc_r = max_range_ft * scale
-        draw.arc([plate_x - arc_r, plate_y - arc_r, plate_x + arc_r, plate_y + arc_r], start=225, end=315,
-                  fill=(90, 100, 112), width=3)
-
-    # Infield dirt (rough diamond)
-    infield_r = 95 * scale
-    draw.polygon([
-        (plate_x, plate_y),
-        (plate_x - infield_r, plate_y - infield_r),
-        (plate_x, plate_y - 2 * infield_r),
-        (plate_x + infield_r, plate_y - infield_r),
-    ], outline=(90, 100, 112), width=2)
-
-    # Home plate marker
-    draw.ellipse([plate_x - 5, plate_y - 5, plate_x + 5, plate_y + 5], fill=(200, 200, 205))
 
 
 def generate_spray_chart(data: dict) -> io.BytesIO:
@@ -1129,7 +1237,7 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
     def to_canvas(hc_x_ft, hc_y_ft):
         return plate_x + hc_x_ft * scale, plate_y - hc_y_ft * scale
 
-    _draw_spray_field(draw, layout, font_distance)
+    _draw_spray_field(img, draw, layout, font_distance)
 
     # Plot each batted ball
     for e in events:
@@ -1222,7 +1330,7 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
     def to_canvas(hc_x_ft, hc_y_ft):
         return plate_x + hc_x_ft * scale, plate_y - hc_y_ft * scale
 
-    _draw_spray_field(draw, layout, font_distance)
+    _draw_spray_field(img, draw, layout, font_distance)
 
     # Plot each batted ball — filled = hit, hollow = out/other, larger ring = home run.
     for e in events:
