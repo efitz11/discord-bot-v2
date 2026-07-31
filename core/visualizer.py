@@ -1282,6 +1282,23 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
     venue_name = data.get('venue_name')
     field_info = data.get('field_info')
     game_label = data.get('game_label', '')
+    game_date = data.get('game_date', '')
+    scoreboard = data.get('scoreboard') or {}
+    linescore = scoreboard.get('linescore') or {}
+    ls_teams = linescore.get('teams') or {}
+    away_runs = ls_teams.get('away', {}).get('runs')
+    home_runs = ls_teams.get('home', {}).get('runs')
+
+    score_str = None
+    if away_runs is not None and home_runs is not None:
+        score_str = f"{away} {away_runs} – {home} {home_runs}"
+
+    state_str = game_label
+    if game_label and 'progress' in game_label.lower():
+        ordinal = linescore.get('currentInningOrdinal')
+        half = linescore.get('inningState') or linescore.get('inningHalf')
+        if ordinal:
+            state_str = f"{half + ' ' if half else ''}{ordinal}"
 
     away_color = _readable(_team_colors(away)[0])
     home_color = _readable(_team_colors(home)[0])
@@ -1319,11 +1336,17 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
     bbox = draw.textbbox((0, 0), title, font=font_title)
     draw.text(((W - (bbox[2] - bbox[0])) // 2, 20), title, fill=(230, 230, 230), font=font_title)
 
-    subtitle = f"{len(events)} batted ball{'s' if len(events) != 1 else ''}"
-    if game_label:
-        subtitle += f"  ·  {game_label}"
+    subtitle_parts = []
+    if score_str:
+        subtitle_parts.append(score_str)
+    if state_str:
+        subtitle_parts.append(state_str)
+    if game_date:
+        subtitle_parts.append(game_date)
+    subtitle_parts.append(f"{len(events)} batted ball{'s' if len(events) != 1 else ''}")
     if venue_name:
-        subtitle += f"  ·  {venue_name}"
+        subtitle_parts.append(venue_name)
+    subtitle = "  ·  ".join(subtitle_parts)
     bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
     draw.text(((W - (bbox[2] - bbox[0])) // 2, 68), subtitle, fill=(150, 150, 150), font=font_sub)
 

@@ -2477,12 +2477,20 @@ class MLBClient:
         venue_id = data.get('venue_id')
         field_info = await self.get_venue_field_info(venue_id) if venue_id else None
 
+        game_date_str = game.game_date_str
+        try:
+            game_date_str = datetime.strptime(data['game_date'], "%Y-%m-%d").strftime("%A, %b %d, %Y").replace(" 0", " ")
+        except (KeyError, ValueError):
+            pass
+
         return {
             'game_pk': game.game_pk,
             'away': game.away.abbreviation,
             'home': game.home.abbreviation,
             'events': events,
             'game_label': game.status,
+            'game_date': game_date_str,
+            'scoreboard': data.get('scoreboard', {}),
             'venue_name': field_info['venue_name'] if field_info else None,
             'field_info': field_info['field_info'] if field_info else None,
         }
