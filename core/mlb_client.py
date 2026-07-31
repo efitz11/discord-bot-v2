@@ -1204,7 +1204,7 @@ class MLBClient:
 
         headshot_url = player_headshot_url(player_id)
 
-        async with session.get(f"{self.BASE_URL}/people/{player_id}") as resp:
+        async with session.get(f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam") as resp:
             person_data = await resp.json()
         if not person_data.get('people'):
             return []
@@ -1219,7 +1219,8 @@ class MLBClient:
         if not stat_type:
             stat_type = "pitching" if pos == "P" else "hitting"
 
-        season = year or str(datetime.now().year)
+        is_career = bool(year) and str(year).strip().lower() == 'career'
+        season = "Career" if is_career else (year or str(datetime.now().year))
 
         _month_abbrevs = {'3':'Mar','4':'Apr','5':'May','6':'Jun','7':'Jul','8':'Aug','9':'Sep','10':'Oct'}
         _pos_abbrevs   = {'p1':'P','p2':'C','p3':'1B','p4':'2B','p5':'3B','p6':'SS','p7':'LF','p8':'CF','p9':'RF','pD':'DH','pH':'PH'}
@@ -1250,17 +1251,23 @@ class MLBClient:
         else:
             api_sit_code = sit_code
 
-        url = (
-            f"{self.BASE_URL}/people/{player_id}/stats"
-            f"?stats=statSplits&group={stat_type}&season={season}&sportId=1&sitCodes={api_sit_code}"
-        )
+        if is_career:
+            url = (
+                f"{self.BASE_URL}/people/{player_id}/stats"
+                f"?stats=careerStatSplits&group={stat_type}&sportId=1&sitCodes={api_sit_code}"
+            )
+        else:
+            url = (
+                f"{self.BASE_URL}/people/{player_id}/stats"
+                f"?stats=statSplits&group={stat_type}&season={season}&sportId=1&sitCodes={api_sit_code}"
+            )
         async with session.get(url) as resp:
             data = await resp.json()
 
         api_stats = data.get('stats', [])
         splits = api_stats[0].get('splits', []) if api_stats else []
 
-        # Use the team from the split data (accurate for the queried season)
+        # Use the team from the split data (accurate for the queried season) — career splits have no team.
         split_team_id = splits[0].get('team', {}).get('id') if splits else None
         if split_team_id:
             async with session.get(f"{self.BASE_URL}/teams/{split_team_id}") as tresp:
@@ -1273,7 +1280,7 @@ class MLBClient:
                 team_abbrev=team_abbrev,
                 stat_type=stat_type,
                 years=season,
-                is_career=False,
+                is_career=is_career,
                 info_line=info_line,
                 stats=[],
                 info_message=f"No {stat_type} split stats found for {player_name} in {season}.",
@@ -1317,7 +1324,7 @@ class MLBClient:
             team_abbrev=team_abbrev,
             stat_type=stat_type,
             years=season,
-            is_career=False,
+            is_career=is_career,
             info_line=info_line,
             stats=stat_rows,
             headshot_url=headshot_url,
