@@ -103,6 +103,7 @@ bot = ModernNatsBot()
 
 @bot.event
 async def on_ready():
+    assert bot.user
     print(f'Logged in as {bot.user.name} (ID: {bot.user.id})')
     print('------')
 
