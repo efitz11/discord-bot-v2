@@ -1476,7 +1476,7 @@ class MLBSlash(commands.Cog):
     @app_commands.describe(player="The player to search for")
     @app_commands.describe(split="The stat split to view")
     @app_commands.describe(split2="Optional second split to display alongside the first")
-    @app_commands.describe(year="Season year (default: current year)")
+    @app_commands.describe(year="Season year (default: current year), or 'career' for all seasons")
     @app_commands.describe(stat_type="Hitting or Pitching. Leave blank for default.")
     @app_commands.choices(stat_type=[
         app_commands.Choice(name="Hitting", value="hitting"),
