@@ -1268,39 +1268,48 @@ class MLBSlash(commands.Cog):
         # Teams first, then players, capped at 25
         return (team_choices + player_choices)[:25]
 
-    @savant.command(name="gamespray", description="Get a team's game-level spray chart of every batted ball")
+    @savant.command(name="gamespray", description="Get a game-level spray chart for a team, or a player's batted balls in their game")
     @app_commands.describe(
-        team="Team abbreviation/name",
+        query="Team abbreviation/name (all batted balls, by team), or player name (hitter: their ABs; pitcher: balls allowed)",
         date="A specific date (e.g. 4/7/26, yesterday, +2, -5)"
     )
-    async def gamespray(self, interaction: discord.Interaction, team: str, date: str = None):
+    async def gamespray(self, interaction: discord.Interaction, query: str, date: str = None):
         await interaction.response.defer()
         parsed_date = parse_date(date)
 
-        team_id = await self.bot.mlb_client.get_team_id(team)
-        if not team_id:
-            await interaction.followup.send(f"No matching team found for **{team}**.")
-            return
+        team_id = await self.bot.mlb_client.get_team_id(query)
 
-        spray_data = await self.bot.mlb_client.get_game_spray_chart_data(team, date=parsed_date)
-        if not spray_data:
-            await interaction.followup.send(f"No Statcast data found for **{team.upper()}** today.")
-            return
+        if team_id:
+            spray_data = await self.bot.mlb_client.get_game_spray_chart_data(team_query=query, date=parsed_date)
+            if not spray_data:
+                await interaction.followup.send(f"No Statcast data found for **{query.upper()}** today.")
+                return
+            title = f"⚾ {spray_data['away']} @ {spray_data['home']} — Spray Chart"
+        else:
+            resolved = await self.bot.mlb_client.resolve_player(query)
+            if not resolved:
+                await interaction.followup.send(f"No matching team or player found for **{query}**.")
+                return
+            spray_data = await self.bot.mlb_client.get_game_spray_chart_data(player_id=str(resolved['id']), date=parsed_date)
+            if not spray_data:
+                await interaction.followup.send(f"No batted-ball Statcast data found for **{resolved['name']}** today.")
+                return
+            role = "Batted Balls Allowed" if spray_data.get('is_pitcher') else "Batted Balls"
+            title = f"⚾ {spray_data['player_name']} — {role}"
 
         loop = asyncio.get_event_loop()
         img_buffer = await loop.run_in_executor(None, generate_game_spray_chart, spray_data)
         filename = f"spraychart_{spray_data['away']}_{spray_data['home']}_{spray_data['game_pk']}.png"
-        embed = discord.Embed(
-            title=f"⚾ {spray_data['away']} @ {spray_data['home']} — Spray Chart",
-            color=discord.Color.red()
-        )
+        embed = discord.Embed(title=title, color=discord.Color.red())
         embed.set_image(url=f"attachment://{filename}")
         await interaction.followup.send(embed=embed, file=discord.File(fp=img_buffer, filename=filename))
 
-    @gamespray.autocomplete('team')
-    async def gamespray_team_ac(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    @gamespray.autocomplete('query')
+    async def gamespray_query_ac(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         team_choices = await self.team_autocomplete(interaction, current)
-        return [c for c in team_choices if c.value != 'all'][:25]
+        team_choices = [c for c in team_choices if c.value != 'all']
+        player_choices = await self.player_autocomplete(interaction, current)
+        return (team_choices + player_choices)[:25]
 
     @savant.command(name="leaders", description="Get Statcast leaderboards from Baseball Savant")
     @app_commands.describe(
