@@ -1273,15 +1273,62 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
 
 
 _GAME_SPRAY_HIT_EVENTS = {'single', 'double', 'triple', 'home_run'}
+_GAME_SPRAY_OUT_COLOR = (150, 150, 150)
+_GAME_SPRAY_OUTCOME_COLORS = {
+    'single': (57, 135, 229),    # blue
+    'double': (217, 89, 38),     # orange
+    'triple': (25, 158, 112),    # aqua
+    'home_run': (237, 161, 0),   # gold
+}
+_GAME_SPRAY_OUTCOME_LEGEND = [
+    ('Single', _GAME_SPRAY_OUTCOME_COLORS['single'], 'filled'),
+    ('Double', _GAME_SPRAY_OUTCOME_COLORS['double'], 'filled'),
+    ('Triple', _GAME_SPRAY_OUTCOME_COLORS['triple'], 'filled'),
+    ('HR', _GAME_SPRAY_OUTCOME_COLORS['home_run'], 'ring'),
+    ('Out/Other', _GAME_SPRAY_OUT_COLOR, 'hollow'),
+]
+
+
+def _spray_ordinal(n):
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return str(n)
+    suffix = 'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return f"{n}{suffix}"
+
+
+def _spray_wrap_text(draw, text, font, max_width):
+    words = text.split()
+    lines = []
+    cur = ""
+    for w in words:
+        trial = f"{cur} {w}".strip()
+        if not cur or draw.textlength(trial, font=font) <= max_width:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
 
 
 def generate_game_spray_chart(data: dict) -> io.BytesIO:
-    """Render a game-level spray chart with every batted ball from both teams, colored by batting team."""
+    """
+    Render a spray chart of batted balls.
+    Team-level charts (data['color_by'] == 'team') color dots by batting team.
+    Player-level charts (data['color_by'] == 'outcome') show one player's batted balls,
+    colored by result (single/double/triple/HR/out).
+    """
     events = data['events']
     away, home = data['away'], data['home']
     venue_name = data.get('venue_name')
     field_info = data.get('field_info')
     game_label = data.get('game_label', '')
+    color_by = data.get('color_by', 'team')
+    player_name = data.get('player_name')
+    is_pitcher = data.get('is_pitcher')
     game_date = data.get('game_date', '')
     scoreboard = data.get('scoreboard') or {}
     linescore = scoreboard.get('linescore') or {}
@@ -1324,7 +1371,52 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
     scale, plate_x, plate_y, H = layout['scale'], layout['plate_x'], layout['plate_y'], layout['H']
 
     bg = (18, 25, 33)
-    img = Image.new('RGB', (W, H), color=bg)
+
+    # For a single hitter's own batted balls, add a numbered play-by-play panel on the right,
+    # matching each dot on the field to its description and Statcast metrics.
+    show_play_list = color_by == 'outcome' and is_pitcher is False and bool(player_name)
+    panel_w = 460 if show_play_list else 0
+    play_entries = []
+    if show_play_list:
+        font_panel_hdr  = _spray_field_font(20, bold=True)
+        font_panel_desc = _spray_field_font(18)
+        font_panel_stat = _spray_field_font(16)
+        panel_text_w = panel_w - 60
+        panel_top = 110
+        entry_gap = 18
+
+        measure_draw = ImageDraw.Draw(Image.new('RGB', (10, 10)))
+        y_cursor = panel_top
+        for i, e in enumerate(events, 1):
+            inning = e.get('inning')
+            half = (e.get('half_inning') or '').lower()
+            inning_label = f"{'Top' if half == 'top' else 'Bot'} {_spray_ordinal(inning)}" if inning else ""
+            pitcher_name = e.get('pitcher_name') or ''
+            header = f"{i}.  {inning_label}" + (f" vs {pitcher_name}" if pitcher_name else "")
+            des = e.get('des') or e.get('result') or ''
+            desc_lines = _spray_wrap_text(measure_draw, des, font_panel_desc, panel_text_w)
+
+            stat_parts = []
+            ev, la, dist, xba = e.get('hit_speed'), e.get('hit_angle'), e.get('hit_distance'), e.get('xba')
+            if ev not in (None, ''):
+                stat_parts.append(f"{ev} mph")
+            if la not in (None, ''):
+                stat_parts.append(f"{la}°")
+            if dist not in (None, ''):
+                stat_parts.append(f"{dist} ft")
+            if xba not in (None, ''):
+                stat_parts.append(f"xBA {xba}")
+            stat_line = "  ·  ".join(stat_parts)
+
+            entry_height = 26 + len(desc_lines) * 22 + (22 if stat_line else 0) + entry_gap
+            play_entries.append({
+                'num': i, 'header': header, 'desc_lines': desc_lines, 'stat_line': stat_line,
+            })
+            y_cursor += entry_height
+
+        H = max(H, y_cursor + 40)
+
+    img = Image.new('RGB', (W + panel_w, H), color=bg)
     draw = ImageDraw.Draw(img)
 
     font_title    = _spray_field_font(40, bold=True)
@@ -1332,11 +1424,17 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
     font_legend   = _spray_field_font(22)
     font_distance = _spray_field_font(19, bold=True)
 
-    title = f"{away} @ {home}  ·  Spray Chart"
+    if player_name:
+        role = "Batted Balls Allowed" if is_pitcher else "Batted Balls"
+        title = f"{player_name}  ·  {role}"
+    else:
+        title = f"{away} @ {home}  ·  Spray Chart"
     bbox = draw.textbbox((0, 0), title, font=font_title)
     draw.text(((W - (bbox[2] - bbox[0])) // 2, 20), title, fill=(230, 230, 230), font=font_title)
 
     subtitle_parts = []
+    if player_name:
+        subtitle_parts.append(f"{away} @ {home}")
     if score_str:
         subtitle_parts.append(score_str)
     if state_str:
@@ -1347,7 +1445,15 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
     if venue_name:
         subtitle_parts.append(venue_name)
     subtitle = "  ·  ".join(subtitle_parts)
+    max_sub_width = W - 80
     bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
+    if bbox[2] - bbox[0] > max_sub_width and venue_name and len(subtitle_parts) > 1:
+        # Drop the venue first if the line is too wide for the canvas.
+        subtitle = "  ·  ".join(subtitle_parts[:-1])
+        bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
+    while bbox[2] - bbox[0] > max_sub_width and font_sub.size > 16:
+        font_sub = _spray_field_font(font_sub.size - 2)
+        bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
     draw.text(((W - (bbox[2] - bbox[0])) // 2, 68), subtitle, fill=(150, 150, 150), font=font_sub)
 
     def to_canvas(hc_x_ft, hc_y_ft):
@@ -1355,50 +1461,100 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
 
     _draw_spray_field(img, draw, layout, font_distance)
 
+    font_badge = _spray_field_font(15, bold=True) if show_play_list else None
+
     # Plot each batted ball — filled = hit, hollow = out/other, larger ring = home run.
-    for e in events:
+    for i, e in enumerate(events, 1):
         try:
             x_ft = float(e['hc_x_ft'])
             y_ft = float(e['hc_y_ft'])
         except (KeyError, TypeError, ValueError):
             continue
         cx, cy = to_canvas(x_ft, y_ft)
-        team_batting = e.get('team_batting') or ''
-        color = home_color if team_batting == home else away_color
         outcome = (e.get('events') or '').lower().replace(' ', '_')
         is_hr = outcome == 'home_run'
         is_hit = outcome in _GAME_SPRAY_HIT_EVENTS
 
-        if is_hr:
-            draw.ellipse([cx - 9, cy - 9, cx + 9, cy + 9], fill=color, outline=(255, 215, 0), width=2)
-        elif is_hit:
-            draw.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=color, outline=(18, 25, 33), width=1)
+        if color_by == 'outcome':
+            color = _GAME_SPRAY_OUTCOME_COLORS.get(outcome, _GAME_SPRAY_OUT_COLOR)
+            if is_hr:
+                draw.ellipse([cx - 9, cy - 9, cx + 9, cy + 9], fill=color, outline=(255, 255, 255), width=2)
+            elif is_hit:
+                draw.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=color, outline=(18, 25, 33), width=1)
+            else:
+                draw.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], outline=_GAME_SPRAY_OUT_COLOR, width=2)
         else:
-            draw.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], outline=color, width=2)
+            team_batting = e.get('team_batting') or ''
+            color = home_color if team_batting == home else away_color
+            if is_hr:
+                draw.ellipse([cx - 9, cy - 9, cx + 9, cy + 9], fill=color, outline=(255, 215, 0), width=2)
+            elif is_hit:
+                draw.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=color, outline=(18, 25, 33), width=1)
+            else:
+                draw.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], outline=color, width=2)
 
-    # Legend — team colors, then marker meaning.
-    lx = 40
-    ly = H - 66
-    for label, color in ((away, away_color), (home, home_color)):
-        draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color)
-        draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
-        bbox = draw.textbbox((0, 0), label, font=font_legend)
-        lx += 20 + (bbox[2] - bbox[0]) + 40
+        if show_play_list:
+            bx, by = cx + 13, cy - 13
+            num_str = str(i)
+            bbox = draw.textbbox((0, 0), num_str, font=font_badge)
+            r = max(bbox[2] - bbox[0], bbox[3] - bbox[1]) / 2 + 4
+            draw.ellipse([bx - r, by - r, bx + r, by + r], fill=(18, 25, 33), outline=(230, 230, 230), width=1)
+            draw.text((bx - (bbox[2] - bbox[0]) / 2, by - (bbox[3] - bbox[1]) / 2 - bbox[1]), num_str,
+                       fill=(230, 230, 230), font=font_badge)
 
-    lx = 40
-    ly = H - 34
-    marker_items = [('Hit', 'filled'), ('Out/Other', 'hollow'), ('HR', 'gold_ring')]
-    for label, kind in marker_items:
-        neutral = (170, 178, 188)
-        if kind == 'filled':
-            draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=neutral)
-        elif kind == 'hollow':
-            draw.ellipse([lx, ly - 6, lx + 12, ly + 6], outline=neutral, width=2)
-        else:
-            draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=neutral, outline=(255, 215, 0), width=2)
-        draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
-        bbox = draw.textbbox((0, 0), label, font=font_legend)
-        lx += 20 + (bbox[2] - bbox[0]) + 30
+    if color_by == 'outcome':
+        # Legend — one row, colored by batted-ball result.
+        lx = 40
+        ly = H - 40
+        for label, color, kind in _GAME_SPRAY_OUTCOME_LEGEND:
+            if kind == 'filled':
+                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color)
+            elif kind == 'hollow':
+                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], outline=color, width=2)
+            else:
+                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color, outline=(255, 255, 255), width=2)
+            draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
+            bbox = draw.textbbox((0, 0), label, font=font_legend)
+            lx += 20 + (bbox[2] - bbox[0]) + 30
+    else:
+        # Legend — team colors, then marker meaning.
+        lx = 40
+        ly = H - 66
+        for label, color in ((away, away_color), (home, home_color)):
+            draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color)
+            draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
+            bbox = draw.textbbox((0, 0), label, font=font_legend)
+            lx += 20 + (bbox[2] - bbox[0]) + 40
+
+        lx = 40
+        ly = H - 34
+        marker_items = [('Hit', 'filled'), ('Out/Other', 'hollow'), ('HR', 'gold_ring')]
+        for label, kind in marker_items:
+            neutral = (170, 178, 188)
+            if kind == 'filled':
+                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=neutral)
+            elif kind == 'hollow':
+                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], outline=neutral, width=2)
+            else:
+                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=neutral, outline=(255, 215, 0), width=2)
+            draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
+            bbox = draw.textbbox((0, 0), label, font=font_legend)
+            lx += 20 + (bbox[2] - bbox[0]) + 30
+
+    if show_play_list:
+        panel_x = W + 30
+        draw.line([(W, 0), (W, H)], fill=(45, 55, 65), width=1)
+        y = panel_top
+        for entry in play_entries:
+            draw.text((panel_x, y), entry['header'], fill=(230, 230, 230), font=font_panel_hdr)
+            y += 26
+            for line in entry['desc_lines']:
+                draw.text((panel_x, y), line, fill=(190, 190, 190), font=font_panel_desc)
+                y += 22
+            if entry['stat_line']:
+                draw.text((panel_x, y), entry['stat_line'], fill=(140, 148, 158), font=font_panel_stat)
+                y += 22
+            y += entry_gap
 
     buf = io.BytesIO()
     img.save(buf, format='PNG')

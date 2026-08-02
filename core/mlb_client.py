@@ -2460,8 +2460,28 @@ class MLBClient:
             'scoreboard': data.get('scoreboard', {}),
         }
 
-    async def get_game_spray_chart_data(self, team_query: str, date: str = None) -> Optional[dict]:
-        """Fetch every batted ball (both teams) from a game's Baseball Savant feed, for a game-level spray chart."""
+    async def get_game_spray_chart_data(self, team_query: str = None, player_id: str = None, date: str = None) -> Optional[dict]:
+        """
+        Fetch batted balls from a game's Baseball Savant feed, for a spray chart.
+        If team_query is given, returns every batted ball from both teams (colored by team).
+        If player_id is given instead, resolves the player's current team/game and returns only
+        that player's batted balls — as batter if a hitter, as pitcher-against if a pitcher
+        (colored by outcome).
+        """
+        player_name = None
+        is_pitcher = False
+        if team_query is None and player_id is not None:
+            session = await self.get_session()
+            async with session.get(f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam") as resp:
+                person = (await resp.json()).get('people', [{}])[0] if resp.status == 200 else {}
+            team_id = person.get('currentTeam', {}).get('id')
+            if not team_id:
+                return None
+            abbrevs = await self.get_team_abbrevs()
+            team_query = abbrevs.get(team_id, '')
+            player_name = person.get('fullName')
+            is_pitcher = person.get('primaryPosition', {}).get('abbreviation') == 'P'
+
         games = await self.get_todays_games(team_query=team_query, date=date)
         if not games:
             return None
@@ -2478,6 +2498,10 @@ class MLBClient:
             return None
 
         events = [e for e in data.get('exit_velocity', []) if e.get('hc_x_ft') is not None and e.get('hc_y_ft') is not None]
+        if player_id is not None:
+            pid = int(player_id)
+            key = 'pitcher' if is_pitcher else 'batter'
+            events = [e for e in events if e.get(key) == pid]
         if not events:
             return None
 
@@ -2500,6 +2524,9 @@ class MLBClient:
             'scoreboard': data.get('scoreboard', {}),
             'venue_name': field_info['venue_name'] if field_info else None,
             'field_info': field_info['field_info'] if field_info else None,
+            'player_name': player_name,
+            'is_pitcher': is_pitcher if player_id else None,
+            'color_by': 'outcome' if player_id else 'team',
         }
 
     async def get_pitcher_game_feed(self, team_query: str, date: str = None, player_id: int = None) -> dict:
