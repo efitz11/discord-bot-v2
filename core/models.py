@@ -19,6 +19,7 @@ __all__ = [
     "format_table",
     "score_hitter_line",
     "score_pitcher_line",
+    "aggregate_game_log_stats",
     "collect_team_performances",
     "build_player_info_line",
     "stat_groups_for",
@@ -203,6 +204,91 @@ def score_pitcher_line(p: dict):
 
     game_score = 50 + outs + k - 2*h - 4*er - 2*ur - bb + 2*max(0, full_innings - 4)
     return game_score, outs, f"{ip_str} IP, {er} ER, {k} K, {bb} BB"
+
+
+def _outs_from_ip(ip_str) -> int:
+    """Convert an MLB 'innings pitched' string (e.g. '5.2') to total outs recorded."""
+    try:
+        whole, _, thirds = str(ip_str).partition(".")
+        return int(whole or 0) * 3 + int(thirds or 0)
+    except ValueError:
+        return 0
+
+
+def _ip_from_outs(outs: int) -> str:
+    return f"{outs // 3}.{outs % 3}"
+
+
+def aggregate_game_log_stats(splits: List[dict], stat_type: str) -> dict:
+    """Sum a list of gameLog 'stat' dicts (one per game) into a single combined
+    stat dict, recomputing the rate stats that the API only provides per-game."""
+    stats = [sp.get('stat', {}) for sp in splits]
+    if not stats:
+        return {}
+
+    def total(key):
+        return sum(s.get(key, 0) or 0 for s in stats)
+
+    if stat_type == "hitting":
+        ab = total('atBats')
+        h = total('hits')
+        bb = total('baseOnBalls')
+        hbp = total('hitByPitch')
+        sf = total('sacFlies')
+        doubles = total('doubles')
+        triples = total('triples')
+        hr = total('homeRuns')
+        singles = h - doubles - triples - hr
+        total_bases = singles + doubles * 2 + triples * 3 + hr * 4
+        obp_denom = ab + bb + hbp + sf
+        avg = h / ab if ab else 0.0
+        obp = (h + bb + hbp) / obp_denom if obp_denom else 0.0
+        slg = total_bases / ab if ab else 0.0
+        agg = {
+            'gamesPlayed': total('gamesPlayed') or len(stats),
+            'plateAppearances': total('plateAppearances'),
+            'atBats': ab, 'runs': total('runs'), 'hits': h,
+            'doubles': doubles, 'triples': triples, 'homeRuns': hr,
+            'rbi': total('rbi'), 'baseOnBalls': bb, 'strikeOuts': total('strikeOuts'),
+            'stolenBases': total('stolenBases'), 'caughtStealing': total('caughtStealing'),
+            'intentionalWalks': total('intentionalWalks'), 'hitByPitch': hbp,
+            'avg': f"{avg:.3f}".lstrip('0') if avg < 1 else f"{avg:.3f}",
+            'obp': f"{obp:.3f}".lstrip('0') if obp < 1 else f"{obp:.3f}",
+            'slg': f"{slg:.3f}".lstrip('0') if slg < 1 else f"{slg:.3f}",
+            'ops': f"{(obp + slg):.3f}".lstrip('0') if (obp + slg) < 1 else f"{(obp + slg):.3f}",
+        }
+        return agg
+
+    # pitching
+    outs = sum(_outs_from_ip(s.get('inningsPitched', '0.0')) for s in stats)
+    ip = outs / 3
+    er = total('earnedRuns')
+    h = total('hits')
+    bb = total('baseOnBalls')
+    k = total('strikeOuts')
+    ab_against = total('atBats')
+    hits_against = h
+    era = (er * 9 / ip) if ip else 0.0
+    whip = ((bb + h) / ip) if ip else 0.0
+    k9 = (k * 9 / ip) if ip else 0.0
+    bb9 = (bb * 9 / ip) if ip else 0.0
+    kbb = (k / bb) if bb else float(k)
+    avg_against = (hits_against / ab_against) if ab_against else 0.0
+    return {
+        'wins': total('wins'), 'losses': total('losses'),
+        'gamesPlayed': total('gamesPitched') or len(stats),
+        'gamesStarted': total('gamesStarted'),
+        'completeGames': total('completeGames'), 'shutouts': total('shutouts'),
+        'saveOpportunities': total('saveOpportunities'), 'saves': total('saves'),
+        'holds': total('holds'),
+        'inningsPitched': _ip_from_outs(outs),
+        'hits': h, 'runs': total('runs'), 'earnedRuns': er, 'homeRuns': total('homeRuns'),
+        'baseOnBalls': bb, 'strikeOuts': k,
+        'era': f"{era:.2f}", 'whip': f"{whip:.2f}",
+        'strikeoutsPer9Inn': f"{k9:.2f}", 'walksPer9Inn': f"{bb9:.2f}",
+        'strikeoutWalkRatio': f"{kbb:.2f}",
+        'avg': f"{avg_against:.3f}".lstrip('0') if avg_against < 1 else f"{avg_against:.3f}",
+    }
 
 
 def collect_team_performances(team_data: dict) -> tuple:
@@ -1333,13 +1419,17 @@ class PlayerGameLogData:
 
     def format_log(self) -> str:
         if self.position_type == 'pitching':
-            labels = ['date', 'opp', 'ip', 'h', 'r', 'er', 'bb', 'so', 'hr', 'p', 's', 'dec']
-            repl = {'date': 'DATE', 'opp': 'OPP', 'ip': 'IP', 'h': 'H', 'r': 'R', 'er': 'ER', 'bb': 'BB', 'so': 'SO', 'hr': 'HR', 'p': 'P', 's': 'S', 'dec': 'DEC'}
-            left_cols = {'date', 'opp', 'dec'}
+            labels = ['date', 'tm', 'opp', 'ip', 'h', 'r', 'er', 'bb', 'so', 'hr', 'p', 's', 'dec']
+            repl = {'date': 'DATE', 'tm': 'TM', 'opp': 'OPP', 'ip': 'IP', 'h': 'H', 'r': 'R', 'er': 'ER', 'bb': 'BB', 'so': 'SO', 'hr': 'HR', 'p': 'P', 's': 'S', 'dec': 'DEC'}
+            left_cols = {'date', 'tm', 'opp', 'dec'}
         else:
-            labels = ['date', 'opp', 'ab', 'r', 'h', '2b', '3b', 'hr', 'rbi', 'bb', 'so', 'lob', 'avg', 'obp', 'slg', 'ops']
-            repl = {'date': 'DATE', 'opp': 'OPP', 'ab': 'AB', 'r': 'R', 'h': 'H', '2b': '2B', '3b': '3B', 'hr': 'HR', 'rbi': 'RBI', 'bb': 'BB', 'so': 'SO', 'lob': 'LOB', 'avg': 'AVG', 'obp': 'OBP', 'slg': 'SLG', 'ops': 'OPS'}
-            left_cols = {'date', 'opp'}
+            labels = ['date', 'tm', 'opp', 'ab', 'r', 'h', '2b', '3b', 'hr', 'rbi', 'bb', 'so', 'lob', 'avg', 'obp', 'slg', 'ops']
+            repl = {'date': 'DATE', 'tm': 'TM', 'opp': 'OPP', 'ab': 'AB', 'r': 'R', 'h': 'H', '2b': '2B', '3b': '3B', 'hr': 'HR', 'rbi': 'RBI', 'bb': 'BB', 'so': 'SO', 'lob': 'LOB', 'avg': 'AVG', 'obp': 'OBP', 'slg': 'SLG', 'ops': 'OPS'}
+            left_cols = {'date', 'tm', 'opp'}
+
+        if len({row.get('tm') for row in self.rows}) <= 1:
+            labels = [l for l in labels if l != 'tm']
+
         return format_table(labels, self.rows, repl, left_cols)
 
 

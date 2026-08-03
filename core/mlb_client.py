@@ -1011,12 +1011,12 @@ class MLBClient:
                     ))
             return results
 
-        # lastXGames via person hydrate
-        league_list_id = "milb_all" if milb else "mlb_hist"
-        person_url = (
-            f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam,team,"
-            f"stats(type=[lastXGames](team(league)),leagueListId={league_list_id},limit={num_games},group=[hitting,pitching])"
-        )
+        # Last N games: the API's lastXGames hydration splits stats per team when a
+        # player has multiple stints (e.g. promoted/demoted mid-window) and each
+        # per-team split is independently capped at `limit`, so the "total" split
+        # ends up summing more than N games instead of reflecting the true last N.
+        # Pull the raw gameLog instead and aggregate the last N entries ourselves.
+        person_url = f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam,team"
         async with session.get(person_url) as resp:
             person_data = await resp.json()
 
@@ -1031,35 +1031,65 @@ class MLBClient:
         info_line = build_player_info_line(person, bt_label=True)
         stat_types_to_fetch = stat_groups_for(pos, stat_type)
 
-        all_stats = person.get('stats', [])
+        season = str(datetime.now().year)
+        milb_suffix = "&leagueListId=milb_all" if milb else "&sportId=1"
         results = []
 
+        # gameLog 'team' splits only carry an id, not an abbreviation — build a lookup
+        teams_sport_ids = "11,12,13,14,15" if milb else "1"
+        teams_url = f"{self.BASE_URL}/teams?sportIds={teams_sport_ids}"
+        async with session.get(teams_url) as resp:
+            teams_data = await resp.json()
+        team_abbrev_map = {t['id']: t['abbreviation'] for t in teams_data.get('teams', []) if 'id' in t and 'abbreviation' in t}
+
         for st in stat_types_to_fetch:
+            url = f"{self.BASE_URL}/people/{player_id}/stats?stats=gameLog&season={season}&group={st}{milb_suffix}"
+            async with session.get(url) as resp:
+                data = await resp.json()
+
+            splits = []
+            for stat_block in data.get('stats', []):
+                splits.extend(stat_block.get('splits', []))
+            splits.sort(key=lambda sp: sp.get('date', ''))
+            recent = splits[-num_games:]
+
             found_stats = []
+            actual_games = len(recent)
+            if recent:
+                team_ids_seen = {sp.get('team', {}).get('id') for sp in recent}
+                multi_team = len(team_ids_seen) > 1
 
-            for stat_group in all_stats:
-                if stat_group.get('group', {}).get('displayName') == st and stat_group.get('type', {}).get('displayName') == 'lastXGames':
-                    splits = stat_group.get('splits', [])
-                    if not splits:
-                        continue
+                last_team_id = recent[-1].get('team', {}).get('id')
+                agg = aggregate_game_log_stats(recent, st)
+                agg['team'] = 'TOT' if multi_team else team_abbrev_map.get(last_team_id, team_abbrev)
+                agg['season'] = season
+                found_stats.append(agg)
 
-                    # lastXGames returns per-team splits plus a total; pick the total (no team) or fallback to last
-                    agg_split = splits[-1]
-                    for sp in splits:
-                        if 'team' not in sp:
-                            agg_split = sp
-                            break
+                if multi_team:
+                    per_team_splits = {}
+                    per_team_order = []
+                    for sp in recent:
+                        tid = sp.get('team', {}).get('id')
+                        if tid not in per_team_splits:
+                            per_team_splits[tid] = []
+                            per_team_order.append(tid)
+                        per_team_splits[tid].append(sp)
 
-                    s = agg_split.get('stat', {})
-                    s['team'] = agg_split.get('team', {}).get('abbreviation', team_abbrev)
-                    found_stats.append(s)
+                    for tid in per_team_order:
+                        team_splits = per_team_splits[tid]
+                        team_agg = aggregate_game_log_stats(team_splits, st)
+                        team_agg['team'] = team_abbrev_map.get(tid, '??')
+                        team_agg['season'] = season
+                        found_stats.append(team_agg)
+
+            label = f"Last {actual_games} Game{'s' if actual_games != 1 else ''}" if actual_games and actual_games != num_games else f"Last {num_games} Games"
 
             if found_stats:
                 results.append(PlayerSeasonStats(
                     player_name=player_name,
                     team_abbrev=team_abbrev,
                     stat_type=st,
-                    years=f"Last {num_games} Games",
+                    years=label,
                     is_career=False,
                     info_line=info_line,
                     stats=found_stats,
@@ -1090,9 +1120,11 @@ class MLBClient:
         headshot_url = player_headshot_url(player_id)
 
         # Fetch person info and teams list concurrently
-        person_url = f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam"
-        teams_sport_ids = "11,12,13,14,15" if milb else "1"
-        teams_url = f"{self.BASE_URL}/teams?sportIds={teams_sport_ids}" if milb else f"{self.BASE_URL}/teams?sportId=1"
+        person_url = f"{self.BASE_URL}/people/{player_id}?hydrate=currentTeam,team"
+        # Always include both MLB and MiLB teams in the lookup: a player's current
+        # team (e.g. after an option to the minors) may not be in the sport-scoped
+        # list, and gameLog rows may span teams outside that scope too.
+        teams_url = f"{self.BASE_URL}/teams?sportIds=1,11,12,13,14,15"
         async with session.get(person_url) as resp:
             person_data = await resp.json()
         async with session.get(teams_url) as resp:
@@ -1106,7 +1138,7 @@ class MLBClient:
         team_abbrev_map = {t['id']: t['abbreviation'] for t in teams_data.get('teams', []) if 'id' in t and 'abbreviation' in t}
 
         current_team_id = person.get('currentTeam', {}).get('id')
-        team_abbrev = team_abbrev_map.get(current_team_id, '??') if current_team_id else '??'
+        team_abbrev = person.get('currentTeam', {}).get('abbreviation') or team_abbrev_map.get(current_team_id, '??')
 
         season = str(datetime.now().year)
         hitting_splits = []
@@ -1148,10 +1180,13 @@ class MLBClient:
                 date_fmt = date_str
             opp_id = split.get('opponent', {}).get('id')
             opp = team_abbrev_map.get(opp_id, '?') if opp_id else '?'
+            split_team_id = split.get('team', {}).get('id')
+            tm = team_abbrev_map.get(split_team_id, '?') if split_team_id else '?'
             stat = split.get('stat', {})
             if position_type == 'hitting':
                 rows.append({
                     'date': date_fmt,
+                    'tm': tm,
                     'opp': opp,
                     'ab': str(stat.get('atBats', 0)),
                     'r': str(stat.get('runs', 0)),
@@ -1171,6 +1206,7 @@ class MLBClient:
             else:
                 rows.append({
                     'date': date_fmt,
+                    'tm': tm,
                     'opp': opp,
                     'ip': str(stat.get('inningsPitched', '0')),
                     'h': str(stat.get('hits', 0)),
