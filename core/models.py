@@ -1046,9 +1046,13 @@ class PlayerSeasonStats:
             repl['split'] = ''
 
         if len(self.stats) == 1:
+            # Keep the team column even for a single row if that team differs from
+            # the player's current team (e.g. the requested window predates a
+            # since-happened promotion/demotion/trade) — otherwise it's misleading.
+            same_team = self.stats[0].get('team', self.team_abbrev) == self.team_abbrev
             for labels in labels_list:
                 if 'season' in labels: labels.remove('season')
-                if 'team' in labels: labels.remove('team')
+                if same_team and 'team' in labels: labels.remove('team')
         elif len(self.stats) > 1:
             all_seasons_same = all(s.get('season') == self.stats[0].get('season') for s in self.stats)
             for labels in labels_list:
