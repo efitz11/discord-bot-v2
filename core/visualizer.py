@@ -1165,10 +1165,23 @@ def _draw_spray_field(img, draw, layout, font_distance):
     for side in (-45, 45):
         fd.line([pt(0, 0), polar(side, wall_dist_at(side))], fill=_FIELD_CHALK, width=chalk_w)
 
+    # Bases are bags whose edges run parallel to the basepaths, so in this diamond
+    # layout (where the paths run at 45°) each bag is drawn rotated 45° from the
+    # field axes — a diamond in x/y-ft terms, corners pointing up/down/left/right.
+    # First/third sit with their foul-line-side corner ON the foul line (bag entirely
+    # in fair territory), so their centers are nudged toward second base by one
+    # half-diagonal rather than centered on the line.
     base_half = max(1.4 * scale * SS, 3)
+    second_px = pt(0.0, 2 * half)
     for bx, by in ((half, half), (0.0, 2 * half), (-half, half)):
         bcx, bcy = pt(bx, by)
-        fd.rectangle([bcx - base_half, bcy - base_half, bcx + base_half, bcy + base_half], fill=_FIELD_CHALK)
+        if (bx, by) != (0.0, 2 * half):
+            dx, dy = second_px[0] - bcx, second_px[1] - bcy
+            dist = math.hypot(dx, dy)
+            bcx += dx / dist * base_half
+            bcy += dy / dist * base_half
+        fd.polygon([(bcx, bcy - base_half), (bcx + base_half, bcy),
+                    (bcx, bcy + base_half), (bcx - base_half, bcy)], fill=_FIELD_CHALK)
     hx, hy = pt(0, 0)
     fd.polygon([(hx - base_half, hy - base_half), (hx + base_half, hy - base_half),
                 (hx + base_half, hy), (hx, hy + base_half), (hx - base_half, hy)], fill=_FIELD_CHALK)
