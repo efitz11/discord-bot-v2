@@ -3099,13 +3099,23 @@ class MLBSlash(commands.Cog):
         query = team.lower()
         aliases = {"nats": "nationals", "yanks": "yankees", "cards": "cardinals", "dbacks": "diamondbacks", "barves": "braves"}
         query = aliases.get(query, query)
+        # Check abbreviation matches first so short queries like "lad" don't get
+        # substring-matched into an opponent's name (e.g. "lad" inside "Philadelphia").
         for g in games:
-            if query == g.away.abbreviation.lower() or query in g.away.name.lower():
+            if query == g.away.abbreviation.lower():
                 target_abbr = g.away.abbreviation
                 break
-            elif query == g.home.abbreviation.lower() or query in g.home.name.lower():
+            elif query == g.home.abbreviation.lower():
                 target_abbr = g.home.abbreviation
                 break
+        else:
+            for g in games:
+                if query in g.away.name.lower():
+                    target_abbr = g.away.abbreviation
+                    break
+                elif query in g.home.name.lower():
+                    target_abbr = g.home.abbreviation
+                    break
 
         embeds = []
         title = f"{direction} {len(games)} Games for {target_abbr}"

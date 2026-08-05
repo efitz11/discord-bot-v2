@@ -172,30 +172,58 @@ class MLBClient:
             best = fav_match or mlb_match or players[0]
             return {'id': str(best['id']), 'name': best['name']}
 
+    @staticmethod
+    def _match_team_abbr(teams: list, query: str) -> Optional[int]:
+        for team in teams:
+            if query == team.get('abbreviation', '').lower():
+                return team['id']
+        return None
+
+    @staticmethod
+    def _match_team_substring(teams: list, query: str) -> Optional[int]:
+        for team in teams:
+            if query in team.get('name', '').lower() or query in team.get('teamName', '').lower():
+                return team['id']
+        return None
+
     async def get_team_id(self, team_query: str) -> Optional[int]:
         if not team_query: return None
         query = resolve_team_alias(team_query)
 
+        # Check exact abbreviation matches before falling back to substring name matches —
+        # otherwise a short abbreviation like "lad" can substring-match into an unrelated
+        # team's name (e.g. "lad" inside "Philadelphia").
         session = await self.get_session()
         async with session.get(f"{self.BASE_URL}/teams?sportId=1") as resp:
             data = await resp.json()
-            for team in data.get('teams', []):
-                if (query == team.get('abbreviation', '').lower() or
-                    query in team.get('name', '').lower() or
-                    query in team.get('teamName', '').lower()):
-                    return team['id']
+            main_teams = data.get('teams', [])
+
+        team_id = self._match_team_abbr(main_teams, query)
+        if team_id:
+            return team_id
 
         # Fall back to exhibition-only rosters (Futures Game, All-Star Game), which don't
         # appear in the regular /teams list since they only exist for the current season.
         season = et_now().year
+        exhibition_teams = []
         for sport_id in ("1", "21"):
             async with session.get(f"{self.BASE_URL}/teams?sportId={sport_id}&season={season}&allStarStatuses=Y") as resp:
                 data = await resp.json() if resp.status == 200 else {}
-                for team in data.get('teams', []):
-                    if (query == team.get('abbreviation', '').lower() or
-                        query in team.get('name', '').lower() or
-                        query in team.get('teamName', '').lower()):
-                        return team['id']
+                exhibition_teams.append(data.get('teams', []))
+
+        for teams in exhibition_teams:
+            team_id = self._match_team_abbr(teams, query)
+            if team_id:
+                return team_id
+
+        team_id = self._match_team_substring(main_teams, query)
+        if team_id:
+            return team_id
+        for teams in exhibition_teams:
+            team_id = self._match_team_substring(teams, query)
+            if team_id:
+                return team_id
+
         return None
 
     async def get_team_schedule(self, team_query: str, num_games: int = 3, past: bool = False) -> List[Game]:
@@ -1980,9 +2008,15 @@ class MLBClient:
             return None
 
         game = games[0]
-        # Determine which side the team is on
+        # Determine which side the team is on. Check exact abbreviation matches before
+        # substring name matches — otherwise a short abbreviation can substring-match into
+        # the other side's name (e.g. "lad" inside "Philadelphia").
         query = resolve_team_alias(team_query)
-        if query in game.home.abbreviation.lower() or query in game.home.name.lower():
+        if query == game.home.abbreviation.lower():
+            side = "home"
+        elif query == game.away.abbreviation.lower():
+            side = "away"
+        elif query in game.home.name.lower():
             side = "home"
         else:
             side = "away"
@@ -2671,11 +2705,12 @@ class MLBClient:
                 team_id_param = str(team_id)
         else:
             query = team_query.strip().lower()
-            mlb_match = next(
-                (t for t in mlb_teams if query == t.get('abbreviation', '').lower()
-                 or query in t.get('name', '').lower()
-                 or query in t.get('teamName', '').lower()),
-                None
+            # Check exact abbreviation matches before substring name matches — otherwise a short
+            # abbreviation can substring-match into an unrelated team's name.
+            mlb_match = (
+                next((t for t in mlb_teams if query == t.get('abbreviation', '').lower()), None)
+                or next((t for t in mlb_teams if query in t.get('name', '').lower()
+                         or query in t.get('teamName', '').lower()), None)
             )
 
             if mlb_match:
@@ -2686,11 +2721,10 @@ class MLBClient:
                     return [], label
                 team_id_param = ','.join(str(i) for i in affiliate_ids)
             else:
-                milb_match = next(
-                    (t for t in milb_teams if query == t.get('abbreviation', '').lower()
-                     or query in t.get('name', '').lower()
-                     or query in t.get('teamName', '').lower()),
-                    None
+                milb_match = (
+                    next((t for t in milb_teams if query == t.get('abbreviation', '').lower()), None)
+                    or next((t for t in milb_teams if query in t.get('name', '').lower()
+                             or query in t.get('teamName', '').lower()), None)
                 )
                 if not milb_match:
                     return [], ""
