@@ -2628,7 +2628,8 @@ class MLBSlash(commands.Cog):
     @app_commands.choices(player_pool=[
         app_commands.Choice(name="Qualified", value="QUALIFIED"),
         app_commands.Choice(name="All", value="ALL"),
-        app_commands.Choice(name="Rookies", value="ROOKIES")
+        app_commands.Choice(name="Rookies (Qualified)", value="QUALIFIED_ROOKIES"),
+        app_commands.Choice(name="Rookies (All)", value="ROOKIES")
     ])
     @app_commands.describe(stat_group="Filter by stat group (Hitting/Pitching/etc.)")
     @app_commands.choices(stat_group=[
