@@ -2496,10 +2496,12 @@ class MLBClient:
             'scoreboard': data.get('scoreboard', {}),
         }
 
-    async def get_game_spray_chart_data(self, team_query: str = None, player_id: str = None, date: str = None) -> Optional[dict]:
+    async def get_game_spray_chart_data(self, team_query: str = None, player_id: str = None, date: str = None, single_team: bool = False) -> Optional[dict]:
         """
         Fetch batted balls from a game's Baseball Savant feed, for a spray chart.
-        If team_query is given, returns every batted ball from both teams (colored by team).
+        If team_query is given, returns every batted ball from both teams (colored by team),
+        unless single_team is True, in which case only that team's batted balls are returned
+        (colored by outcome, like a player-level chart).
         If player_id is given instead, resolves the player's current team/game and returns only
         that player's batted balls — as batter if a hitter, as pitcher-against if a pitcher
         (colored by outcome).
@@ -2538,6 +2540,18 @@ class MLBClient:
             pid = int(player_id)
             key = 'pitcher' if is_pitcher else 'batter'
             events = [e for e in events if e.get(key) == pid]
+
+        filtered_team_name = None
+        if player_id is None and single_team:
+            alias = resolve_team_alias(team_query)
+            away_name = game.away.name.lower()
+            away_abbr = game.away.abbreviation.lower()
+            if alias == away_abbr or alias in away_name:
+                filtered_team_name, filtered_abbr = game.away.name, game.away.abbreviation
+            else:
+                filtered_team_name, filtered_abbr = game.home.name, game.home.abbreviation
+            events = [e for e in events if (e.get('team_batting') or '') == filtered_abbr]
+
         if not events:
             return None
 
@@ -2560,9 +2574,9 @@ class MLBClient:
             'scoreboard': data.get('scoreboard', {}),
             'venue_name': field_info['venue_name'] if field_info else None,
             'field_info': field_info['field_info'] if field_info else None,
-            'player_name': player_name,
+            'player_name': player_name or filtered_team_name,
             'is_pitcher': is_pitcher if player_id else None,
-            'color_by': 'outcome' if player_id else 'team',
+            'color_by': 'outcome' if (player_id or filtered_team_name) else 'team',
         }
 
     async def get_pitcher_game_feed(self, team_query: str, date: str = None, player_id: int = None) -> dict:

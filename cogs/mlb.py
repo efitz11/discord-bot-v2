@@ -1271,20 +1271,24 @@ class MLBSlash(commands.Cog):
     @savant.command(name="gamespray", description="Get a game-level spray chart for a team, or a player's batted balls in their game")
     @app_commands.describe(
         query="Team abbreviation/name (all batted balls, by team), or player name (hitter: their ABs; pitcher: balls allowed)",
-        date="A specific date (e.g. 4/7/26, yesterday, +2, -5)"
+        date="A specific date (e.g. 4/7/26, yesterday, +2, -5)",
+        single_team="When querying a team, show only that team's batted balls, colored by outcome (default: both teams)"
     )
-    async def gamespray(self, interaction: discord.Interaction, query: str, date: str = None):
+    async def gamespray(self, interaction: discord.Interaction, query: str, date: str = None, single_team: bool = False):
         await interaction.response.defer()
         parsed_date = parse_date(date)
 
         team_id = await self.bot.mlb_client.get_team_id(query)
 
         if team_id:
-            spray_data = await self.bot.mlb_client.get_game_spray_chart_data(team_query=query, date=parsed_date)
+            spray_data = await self.bot.mlb_client.get_game_spray_chart_data(team_query=query, date=parsed_date, single_team=single_team)
             if not spray_data:
                 await interaction.followup.send(f"No Statcast data found for **{query.upper()}** today.")
                 return
-            title = f"⚾ {spray_data['away']} @ {spray_data['home']} — Spray Chart"
+            if spray_data.get('player_name'):
+                title = f"⚾ {spray_data['player_name']} — Batted Balls"
+            else:
+                title = f"⚾ {spray_data['away']} @ {spray_data['home']} — Spray Chart"
         else:
             resolved = await self.bot.mlb_client.resolve_player(query)
             if not resolved:
