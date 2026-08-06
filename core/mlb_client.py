@@ -2564,9 +2564,11 @@ class MLBClient:
         try:
             async with session.get(url) as resp:
                 if resp.status != 200:
+                    print(f"Error fetching Savant gf feed for game {game.game_pk}: HTTP {resp.status}")
                     return None
                 data = await resp.json(content_type=None)
-        except Exception:
+        except Exception as e:
+            print(f"Error fetching Savant gf feed for game {game.game_pk}: {e}")
             return None
 
         events = [e for e in data.get('exit_velocity', []) if e.get('hc_x_ft') is not None and e.get('hc_y_ft') is not None]
