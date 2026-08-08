@@ -2579,10 +2579,17 @@ class MLBClient:
 
         filtered_team_name = None
         if player_id is None and single_team:
+            # Check exact abbreviation matches before substring name matches — otherwise a
+            # short abbreviation like "lad" can substring-match into the other team's name
+            # (e.g. "lad" inside "Philadelphia").
             alias = resolve_team_alias(team_query)
-            away_name = game.away.name.lower()
             away_abbr = game.away.abbreviation.lower()
-            if alias == away_abbr or alias in away_name:
+            home_abbr = game.home.abbreviation.lower()
+            if alias == away_abbr:
+                filtered_team_name, filtered_abbr = game.away.name, game.away.abbreviation
+            elif alias == home_abbr:
+                filtered_team_name, filtered_abbr = game.home.name, game.home.abbreviation
+            elif alias in game.away.name.lower():
                 filtered_team_name, filtered_abbr = game.away.name, game.away.abbreviation
             else:
                 filtered_team_name, filtered_abbr = game.home.name, game.home.abbreviation
@@ -2628,11 +2635,17 @@ class MLBClient:
             return {}
         game = games[0]
 
-        # Determine which side this team is on
+        # Determine which side this team is on. Check exact abbreviation matches before
+        # substring name matches — otherwise a short abbreviation can substring-match into
+        # the other side's name (e.g. "lad" inside "Philadelphia").
         query = resolve_team_alias(team_query)
-        away_name = game.away.name.lower()
         away_abbr = game.away.abbreviation.lower()
-        if query == away_abbr or query in away_name:
+        home_abbr = game.home.abbreviation.lower()
+        if query == away_abbr:
+            side = 'away'
+        elif query == home_abbr:
+            side = 'home'
+        elif query in game.away.name.lower():
             side = 'away'
         else:
             side = 'home'
@@ -2786,24 +2799,20 @@ class MLBClient:
         if not all_game_data:
             return []
 
-        games = []
-        for game_data in all_game_data:
-            game = Game.from_api_json(game_data)
-            
-            # Filter by team if a search query was provided
-            if team_query:
-                query = resolve_team_alias(team_query)
+        all_games = [Game.from_api_json(game_data) for game_data in all_game_data]
 
-                away_name = game.away.name.lower()
-                home_name = game.home.name.lower()
-                away_abbr = game.away.abbreviation.lower()
-                home_abbr = game.home.abbreviation.lower()
-                
-                if (query != away_abbr and query != home_abbr and 
-                    query not in away_name and query not in home_name):
-                    continue
-            
-            games.append(game)
+        if team_query:
+            # Check exact abbreviation matches before substring name matches — otherwise a
+            # short abbreviation like "lad" can substring-match into an unrelated team's
+            # name (e.g. "lad" inside "Philadelphia").
+            query = resolve_team_alias(team_query)
+            games = [g for g in all_games
+                     if query == g.away.abbreviation.lower() or query == g.home.abbreviation.lower()]
+            if not games:
+                games = [g for g in all_games
+                          if query in g.away.name.lower() or query in g.home.name.lower()]
+        else:
+            games = all_games
             
         # The schedule endpoint strips hitData from previousPlay. We must fetch the 
         # playByPlay endpoint concurrently for any live games to get the Statcast metrics.
