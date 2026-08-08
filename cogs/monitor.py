@@ -721,6 +721,19 @@ class MonitorCog(commands.Cog):
                     pp = g.get("teams", {}).get(side, {}).get("probablePitcher")
                     if pp:
                         result[side] = {"id": pp.get("id"), "name": pp.get("fullName", "TBD")}
+
+        ids = [str(r["id"]) for r in result.values() if r.get("id")]
+        if ids:
+            try:
+                async with session.get(f"{client.BASE_URL}/people?personIds={','.join(ids)}") as resp:
+                    if resp.status == 200:
+                        people = (await resp.json()).get("people", [])
+                        hands = {p.get("id"): p.get("pitchHand", {}).get("code", "") for p in people}
+                        for side in ("away", "home"):
+                            if result[side].get("id"):
+                                result[side]["hand"] = hands.get(result[side]["id"], "")
+            except Exception as e:
+                print(f"[monitor] probable-pitcher handedness fetch error for {game_pk}: {e}")
         return result
 
     @staticmethod
@@ -734,6 +747,7 @@ class MonitorCog(commands.Cog):
         return {
             "abbr": team.get("team", {}).get("abbreviation", "???"),
             "name": probable.get("name", "TBD"),
+            "hand": probable.get("hand", ""),
             "era": ss.get("era", "-"),
             "whip": ss.get("whip", "-"),
             "wins": ss.get("wins", 0),
@@ -749,7 +763,7 @@ class MonitorCog(commands.Cog):
             return ""
         name_w = max(len(r["name"]) for r in rows)
         lines = [
-            f"{r['abbr']:<3}  {r['name']:<{name_w}}  {r['wins']}-{r['losses']}, {r['era']} ERA, {r['whip']} WHIP"
+            f"{r['abbr']:<3}  {r['name']:<{name_w}}  {r['hand'] + '  ' if r['hand'] else ''}{r['wins']}-{r['losses']}, {r['era']} ERA, {r['whip']} WHIP"
             for r in rows
         ]
         return "\n".join(lines)
@@ -797,12 +811,13 @@ class MonitorCog(commands.Cog):
         box = parse_box_score_side(box_data, side)
         # Pregame the probable pitcher appears as a trailing pseudo-substitute — show starters only
         box.batting_rows = [r for r in box.batting_rows if r.get("is_starter")]
+        await self.bot.mlb_client._fill_bench_handedness(box)
         probables = await self._fetch_probables(game_pk) if game_pk else {"away": {}, "home": {}}
         matchup = self._format_matchup(box_data, probables)
         desc = ""
         if matchup:
             desc += f"**Pitching Matchup**\n```\n{matchup}\n```\n"
-        desc += f"**{box.team_name} Batting**\n```python\n{box.format_batting()}\n```"
+        desc += f"**{box.team_name} Batting**\n```python\n{box.format_lineup_batting()}\n```"
 
         # Career matchups: favorite-team hitters who own / are owned by the opposing pitcher
         opp_side = "home" if side == "away" else "away"
