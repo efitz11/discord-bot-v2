@@ -1240,6 +1240,12 @@ class BoxScoreData:
         repl = {'name': '', 'pos': '', 'ab': 'AB', 'r': 'R', 'h': 'H', 'rbi': 'RBI', 'bb': 'BB', 'so': 'SO', 'lob': 'LOB', 'avg': 'AVG', 'obp': 'OBP', 'slg': 'SLG'}
         return format_table(labels, self.batting_rows, repl, {'name', 'pos'})
 
+    def format_lineup_batting(self) -> str:
+        """Pregame lineup table — skips the counting stats (always 0 before first pitch)."""
+        labels = ['name', 'pos', 'bat', 'avg', 'obp', 'slg', 'ops']
+        repl = {'name': '', 'pos': '', 'bat': 'B', 'avg': 'AVG', 'obp': 'OBP', 'slg': 'SLG', 'ops': 'OPS'}
+        return format_table(labels, self.batting_rows, repl, {'name', 'pos', 'bat'})
+
     def format_bench(self) -> str:
         """Season lines for position players who haven't entered the game yet."""
         if not self.bench_rows:
@@ -1306,8 +1312,10 @@ def parse_box_score_side(box_data: dict, side: str) -> "BoxScoreData":
         positions = p_data.get('allPositions', [])
         pos = "-".join(p.get('abbreviation', '') for p in positions) if positions else p_data.get('position', {}).get('abbreviation', '')
         return {
+            'id': p_data.get('person', {}).get('id'),
             'name': (" " if indent else "") + name,  # indent substitutes
             'pos': pos,
+            'bat': '',  # batting hand (L/R/S) — filled in by the client
             'ab': str(b_stats.get('atBats', 0)),
             'r': str(b_stats.get('runs', 0)),
             'h': str(b_stats.get('hits', 0)),
@@ -1318,6 +1326,7 @@ def parse_box_score_side(box_data: dict, side: str) -> "BoxScoreData":
             'avg': season.get('avg', '.000'),
             'obp': season.get('obp', '.000'),
             'slg': season.get('slg', '.000'),
+            'ops': season.get('ops', '.000'),
             'is_starter': not indent,
         }
 
