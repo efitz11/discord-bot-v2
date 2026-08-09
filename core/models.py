@@ -719,6 +719,7 @@ class Pitch:
     pz: float
     sz_top: float
     sz_bot: float
+    challenge_overturned: Optional[bool] = None  # None = not challenged; else challenge outcome
 
 @dataclass
 class AtBat:
