@@ -352,6 +352,11 @@ class MLBSlash(commands.Cog):
         if target_ab.statcast_data:
             desc += f"\n**Statcast:** {target_ab.statcast_data}"
 
+        challenges = [p for p in target_ab.pitches if p.challenge_overturned is not None]
+        for p in challenges:
+            outcome = "Overturned" if p.challenge_overturned else "Confirmed"
+            desc += f"\n**ABS Challenge (Pitch #{p.number}):** {outcome}"
+
         embed = discord.Embed(
             title=f"Pitch Plot: {stats_list[0].player_name} - AB #{ab_number}",
             description=desc,

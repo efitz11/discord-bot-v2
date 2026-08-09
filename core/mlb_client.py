@@ -724,12 +724,15 @@ class MLBClient:
                                     p_pz = coord.get('pZ')
                                     p_sz_top = pd.get('strikeZoneTop')
                                     p_sz_bot = pd.get('strikeZoneBottom')
-                                    
+                                    review = pe.get('reviewDetails')
+                                    p_challenge = review.get('isOverturned') if review else None
+
                                     if p_px is not None and p_pz is not None:
                                         pitches_list.append(Pitch(
                                             number=p_num, count=p_count, description=p_desc,
                                             speed=p_speed, type=p_type, px=p_px, pz=p_pz,
-                                            sz_top=p_sz_top, sz_bot=p_sz_bot
+                                            sz_top=p_sz_top, sz_bot=p_sz_bot,
+                                            challenge_overturned=p_challenge
                                         ))
 
                             last_event = play['playEvents'][-1]
