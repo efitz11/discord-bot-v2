@@ -621,6 +621,9 @@ class MonitorCog(commands.Cog):
             return ""
         labels  = ["pitcher", "ip", "bb", "so", "np"]
         headers = {"pitcher": "PITCHER", "ip": "IP", "bb": "BB", "so": "SO", "np": "NP"}
+        if any(int(p.get("hbp", 0)) > 0 for p in pitchers):
+            labels.insert(3, "hbp")
+            headers["hbp"] = "HBP"
         return format_table(labels, pitchers, headers, {"pitcher"})
 
     @staticmethod
@@ -920,6 +923,7 @@ class MonitorCog(commands.Cog):
                     "pitcher": p_data.get("person", {}).get("fullName", "Unknown"),
                     "ip": p_stats.get("inningsPitched", "0"),
                     "bb": str(p_stats.get("baseOnBalls", 0)),
+                    "hbp": p_stats.get("hitBatsmen", 0),
                     "so": str(p_stats.get("strikeOuts", 0)),
                     "np": str(p_stats.get("pitchesThrown", 0)),
                 })
