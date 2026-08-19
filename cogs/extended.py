@@ -1,7 +1,9 @@
 import io
+import json
 import math
 import asyncio
 import os
+import re
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 import aiohttp
@@ -10,7 +12,7 @@ from discord import app_commands
 from discord.ext import commands
 from PIL import Image
 
-from core.visualizer import generate_price_chart, generate_index_chart
+from core.visualizer import generate_price_chart, generate_index_chart, generate_market_chart
 from core.utils import ET_ZONE
 
 
@@ -101,10 +103,48 @@ def _aqi_category(aqi: int) -> tuple[str, str]:
     return "Hazardous", "🟤"
 
 
+POLY_CHART_COLORS = [
+    (94, 151, 246), (75, 201, 122), (240, 170, 76), (239, 68, 68),
+    (168, 85, 247), (45, 212, 191), (236, 72, 153), (163, 163, 163),
+]
+
+
+class PolymarketEventChartSelect(discord.ui.Select):
+    def __init__(self, cog, event_options: list[dict]):
+        options = [
+            discord.SelectOption(
+                label=eo["event_title"][:100],
+                description=f"{len(eo['markets'])} outcomes overlaid",
+                value=str(i),
+            )
+            for i, eo in enumerate(event_options)
+        ]
+        super().__init__(placeholder="Chart a market's price history…", options=options, min_values=1, max_values=1)
+        self.cog = cog
+        self.event_options = event_options
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        eo = self.event_options[int(self.values[0])]
+        await self.cog._send_polymarket_event_chart(interaction, eo)
+
+
+class PolymarketChartView(discord.ui.View):
+    def __init__(self, cog, event_options: list[dict]):
+        super().__init__(timeout=600)
+        if event_options:
+            self.add_item(PolymarketEventChartSelect(cog, event_options[:25]))
+
+
 class ExtendedSlash(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+
+    @staticmethod
+    def _normalize_search_text(s: str) -> str:
+        """Lowercase and collapse punctuation/hyphens to spaces, e.g. 'KY-06' -> 'ky 06'."""
+        return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
 
     async def _yahoo_crumb(self, session, force: bool = False) -> tuple[str, str] | None:
         """Yahoo quote API needs a session cookie + crumb token; cache them."""
@@ -731,6 +771,169 @@ class ExtendedSlash(commands.Cog):
         embed.set_footer(text=f"Base map: OpenStreetMap · Radar: RainViewer · Updated {radar_ts}")
 
         await interaction.followup.send(embed=embed, file=discord.File(buf, filename="radar.jpg"))
+
+    @app_commands.command(name="polymarket", description="Search Polymarket prediction markets for current odds")
+    @app_commands.describe(search="Keyword to search for (e.g. 'fed rate', 'election', 'nba finals')")
+    async def polymarket(self, interaction: discord.Interaction, search: str):
+        await interaction.response.defer()
+
+        session = await self.bot.mlb_client.get_session()
+        url = (
+            "https://gamma-api.polymarket.com/public-search"
+            f"?q={urllib.parse.quote(search)}&limit_per_type=8&events_status=active"
+        )
+        try:
+            async with session.get(url, headers={"User-Agent": "discord-bot/1.0"}) as resp:
+                if resp.status != 200:
+                    await interaction.followup.send("Error reaching Polymarket.")
+                    return
+                data = await resp.json(content_type=None)
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching Polymarket data: {e}")
+            return
+
+        events = data.get("events") or []
+        if not events:
+            await interaction.followup.send(f"No open Polymarket markets found for **{search}**.")
+            return
+
+        # Polymarket's search ranks broadly (tags/related topics count), so it
+        # readily surfaces events that don't actually mention the query terms
+        # (e.g. "Which party will win the Senate?" for a "Maine senate" search).
+        # Prefer events whose title contains every search term; only fall back
+        # to the full unfiltered result set if none do.
+        terms = self._normalize_search_text(search).split()
+        if terms:
+            title_matches = [
+                ev for ev in events
+                if all(t in self._normalize_search_text(ev.get("title") or "") for t in terms)
+            ]
+            if title_matches:
+                events = title_matches
+
+        lines = []
+        event_options = []  # [{"event_title", "markets": [{"label", "token_id"}, ...]}, ...] — feeds the chart dropdown
+        for ev in events[:6]:
+            title = ev.get("title") or ev.get("ticker") or ""
+            # Placeholder outcomes (e.g. "Person A", "Party C") that Polymarket
+            # scaffolds into multi-outcome events have zero liquidity — drop them.
+            live_markets = [m for m in (ev.get("markets") or []) if float(m.get("liquidity") or 0) > 0]
+            markets = sorted(live_markets, key=lambda m: float(m.get("liquidity") or 0), reverse=True)[:4]
+            if not markets:
+                continue
+            lines.append(f"» {title}")
+            event_markets = []
+            for m in markets:
+                label = m.get("groupItemTitle") or ""
+                if not label:
+                    try:
+                        outcomes = json.loads(m.get("outcomes") or "[]")
+                    except (json.JSONDecodeError, TypeError):
+                        outcomes = []
+                    question = m.get("question") or ""
+                    label = outcomes[0] if outcomes and question.strip() == title.strip() else question
+                label = label[:30]
+                bid = float(m.get("bestBid") or 0) * 100
+                ask = float(m.get("bestAsk") or 0) * 100
+                lines.append(f"    {label:<30} Yes {bid:>3.0f}% / {ask:>3.0f}%")
+
+                try:
+                    token_ids = json.loads(m.get("clobTokenIds") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    token_ids = []
+                if len(markets) == 1 and len(token_ids) >= 2:
+                    # Single-market (binary) event, e.g. Yes/No or TeamA/TeamB —
+                    # chart both sides of that one market against each other.
+                    try:
+                        outcomes = json.loads(m.get("outcomes") or "[]")
+                    except (json.JSONDecodeError, TypeError):
+                        outcomes = []
+                    for i, tid in enumerate(token_ids[:2]):
+                        oc_label = (outcomes[i] if i < len(outcomes) else label)[:30]
+                        event_markets.append({"label": oc_label, "token_id": tid})
+                elif token_ids:
+                    event_markets.append({"label": label, "token_id": token_ids[0]})
+            if len(event_markets) >= 2 and len(event_options) < 25:
+                event_options.append({"event_title": title, "markets": event_markets})
+            lines.append("")
+
+        text = "\n".join(lines).strip()
+        if not text:
+            await interaction.followup.send(f"No open Polymarket markets found for **{search}**.")
+            return
+        if len(text) > 3900:
+            text = text[:3900] + "\n…"
+
+        embed = discord.Embed(
+            title=f"🔮 Polymarket — \"{search}\"",
+            url="https://polymarket.com",
+            description=f"```{text}```",
+            color=discord.Color.blue(),
+        )
+        footer = "Best bid / best ask, as implied probability (%)"
+        if event_options:
+            footer += " · pick a market below to chart its price history"
+        embed.set_footer(text=footer)
+
+        view = PolymarketChartView(self, event_options) if event_options else None
+        await interaction.followup.send(embed=embed, view=view)
+
+    async def _send_polymarket_event_chart(self, interaction: discord.Interaction, event_option: dict):
+        session = await self.bot.mlb_client.get_session()
+        event_title = event_option["event_title"]
+        outcome_markets = event_option["markets"]
+
+        async def fetch(m):
+            url = (
+                "https://clob.polymarket.com/prices-history"
+                f"?market={urllib.parse.quote(m['token_id'])}&interval=max&fidelity=180"
+            )
+            try:
+                async with session.get(url, headers={"User-Agent": "discord-bot/1.0"}) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json(content_type=None)
+            except Exception:
+                return None
+            history = data.get("history") or []
+            points = [(h["t"], h["p"] * 100) for h in history if h.get("p") is not None]
+            return points if len(points) >= 2 else None
+
+        results = await asyncio.gather(*(fetch(m) for m in outcome_markets))
+
+        series = []
+        for m, points, color in zip(outcome_markets, results, POLY_CHART_COLORS):
+            if points:
+                series.append({"label": m["label"], "color": color, "points": points, "last": points[-1][1]})
+
+        if len(series) < 2:
+            await interaction.followup.send(f"Not enough price history yet to chart **{event_title}**.")
+            return
+
+        all_ts = [ts for s in series for ts, _ in s["points"]]
+        span_days = (max(all_ts) - min(all_ts)) / 86400
+        if span_days <= 1.5:
+            range_label = "Past Day"
+        elif span_days <= 7:
+            range_label = "Past Week"
+        elif span_days <= 35:
+            range_label = "Past Month"
+        elif span_days <= 200:
+            range_label = "Past 6 Months"
+        else:
+            range_label = "Since Market Open"
+
+        tz_offset = datetime.now(ET_ZONE).utcoffset().total_seconds()
+        loop = asyncio.get_event_loop()
+        chart = await loop.run_in_executor(None, generate_market_chart, series, tz_offset, range_label)
+
+        embed = discord.Embed(
+            title=f"🔮 {event_title}",
+            description="*Implied probability (%) over time*",
+            color=discord.Color.blue(),
+        )
+        embed.set_image(url="attachment://poly_chart.png")
+        await interaction.followup.send(embed=embed, file=discord.File(chart, filename="poly_chart.png"))
 
 
 async def setup(bot):
