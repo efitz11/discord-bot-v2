@@ -1777,6 +1777,110 @@ def generate_index_chart(series: list, tz_offset_secs: int = 0) -> io.BytesIO:
     return buf
 
 
+def generate_market_chart(series: list, tz_offset_secs: int = 0, range_label: str = "") -> io.BytesIO:
+    """Overlay several 0-100% probability series (e.g. prediction-market outcomes)
+    against a real (non-bucketed) time axis spanning days to months.
+
+    series: list of {"label": str, "color": (r,g,b), "points": [(ts, pct 0-100)], "last": pct}
+    Unlike generate_index_chart (intraday, symmetric around 0%), this scales
+    the y-axis to the data's own 0-100 range and picks x-axis tick spacing
+    from the overall time span, so it works for multi-day/week/month history.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    S = 2
+    W, H = 760 * S, 320 * S
+    PAD_T, PAD_B, PAD_L, PAD_R = 16 * S, 26 * S, 14 * S, 52 * S
+    plot_w = W - PAD_L - PAD_R
+    plot_h = H - PAD_T - PAD_B
+
+    BG       = (30, 31, 34)
+    GRID_COL = (55, 57, 62)
+    DIM_COL  = (160, 160, 165)
+
+    f_axis = _dv("DejaVuSans.ttf", 11 * S)
+    f_lbl  = _dv("DejaVuSans-Bold.ttf", 12 * S)
+
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    all_ts = [ts for s in series for ts, _ in s["points"]]
+    all_v  = [v for s in series for _, v in s["points"]]
+    t0, t1 = min(all_ts), max(all_ts)
+    t_span = max(t1 - t0, 1)
+
+    lo = max(0.0, min(all_v) - 5)
+    hi = min(100.0, max(all_v) + 5)
+    if hi - lo < 10:
+        mid = (hi + lo) / 2
+        lo, hi = max(0.0, mid - 5), min(100.0, mid + 5)
+
+    def xp(ts):
+        return PAD_L + (ts - t0) / t_span * plot_w
+
+    def yp(v):
+        return PAD_T + plot_h - (v - lo) / (hi - lo) * plot_h
+
+    # Horizontal grid + % labels at ~4 nice steps
+    step = (hi - lo) / 4
+    mag = 10 ** math.floor(math.log10(step)) if step > 0 else 1
+    for nice in (1, 2, 2.5, 5, 10):
+        if mag * nice >= step:
+            step = mag * nice
+            break
+    gv = math.ceil(lo / step) * step
+    while gv <= hi:
+        y = yp(gv)
+        draw.line([(PAD_L, y), (PAD_L + plot_w, y)], fill=GRID_COL, width=S)
+        draw.text((PAD_L + plot_w + 6 * S, y), f"{gv:.0f}%", font=f_axis, fill=DIM_COL, anchor="lm")
+        gv += step
+
+    # X-axis ticks — spacing adapts to the overall time span
+    tz = timezone(timedelta(seconds=tz_offset_secs))
+    span_days = t_span / 86400
+    if span_days <= 1.5:
+        unit, fmt = timedelta(hours=3), "%I%p"
+    elif span_days <= 14:
+        unit, fmt = timedelta(days=1), "%-m/%-d"
+    elif span_days <= 90:
+        unit, fmt = timedelta(days=7), "%-m/%-d"
+    else:
+        unit, fmt = timedelta(days=30), "%b"
+
+    cur = datetime.fromtimestamp(t0, tz=tz)
+    end = datetime.fromtimestamp(t1, tz=tz)
+    while cur <= end:
+        x = xp(cur.timestamp())
+        draw.line([(x, PAD_T), (x, PAD_T + plot_h)], fill=GRID_COL, width=S)
+        draw.text((x, PAD_T + plot_h + 6 * S), cur.strftime(fmt).lstrip("0").lower(),
+                   font=f_axis, fill=DIM_COL, anchor="ma")
+        cur += unit
+
+    # Each series line
+    for s in series:
+        pts = [(xp(ts), yp(v)) for ts, v in s["points"]]
+        if len(pts) > 1:
+            draw.line(pts, fill=_readable(s["color"]), width=2 * S, joint="curve")
+
+    # Legend (top-left): colored swatch + label + current value
+    ly = PAD_T + 6 * S
+    for s in series:
+        col = _readable(s["color"])
+        draw.rectangle([PAD_L + 6 * S, ly + 3 * S, PAD_L + 18 * S, ly + 13 * S], fill=col)
+        draw.text((PAD_L + 24 * S, ly), f"{s['label']}  {s['last']:.0f}%", font=f_lbl, fill=col)
+        ly += 18 * S
+
+    if range_label:
+        draw.text((PAD_L + plot_w - 6 * S, PAD_T + plot_h + 6 * S), range_label,
+                   font=f_axis, fill=DIM_COL, anchor="ra")
+
+    img = img.resize((W // S, H // S), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
 def _price_axis_ticks(points: list, tz, range_key: str, max_ticks: int = 9) -> list:
     """Pick x-axis tick (index, label) pairs from price points for the given range.
 
