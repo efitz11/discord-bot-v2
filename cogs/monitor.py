@@ -58,6 +58,8 @@ CYCLE_STATE_FILE      = os.path.join(_STATE_DIR, "cycle_state.json")
 DELAY_STATE_FILE      = os.path.join(_STATE_DIR, "delay_state.json")
 LINEUP_STATE_FILE     = os.path.join(_STATE_DIR, "lineup_state.json")
 LINEUP_CHECK_HOURS    = 6                   # Start polling for the lineup this many hours before first pitch
+TRANSACTION_STATE_FILE = os.path.join(_STATE_DIR, "transaction_state.json")
+TRANSACTION_CHECK_INTERVAL_MINUTES = 5      # How often to poll FAVORITE_TEAM's transaction log
 VIDEO_WAIT_MAX_CYCLES = 5                   # Poll cycles to wait for highlight video
 WALKOFF_VIDEO_WAIT_MAX_CYCLES = 15          # Walkoff clips are bundled with the final recap edit and
                                              # routinely take longer than routine in-game highlights to publish
@@ -144,6 +146,11 @@ class MonitorCog(commands.Cog):
         self._lineup_posted: set = set()  # game_pks whose lineup has been posted
         self._lineup_clear_date = None
 
+        # Transaction log tracking for FAVORITE_TEAM
+        self._transaction_posted: set = set()   # transaction ids already posted
+        self._transaction_seeded = False        # False until the pre-existing backlog has been seeded (no-alert)
+        self._transaction_last_check: "datetime | None" = None
+
         self._load_hr_state()
         self._load_nh_state()
         self._load_summary_state()
@@ -151,6 +158,7 @@ class MonitorCog(commands.Cog):
         self._load_cycle_state()
         self._load_delay_state()
         self._load_lineup_state()
+        self._load_transaction_state()
         self.monitor_loop.start()
 
     def cog_unload(self):
@@ -280,6 +288,19 @@ class MonitorCog(commands.Cog):
 
     def _save_lineup_state(self) -> None:
         self._save_json(LINEUP_STATE_FILE, {"posted": list(self._lineup_posted), "clear_date": self._lineup_clear_date}, "lineup")
+
+    def _load_transaction_state(self) -> None:
+        data = self._load_json(TRANSACTION_STATE_FILE)
+        if data is None:
+            self._transaction_posted = set()
+            self._transaction_seeded = False
+            return
+        self._transaction_posted = set(data.get("posted", []))
+        self._transaction_seeded = True
+        print(f"[monitor] loaded {len(self._transaction_posted)} posted transaction(s) from disk")
+
+    def _save_transaction_state(self) -> None:
+        self._save_json(TRANSACTION_STATE_FILE, {"posted": list(self._transaction_posted)}, "transaction")
 
     async def _refresh_schedule(self, prune_finished: bool = False) -> None:
         """Fetch today's full MLB schedule and MERGE into the existing game cache.
@@ -696,6 +717,74 @@ class MonitorCog(commands.Cog):
             self._lineup_posted.add(pk)
             self._save_lineup_state()
             print(f"[monitor] posted {fav_upper} lineup for game {pk}")
+
+    async def _check_transactions(self, now_et: datetime) -> None:
+        """Poll FAVORITE_TEAM's MLB transaction log and alert on new entries."""
+        fav_team_id = getattr(self.bot, "favorite_team_id", None)
+        if not fav_team_id:
+            return
+        if (self._transaction_last_check is not None
+                and now_et - self._transaction_last_check < timedelta(minutes=TRANSACTION_CHECK_INTERVAL_MINUTES)):
+            return
+        self._transaction_last_check = now_et
+
+        client = self.bot.mlb_client
+        session = await client.get_session()
+        start_date = (now_et - timedelta(days=2)).strftime("%Y-%m-%d")
+        end_date = now_et.strftime("%Y-%m-%d")
+        url = f"{client.BASE_URL}/transactions?teamId={fav_team_id}&startDate={start_date}&endDate={end_date}"
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json()
+        except Exception as e:
+            print(f"[monitor] transaction fetch error: {e}")
+            return
+
+        transactions = [t for t in data.get("transactions", []) if t.get("id") is not None]
+
+        # First run ever (no state file) — seed the existing backlog silently
+        # so restart doesn't dump weeks of old transactions into Discord.
+        if not self._transaction_seeded:
+            self._transaction_posted = {t["id"] for t in transactions}
+            self._transaction_seeded = True
+            self._save_transaction_state()
+            print(f"[monitor] seeded {len(self._transaction_posted)} existing transaction(s); alerting from next new one")
+            return
+
+        new_ones = [t for t in transactions if t["id"] not in self._transaction_posted]
+        if not new_ones:
+            return
+
+        configured_id = getattr(self.bot, "alert_channel_id", None) or ALERT_CHANNEL_ID
+        if not configured_id:
+            return
+        channel = await self._get_alert_channel()
+        if channel is None:
+            print(f"[monitor] transaction check: alert channel not found (ALERT_CHANNEL_ID={configured_id})")
+            return
+
+        new_ones.sort(key=lambda t: (t.get("date") or "", t["id"]))
+        for t in new_ones:
+            try:
+                await self._post_transaction(channel, t)
+            except Exception as e:
+                print(f"[monitor] failed to post transaction {t['id']}: {e}")
+                continue  # retry next cycle
+            self._transaction_posted.add(t["id"])
+            self._save_transaction_state()
+            print(f"[monitor] posted transaction {t['id']}: {t.get('description', '')[:80]}")
+
+    async def _post_transaction(self, channel: discord.abc.Messageable, t: dict) -> None:
+        embed = discord.Embed(
+            title=f"📝 Transaction — {t.get('typeDesc', 'Roster Move')}",
+            description=t.get("description") or "(no description)",
+            color=discord.Color.blue(),
+        )
+        if t.get("date"):
+            embed.set_footer(text=t["date"])
+        await channel.send(embed=embed)
 
     async def _fetch_probables(self, game_pk: int) -> dict:
         """Return both sides' probable starters from the schedule.
@@ -2279,6 +2368,13 @@ class MonitorCog(commands.Cog):
             except Exception as e:
                 print(f"[monitor] lineup check error: {e}")
 
+            # Favorite-team transaction log — also independent of live games,
+            # roster moves happen at any hour.
+            try:
+                await self._check_transactions(now_et)
+            except Exception as e:
+                print(f"[monitor] transaction check error: {e}")
+
             # Sleep cheaply when no games are live or imminent
             if not self._any_game_active_or_imminent():
                 return
@@ -2504,6 +2600,32 @@ class MonitorCog(commands.Cog):
             await self._post_lineup(ctx.channel, box_data, side, info.get("start_et"), game_pk=pk)
             return
         await ctx.channel.send(f"No {fav_upper} game scheduled today.")
+
+    @commands.command(name="transaction_test")
+    async def transaction_test(self, ctx):
+        """Test the favorite-team transaction alert with the most recent transaction. Usage: !transaction_test"""
+        await ctx.message.delete()
+        fav_team_id = getattr(self.bot, "favorite_team_id", None)
+        if not fav_team_id:
+            await ctx.channel.send("No FAVORITE_TEAM configured (or team id not resolved).")
+            return
+        client = self.bot.mlb_client
+        session = await client.get_session()
+        now_et = _et_now()
+        start_date = (now_et - timedelta(days=14)).strftime("%Y-%m-%d")
+        end_date = now_et.strftime("%Y-%m-%d")
+        url = f"{client.BASE_URL}/transactions?teamId={fav_team_id}&startDate={start_date}&endDate={end_date}"
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                await ctx.channel.send(f"Transaction fetch returned {resp.status}.")
+                return
+            data = await resp.json()
+        transactions = [t for t in data.get("transactions", []) if t.get("id") is not None]
+        if not transactions:
+            await ctx.channel.send("No transactions found in the last 14 days.")
+            return
+        transactions.sort(key=lambda t: (t.get("date") or "", t["id"]))
+        await self._post_transaction(ctx.channel, transactions[-1])
 
     @commands.command(name="summary_test")
     async def summary_test(self, ctx, date: str = None):
