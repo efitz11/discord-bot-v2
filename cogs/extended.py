@@ -813,7 +813,11 @@ class ExtendedSlash(commands.Cog):
 
         lines = []
         event_options = []  # [{"event_title", "markets": [{"label", "token_id"}, ...]}, ...] — feeds the chart dropdown
-        for ev in events[:6]:
+        shown_events = events[:6]
+        # A single matched event means there's no ambiguity to trim for — show
+        # all its live outcomes instead of the usual per-event cap.
+        per_event_cap = 20 if len(shown_events) == 1 else 10
+        for ev in shown_events:
             title = ev.get("title") or ev.get("ticker") or ""
             # Placeholder outcomes (e.g. "Person A", "Party C") that Polymarket
             # scaffolds into multi-outcome events have zero liquidity — drop them.
@@ -822,7 +826,7 @@ class ExtendedSlash(commands.Cog):
                 live_markets,
                 key=lambda m: (float(m.get("bestBid") or 0) + float(m.get("bestAsk") or 0)) / 2,
                 reverse=True,
-            )[:4]
+            )[:per_event_cap]
             if not markets:
                 continue
             lines.append(f"» {title}")
