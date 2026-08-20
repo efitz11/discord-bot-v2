@@ -818,7 +818,11 @@ class ExtendedSlash(commands.Cog):
             # Placeholder outcomes (e.g. "Person A", "Party C") that Polymarket
             # scaffolds into multi-outcome events have zero liquidity — drop them.
             live_markets = [m for m in (ev.get("markets") or []) if float(m.get("liquidity") or 0) > 0]
-            markets = sorted(live_markets, key=lambda m: float(m.get("liquidity") or 0), reverse=True)[:4]
+            markets = sorted(
+                live_markets,
+                key=lambda m: (float(m.get("bestBid") or 0) + float(m.get("bestAsk") or 0)) / 2,
+                reverse=True,
+            )[:4]
             if not markets:
                 continue
             lines.append(f"» {title}")
