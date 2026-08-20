@@ -17,6 +17,7 @@ class ModernNatsBot(commands.Bot):
         self.favorite_team = os.getenv("FAVORITE_TEAM", "").upper() or None
         self.alert_channel_id = int(os.getenv("ALERT_CHANNEL_ID", "0")) or None
         # Populated by _load_team_config() at startup
+        self.favorite_team_id = None         # e.g. 120 (MLB Stats API team id)
         self.favorite_team_name = None       # e.g. "nationals" (lowercase teamName)
         self.favorite_team_full = None       # e.g. "Washington Nationals"
         self.favorite_team_affiliates = []   # lowercase full names of MiLB affiliate teams
@@ -29,6 +30,7 @@ class ModernNatsBot(commands.Bot):
                 data = await resp.json()
             for t in data.get('teams', []):
                 if t.get('abbreviation', '').upper() == self.favorite_team:
+                    self.favorite_team_id = t.get('id')
                     self.favorite_team_name = t.get('teamName', '').lower()
                     self.favorite_team_full = t.get('name', '')
                     break
