@@ -20,7 +20,8 @@ def _utc_to_et(iso_str: str) -> datetime | None:
     return None
 
 
-def _format_linescore(away_abbr, away_qs, home_abbr, home_qs, away_total, home_total, period_labels: list[str]) -> str:
+def _format_linescore(away_prefix, away_abbr, away_qs, home_prefix, home_abbr, home_qs,
+                       away_total, home_total, period_labels: list[str]) -> str:
     max_periods = max(len(away_qs), len(home_qs), len(period_labels))
 
     def pad_qs(qs, total):
@@ -30,22 +31,41 @@ def _format_linescore(away_abbr, away_qs, home_abbr, home_qs, away_total, home_t
     away_tot, away_vals = pad_qs(away_qs, away_total)
     home_tot, home_vals = pad_qs(home_qs, home_total)
 
-    tot_w    = max(len("T"), len(away_tot), len(home_tot))
-    q_widths = [max(len(lbl), len(av), len(hv)) for lbl, av, hv in zip(period_labels, away_vals, home_vals)]
+    tot_w    = max(len(away_tot), len(home_tot))
+    q_widths = [max(len(av), len(hv)) for av, hv in zip(away_vals, home_vals)]
+    prefix_w = max(len(away_prefix), len(home_prefix))
     abbr_w   = max(len(away_abbr), len(home_abbr))
     sep      = " "
 
-    def fmt_row(abbr, tot, vals):
-        return abbr.ljust(abbr_w) + sep + tot.rjust(tot_w) + " | " + sep.join(v.rjust(w) for v, w in zip(vals, q_widths))
+    def fmt_row(prefix, abbr, tot, vals):
+        name = prefix.rjust(prefix_w) + abbr.ljust(abbr_w)
+        return name + sep + tot.rjust(tot_w) + " | " + sep.join(v.rjust(w) for v, w in zip(vals, q_widths))
 
-    header = " " * abbr_w + sep + "T".rjust(tot_w) + " | " + sep.join(lbl.rjust(w) for lbl, w in zip(period_labels, q_widths))
-    return "\n".join([header, fmt_row(away_abbr, away_tot, away_vals), fmt_row(home_abbr, home_tot, home_vals)])
+    return "\n".join([
+        fmt_row(away_prefix, away_abbr, away_tot, away_vals),
+        fmt_row(home_prefix, home_abbr, home_tot, home_vals),
+    ])
+
+
+def _format_pregame(away_prefix, away_abbr, home_prefix, home_abbr, odds, broadcast) -> str:
+    prefix_w = max(len(away_prefix), len(home_prefix))
+    away_name = away_prefix.rjust(prefix_w) + away_abbr
+    home_name = home_prefix.rjust(prefix_w) + home_abbr
+    name_w    = max(len(away_name), len(home_name))
+    away_line = away_name.ljust(name_w)
+    home_line = home_name.ljust(name_w)
+    if odds:
+        away_line += f" | Spread: {odds}"
+    if broadcast:
+        home_line += f" | TV: {broadcast}"
+    return "\n".join([away_line, home_line])
 
 
 class ESPNCog(commands.Cog):
     SLUG:        str = ""
     SPORT:       str = ""
     SPORT_PATH:  str = ""   # e.g. "basketball" or "hockey"
+    TEAM_PARAMS: dict = {}  # extra query params for the teams-list fetch (e.g. FBS-only group)
 
     def __init__(self, bot):
         self.bot   = bot
@@ -78,16 +98,29 @@ class ESPNCog(commands.Cog):
         """Return True if this stat group is for goalies (hockey only)."""
         return False
 
+    def _rank_prefix(self, competitor: dict) -> str:
+        """Override to prefix a competitor's abbreviation with e.g. an AP rank ('(3) ')."""
+        return ""
+
+    def _extra_live_line(self, p: dict) -> str:
+        """Override to append an extra status line while a game is live (e.g. down & distance)."""
+        return ""
+
+    async def _load_extra(self):
+        """Override to load additional data after teams (e.g. conference groups)."""
+        pass
+
     # ── Shared implementation ─────────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_ready(self):
         await self._load_teams()
+        await self._load_extra()
 
     async def _load_teams(self):
         try:
             session = await self.bot.mlb_client.get_session()
-            async with session.get(self._teams_url) as resp:
+            async with session.get(self._teams_url, params=self.TEAM_PARAMS) as resp:
                 data = await resp.json()
             league = data.get("sports", [{}])[0].get("leagues", [{}])[0]
             self._teams = [
@@ -102,8 +135,12 @@ class ESPNCog(commands.Cog):
         away = next(x for x in comp["competitors"] if x["homeAway"] == "away")
         home = next(x for x in comp["competitors"] if x["homeAway"] == "home")
 
-        away_abbr  = away["team"]["abbreviation"]
-        home_abbr  = home["team"]["abbreviation"]
+        away_abbr    = away["team"]["abbreviation"]
+        home_abbr    = home["team"]["abbreviation"]
+        away_prefix  = self._rank_prefix(away)
+        home_prefix  = self._rank_prefix(home)
+        away_display = f"{away_prefix}{away_abbr}"
+        home_display = f"{home_prefix}{home_abbr}"
         away_total = away.get("score", "0")
         home_total = home.get("score", "0")
         away_qs    = [int(ls["value"]) for ls in away.get("linescores", [])]
@@ -116,18 +153,26 @@ class ESPNCog(commands.Cog):
 
         if status_name == "STATUS_SCHEDULED":
             tipoff_et  = _utc_to_et(comp.get("date", ""))
-            status_str = tipoff_et.strftime("%-I:%M %p ET") if tipoff_et else "TBD"
+            status_str = tipoff_et.strftime("%a %-m/%-d %-I:%M %p ET") if tipoff_et else "TBD"
         elif status_name in FINAL_STATUSES:
             suffix = " (SO)" if status_name == "STATUS_FINAL_SHOOTOUT" else (" (OT)" if status_name == "STATUS_FINAL_OT" else "")
             status_str = f"Final{suffix}"
         else:
             status_str = f"{self._period_label(period)} | {clock}"
 
+        odds_list  = comp.get("odds") or []
+        odds       = odds_list[0].get("details", "") if odds_list else ""
+        broadcasts = comp.get("broadcasts") or []
+        broadcast  = ", ".join(broadcasts[0].get("names", [])) if broadcasts else ""
+
         return {
             "away_abbr": away_abbr, "home_abbr": home_abbr,
+            "away_prefix": away_prefix, "home_prefix": home_prefix,
+            "away_display": away_display, "home_display": home_display,
             "away_total": away_total, "home_total": home_total,
             "away_qs": away_qs, "home_qs": home_qs,
             "status_name": status_name, "status_str": status_str,
+            "odds": odds, "broadcast": broadcast,
             "comp": comp,
         }
 
@@ -170,54 +215,74 @@ class ESPNCog(commands.Cog):
 
         return result
 
-    async def _score_impl(self, interaction: discord.Interaction, team: str, date: str = None):
+    async def _score_impl(self, interaction: discord.Interaction, team: str = None, date: str = None,
+                           groups: str = None, group_label: str = None,
+                           extra_params: dict = None, when_label: str = None):
         await interaction.response.defer()
 
         date_str = parse_date(date)
         params   = {"dates": date_str.replace("-", "")} if date_str else {}
+        if groups:
+            params["groups"] = groups
+        if extra_params:
+            params.update(extra_params)
 
         session = await self.bot.mlb_client.get_session()
         async with session.get(self._scoreboard_url, params=params) as resp:
             data = await resp.json()
 
         events     = data.get("events", [])
-        team_upper = team.upper()
-        all_games  = team_upper == "ALL"
+        team_upper = (team or "").upper()
 
-        if all_games:
+        if groups:
+            all_games = True
             games = [(event["id"], event["competitions"][0]) for event in events]
         else:
-            games = [
-                (event["id"], event["competitions"][0])
-                for event in events
-                if any(x["team"]["abbreviation"].upper() == team_upper for x in event["competitions"][0]["competitors"])
-            ]
+            all_games = team_upper == "ALL"
+            if all_games:
+                games = [(event["id"], event["competitions"][0]) for event in events]
+            else:
+                games = [
+                    (event["id"], event["competitions"][0])
+                    for event in events
+                    if any(x["team"]["abbreviation"].upper() == team_upper for x in event["competitions"][0]["competitors"])
+                ]
 
         if not games:
-            when = date_str or "today"
-            msg  = f"No games on {when}." if all_games else f"No game on {when} for **{team_upper}**."
+            when  = when_label or date_str or "today"
+            label = group_label or "games"
+            msg   = f"No {label} on {when}." if all_games else f"No game on {when} for **{team_upper}**."
             await interaction.followup.send(msg)
             return
 
         if all_games:
+            games.sort(key=lambda g: g[1].get("date", ""))
             blocks    = []
             any_live  = False
             for _event_id, comp in games:
-                p      = self._parse_comp(comp)
-                labels = self._linescore_labels(max(len(p["away_qs"]), len(p["home_qs"]), 1))
-                table  = _format_linescore(p["away_abbr"], p["away_qs"], p["home_abbr"], p["home_qs"], p["away_total"], p["home_total"], labels)
+                p = self._parse_comp(comp)
+                if p["status_name"] == "STATUS_SCHEDULED":
+                    table = _format_pregame(p["away_prefix"], p["away_abbr"], p["home_prefix"], p["home_abbr"],
+                                             p["odds"], p["broadcast"])
+                else:
+                    labels = self._linescore_labels(max(len(p["away_qs"]), len(p["home_qs"]), 1))
+                    table  = _format_linescore(p["away_prefix"], p["away_abbr"], p["away_qs"],
+                                                p["home_prefix"], p["home_abbr"], p["home_qs"],
+                                                p["away_total"], p["home_total"], labels)
                 if p["status_name"] not in FINAL_STATUSES and p["status_name"] != "STATUS_SCHEDULED":
                     any_live = True
-                blocks.append(f"**{p['away_abbr']} @ {p['home_abbr']} | {p['status_str']}**\n```\n{table}\n```")
+                blocks.append(f"**{p['away_display']} @ {p['home_display']} | {p['status_str']}**\n```\n{table}\n```")
 
             color = discord.Color.orange() if any_live else discord.Color.blue()
-            if date_str:
-                d = datetime.strptime(date_str, "%Y-%m-%d")
+            if when_label:
+                label_str = when_label
+            elif date_str:
+                label_str = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A, %B %-d, %Y")
             else:
-                d = et_now()
-            date_label = d.strftime("%A, %B %-d, %Y")
+                label_str = et_now().strftime("%A, %B %-d, %Y")
+            title = f"{group_label} — {label_str}" if group_label else f"{self.SPORT} Scores — {label_str}"
             await interaction.followup.send(embed=discord.Embed(
-                title=f"{self.SPORT} Scores — {date_label}",
+                title=title,
                 description="\n".join(blocks),
                 color=color,
             ))
@@ -225,12 +290,18 @@ class ESPNCog(commands.Cog):
 
         # Single team
         event_id, comp = games[0]
-        p      = self._parse_comp(comp)
-        labels = self._linescore_labels(max(len(p["away_qs"]), len(p["home_qs"]), 1))
-        table  = _format_linescore(p["away_abbr"], p["away_qs"], p["home_abbr"], p["home_qs"], p["away_total"], p["home_total"], labels)
+        p = self._parse_comp(comp)
+        if p["status_name"] == "STATUS_SCHEDULED":
+            table = _format_pregame(p["away_prefix"], p["away_abbr"], p["home_prefix"], p["home_abbr"],
+                                     p["odds"], p["broadcast"])
+        else:
+            labels = self._linescore_labels(max(len(p["away_qs"]), len(p["home_qs"]), 1))
+            table  = _format_linescore(p["away_prefix"], p["away_abbr"], p["away_qs"],
+                                        p["home_prefix"], p["home_abbr"], p["home_qs"],
+                                        p["away_total"], p["home_total"], labels)
         is_live = p["status_name"] not in FINAL_STATUSES and p["status_name"] != "STATUS_SCHEDULED"
         color   = discord.Color.orange() if is_live else discord.Color.blue()
-        title   = f"{p['away_abbr']} @ {p['home_abbr']} | {p['status_str']}"
+        title   = f"{p['away_display']} @ {p['home_display']} | {p['status_str']}"
         body    = f"```\n{table}\n```"
 
         if is_live:
@@ -244,6 +315,10 @@ class ESPNCog(commands.Cog):
                     ""
                 )
                 body += f"\nLast play: {lp_abbr + ' — ' if lp_abbr else ''}{lp_text}"
+
+            extra = self._extra_live_line(p)
+            if extra:
+                body += f"\n{extra}"
 
         if p["status_name"] != "STATUS_SCHEDULED":
             top = await self._fetch_top_performers(session, event_id)
