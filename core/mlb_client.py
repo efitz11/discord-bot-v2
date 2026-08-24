@@ -54,7 +54,15 @@ class MLBClient:
         team_id = person.get('currentTeam', {}).get('id')
         if team_id:
             abbrevs = await self.get_team_abbrevs()
-            return abbrevs.get(team_id, fallback)
+            if team_id in abbrevs:
+                return abbrevs[team_id]
+            # Not an MLB team (e.g. a MiLB affiliate) — look it up directly.
+            session = await self.get_session()
+            async with session.get(f"{self.BASE_URL}/teams/{team_id}") as resp:
+                data = await resp.json()
+                teams = data.get('teams', [])
+                if teams:
+                    return teams[0].get('abbreviation', fallback)
         return fallback
 
     async def get_milb_teams(self) -> list:
