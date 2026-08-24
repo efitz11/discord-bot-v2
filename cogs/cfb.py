@@ -5,18 +5,35 @@ from cogs.espn_base import _format_linescore, _format_pregame, FINAL_STATUSES
 from cogs.football import FootballCog
 
 CONFERENCES_URL = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard/conferences"
-RANKED_VALUE    = "RANKED"
-TOP_RANKED_N    = 10
+# The plain /teams endpoint ignores the `groups` filter and returns all divisions in an
+# arbitrary order truncated by `limit`, which silently drops FBS teams (e.g. Tennessee).
+# The FBS standings tree is grouped by conference and reliably lists every FBS team.
+FBS_STANDINGS_URL = "https://site.api.espn.com/apis/v2/sports/football/college-football/standings?group=80"
+RANKED_VALUE       = "RANKED"
+TOP_RANKED_N       = 10
 
 
 class CFBCog(FootballCog):
     SLUG  = "college-football"
     SPORT = "NCAAF"
-    TEAM_PARAMS = {"groups": "80", "limit": "300"}  # FBS teams only
 
     def __init__(self, bot):
         super().__init__(bot)
         self._conferences: list[dict] = []
+
+    async def _load_teams(self):
+        try:
+            session = await self.bot.mlb_client.get_session()
+            async with session.get(FBS_STANDINGS_URL) as resp:
+                data = await resp.json()
+            self._teams = [
+                {"abbreviation": e["team"]["abbreviation"], "displayName": e["team"]["displayName"]}
+                for conf in data.get("children", [])
+                for e in conf.get("standings", {}).get("entries", [])
+            ]
+            print(f"[{self.SLUG}] loaded {len(self._teams)} teams")
+        except Exception as e:
+            print(f"[{self.SLUG}] failed to load teams: {e}")
 
     async def _load_extra(self):
         await super()._load_extra()
