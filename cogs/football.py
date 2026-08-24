@@ -142,8 +142,9 @@ class FootballCog(ESPNCog):
 
         result = {}
         for team_block in data.get("boxscore", {}).get("players", []):
-            abbr   = team_block.get("team", {}).get("abbreviation", "")
-            scored = []
+            abbr    = team_block.get("team", {}).get("abbreviation", "")
+            passers = []
+            others  = []
             for group in team_block.get("statistics", []):
                 gname = group.get("name", "")
                 if gname not in _SKILL_GROUPS:
@@ -155,12 +156,20 @@ class FootballCog(ESPNCog):
                     raw = athlete.get("stats", [])
                     if not raw:
                         continue
-                    scored.append({
+                    entry = {
                         "name":    athlete.get("athlete", {}).get("displayName", "Unknown"),
                         "score":   self._score_group_stat(gname, raw, labels),
                         "summary": self._summarize_group_stat(gname, raw, labels),
-                    })
-            scored.sort(key=lambda x: x["score"], reverse=True)
-            result[abbr] = scored[:2]
+                    }
+                    (passers if gname == "passing" else others).append(entry)
+
+            passers.sort(key=lambda x: x["score"], reverse=True)
+            selected = []
+            if passers:
+                selected.append(passers[0])
+                others = others + passers[1:]
+            others.sort(key=lambda x: x["score"], reverse=True)
+            selected += others[:2]
+            result[abbr] = selected
 
         return result
