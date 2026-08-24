@@ -66,7 +66,10 @@ class CFBCog(FootballCog):
                                     extra_params=extra_params, when_label=week_label)
             return
 
-        await self._score_impl(interaction, team, extra_params=extra_params, when_label=week_label)
+        # Scope to FBS (group 80) — the scoreboard endpoint defaults to a small
+        # highlighted subset of games when no group is specified, which can miss teams.
+        team_params = {**(extra_params or {}), "groups": "80"}
+        await self._score_impl(interaction, team, extra_params=team_params, when_label=week_label)
 
     @score.autocomplete("team")
     async def team_autocomplete(self, interaction: Interaction, current: str):
