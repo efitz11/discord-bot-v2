@@ -83,6 +83,14 @@ class ModernNatsBot(commands.Bot):
             await self.load_extension('cogs.nhl')
             print("NHL commands enabled.")
 
+        if os.getenv("NFL", "").lower() in ("1", "true", "yes"):
+            await self.load_extension('cogs.nfl')
+            print("NFL commands enabled.")
+
+        if os.getenv("CFB", "").lower() in ("1", "true", "yes"):
+            await self.load_extension('cogs.cfb')
+            print("CFB commands enabled.")
+
         if os.getenv("WORLDCUP", "").lower() in ("1", "true", "yes"):
             await self.load_extension('cogs.worldcup')
             print("World Cup commands enabled.")
