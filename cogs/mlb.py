@@ -890,6 +890,103 @@ class MLBSlash(commands.Cog):
     async def compare_p2_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
+    @savant.command(name="compare_years", description="Compare one player's Savant percentiles across two seasons")
+    @app_commands.describe(player="Player name to search for", year1="First season year", year2="Second season year")
+    async def compare_years(self, interaction: discord.Interaction, player: str, year1: str, year2: str):
+        await interaction.response.defer()
+        try:
+            p1_data, p2_data = await asyncio.gather(
+                self.bot.mlb_client.get_player_percentiles(player, year=year1),
+                self.bot.mlb_client.get_player_percentiles(player, year=year2),
+            )
+        except Exception as e:
+            await interaction.followup.send(f"Error fetching percentiles: {e}")
+            return
+
+        if not p1_data:
+            await interaction.followup.send(f"No Savant data found for **{player}** in {year1}.")
+            return
+        if not p2_data:
+            await interaction.followup.send(f"No Savant data found for **{player}** in {year2}.")
+            return
+
+        # Shared labels, with longer variants where the comparison image has room
+        display_names = {
+            **PERCENTILE_DISPLAY_NAMES,
+            "sprint_speed":     "Sprint Speed",
+            "oaa":              "Range (OAA)",
+            "runner_run_value": "Baserunning",
+        }
+
+        # Use p1's stat_type to pick category layout; warn if they differ
+        stat_type = p1_data.stat_type
+        category_list = BATTER_PERCENTILE_CATEGORIES if stat_type == "Batter" else PITCHER_PERCENTILE_CATEGORIES
+
+        p1_lookup = {row['stat']: row for row in p1_data.percentiles}
+        p2_lookup = {row['stat']: row for row in p2_data.percentiles}
+        all_stats = set(p1_lookup) | set(p2_lookup)
+
+        def build_section(stat_names):
+            rows = []
+            for stat in stat_names:
+                if stat not in all_stats:
+                    continue
+                label = display_names.get(stat, stat.replace("_", " ").title())
+                v1 = p1_lookup[stat]['value'] if stat in p1_lookup else 0
+                v2 = p2_lookup[stat]['value'] if stat in p2_lookup else 0
+                rows.append((label, v1, v2))
+            return rows
+
+        assigned = set()
+        sections = []
+        for cat_name, targets in category_list:
+            rows = build_section(targets)
+            if rows:
+                sections.append((cat_name, rows))
+                assigned.update(t for t in targets if t in all_stats)
+
+        other_stats = [s for s in (p1_lookup.keys() | p2_lookup.keys()) if s not in assigned]
+        if other_stats:
+            rows = build_section(other_stats)
+            if rows:
+                sections.append(("Other", rows))
+
+        if not sections:
+            await interaction.followup.send(f"No overlapping stats found for **{player}** between {year1} and {year2}.")
+            return
+
+        p1_label = f"{p1_data.year} ({p1_data.team_abbrev})"
+        p2_label = f"{p2_data.year} ({p2_data.team_abbrev})"
+
+        headshot = None
+        if p1_data.player_id:
+            try:
+                session = await self.bot.mlb_client.get_session()
+                async with session.get(player_headshot_url(p1_data.player_id)) as resp:
+                    if resp.status == 200:
+                        headshot = await resp.read()
+            except Exception:
+                pass
+
+        buf = generate_compare_percentiles_image(
+            p1_label, p2_label,
+            p1_data.player_name, stat_type,
+            sections,
+            p1_team=p1_data.team_abbrev, p2_team=p2_data.team_abbrev,
+            p1_headshot=headshot, p2_headshot=headshot,
+        )
+        embed = discord.Embed(
+            title=f"{p1_data.player_name} — {p1_data.year} vs {p2_data.year} percentile comparison",
+            color=discord.Color.blurple(),
+        )
+        embed.set_image(url="attachment://percentile_comparison.png")
+        embed.set_footer(text="Bars show the relative difference in percentiles between the two seasons. Longer bar = larger gap.")
+        await interaction.followup.send(embed=embed, file=discord.File(buf, filename="percentile_comparison.png"))
+
+    @compare_years.autocomplete('player')
+    async def compare_years_player_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
     @savant.command(name="chart", description="Chart a player's rolling Statcast stats")
     @app_commands.describe(player="Player name", type="Chart type", window="Rolling window size (default: 100 PAs)")
     @app_commands.choices(
