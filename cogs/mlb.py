@@ -779,8 +779,14 @@ class MLBSlash(commands.Cog):
         return await self.player_autocomplete(interaction, current)
 
     @savant.command(name="compare_percentiles", description="Compare two players' Savant percentiles side-by-side")
-    @app_commands.describe(player1="First player", player2="Second player", year="Season year (default: current)")
-    async def compare_percentiles(self, interaction: discord.Interaction, player1: str, player2: str, year: str = None):
+    @app_commands.describe(player1="First player", player2="Second player", year="Season year (default: current)",
+                            mode="Bar style: relative (gap between players) or absolute (each player's own value)")
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Relative (highlight the gap)", value="relative"),
+        app_commands.Choice(name="Absolute (each player's own bar)", value="absolute"),
+    ])
+    async def compare_percentiles(self, interaction: discord.Interaction, player1: str, player2: str, year: str = None,
+                                   mode: app_commands.Choice[str] = None):
         await interaction.response.defer()
         try:
             p1_data, p2_data = await asyncio.gather(
@@ -873,13 +879,17 @@ class MLBSlash(commands.Cog):
             sections,
             p1_team=p1_data.team_abbrev, p2_team=p2_data.team_abbrev,
             p1_headshot=p1_headshot, p2_headshot=p2_headshot,
+            mode=mode.value if mode else "relative",
         )
         embed = discord.Embed(
             title=f"{p1_data.player_name} vs {p2_data.player_name} percentile comparison ({year_str})",
             color=discord.Color.blurple(),
         )
         embed.set_image(url="attachment://percentile_comparison.png")
-        embed.set_footer(text="Bars show the relative difference in percentiles between the two players. Longer bar = larger gap.")
+        if mode and mode.value == "absolute":
+            embed.set_footer(text="Bars show each player's own percentile. Blue = better, red = worse, gray = tied.")
+        else:
+            embed.set_footer(text="Bars show the relative difference in percentiles between the two players. Longer bar = larger gap.")
         await interaction.followup.send(embed=embed, file=discord.File(buf, filename="percentile_comparison.png"))
 
     @compare_percentiles.autocomplete('player1')
@@ -891,8 +901,14 @@ class MLBSlash(commands.Cog):
         return await self.player_autocomplete(interaction, current)
 
     @savant.command(name="compare_years", description="Compare one player's Savant percentiles across two seasons")
-    @app_commands.describe(player="Player name to search for", year1="First season year", year2="Second season year")
-    async def compare_years(self, interaction: discord.Interaction, player: str, year1: str, year2: str):
+    @app_commands.describe(player="Player name to search for", year1="First season year", year2="Second season year",
+                            mode="Bar style: relative (gap between seasons) or absolute (each season's own value)")
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Relative (highlight the gap)", value="relative"),
+        app_commands.Choice(name="Absolute (each season's own bar)", value="absolute"),
+    ])
+    async def compare_years(self, interaction: discord.Interaction, player: str, year1: str, year2: str,
+                             mode: app_commands.Choice[str] = None):
         await interaction.response.defer()
         try:
             p1_data, p2_data = await asyncio.gather(
@@ -974,13 +990,17 @@ class MLBSlash(commands.Cog):
             sections,
             p1_team=p1_data.team_abbrev, p2_team=p2_data.team_abbrev,
             p1_headshot=headshot, p2_headshot=headshot,
+            mode=mode.value if mode else "relative",
         )
         embed = discord.Embed(
             title=f"{p1_data.player_name} — {p1_data.year} vs {p2_data.year} percentile comparison",
             color=discord.Color.blurple(),
         )
         embed.set_image(url="attachment://percentile_comparison.png")
-        embed.set_footer(text="Bars show the relative difference in percentiles between the two seasons. Longer bar = larger gap.")
+        if mode and mode.value == "absolute":
+            embed.set_footer(text="Bars show each season's own percentile. Blue = better, red = worse, gray = tied.")
+        else:
+            embed.set_footer(text="Bars show the relative difference in percentiles between the two seasons. Longer bar = larger gap.")
         await interaction.followup.send(embed=embed, file=discord.File(buf, filename="percentile_comparison.png"))
 
     @compare_years.autocomplete('player')

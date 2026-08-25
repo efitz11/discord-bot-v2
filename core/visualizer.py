@@ -103,6 +103,7 @@ def generate_compare_percentiles_image(
     sections: list,
     p1_team: Optional[str] = None, p2_team: Optional[str] = None,
     p1_headshot: Optional[bytes] = None, p2_headshot: Optional[bytes] = None,
+    mode: str = "relative",
 ) -> io.BytesIO:
     """Render a side-by-side percentile comparison chart styled after Baseball Savant."""
 
@@ -131,6 +132,9 @@ def generate_compare_percentiles_image(
     TRACK    = (34, 38, 56)
     TEXT     = (224, 224, 235)
     DIM      = (110, 115, 140)
+    WIN_COL  = (29, 125, 212)   # better percentile — matches Savant's high-percentile blue
+    LOSE_COL = (200, 48, 48)    # worse percentile — matches Savant's low-percentile red
+    TIE_COL  = (150, 150, 165)  # tied — matches Savant's mid-percentile gray
     # Team-derived colors: primary fills the bar, secondary outlines it so two
     # teams sharing a primary color stay distinguishable.
     p1_primary, p1_secondary = _team_colors(p1_team)
@@ -205,16 +209,36 @@ def generate_compare_percentiles_image(
             draw.rounded_rectangle([xb1,  bar_top, xctr - 1, bar_bottom], radius=3, fill=TRACK)
             draw.rounded_rectangle([xb2,  bar_top, xv2  - 1, bar_bottom], radius=3, fill=TRACK)
 
-            # Bar shows the percentile difference on the winning player's side
-            diff = (v1 or 0) - (v2 or 0)
-            if diff != 0:
-                blen = max(1, round(abs(diff) / 100 * BAR_W))
-                if diff > 0:
-                    draw.rounded_rectangle([xctr - blen, bar_top, xctr - 1, bar_bottom],
-                                           radius=3, fill=P1_COL, outline=p1_secondary, width=2)
+            if mode == "absolute":
+                # Each side's bar extends from the center outward, sized to its own
+                # percentile value (not the gap). Color signals who wins the row:
+                # blue = better percentile, red = worse, gray = tied.
+                v1n, v2n = (v1 or 0), (v2 or 0)
+                if v1n > v2n:
+                    col1, col2 = WIN_COL, LOSE_COL
+                elif v2n > v1n:
+                    col1, col2 = LOSE_COL, WIN_COL
                 else:
-                    draw.rounded_rectangle([xb2, bar_top, xb2 + blen, bar_bottom],
-                                           radius=3, fill=P2_COL, outline=p2_secondary, width=2)
+                    col1 = col2 = TIE_COL
+                len1 = max(1, round(v1n / 100 * BAR_W))
+                len2 = max(1, round(v2n / 100 * BAR_W))
+                if v1:
+                    draw.rounded_rectangle([xctr - len1, bar_top, xctr - 1, bar_bottom],
+                                           radius=3, fill=col1)
+                if v2:
+                    draw.rounded_rectangle([xb2, bar_top, xb2 + len2, bar_bottom],
+                                           radius=3, fill=col2)
+            else:
+                # Bar shows the percentile difference on the winning player's side
+                diff = (v1 or 0) - (v2 or 0)
+                if diff != 0:
+                    blen = max(1, round(abs(diff) / 100 * BAR_W))
+                    if diff > 0:
+                        draw.rounded_rectangle([xctr - blen, bar_top, xctr - 1, bar_bottom],
+                                               radius=3, fill=P1_COL, outline=p1_secondary, width=2)
+                    else:
+                        draw.rounded_rectangle([xb2, bar_top, xb2 + blen, bar_bottom],
+                                               radius=3, fill=P2_COL, outline=p2_secondary, width=2)
 
             # percentile values
             col1 = _pct_color(v1) if v1 else DIM
