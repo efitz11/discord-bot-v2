@@ -1871,7 +1871,7 @@ def generate_market_chart(series: list, tz_offset_secs: int = 0, range_label: st
         ly += 18 * S
 
     if range_label:
-        draw.text((PAD_L + plot_w - 6 * S, PAD_T + plot_h + 6 * S), range_label,
+        draw.text((PAD_L + plot_w - 6 * S, PAD_T + 4 * S), range_label,
                    font=f_axis, fill=DIM_COL, anchor="ra")
 
     img = img.resize((W // S, H // S), Image.LANCZOS)
