@@ -131,8 +131,12 @@ class CFBCog(FootballCog):
                 table  = _format_linescore(p["away_prefix"], p["away_abbr"], p["away_qs"],
                                             p["home_prefix"], p["home_abbr"], p["home_qs"],
                                             p["away_total"], p["home_total"], labels)
-            if p["status_name"] not in FINAL_STATUSES and p["status_name"] != "STATUS_SCHEDULED":
+            is_live = p["status_name"] not in FINAL_STATUSES and p["status_name"] != "STATUS_SCHEDULED"
+            if is_live:
                 any_live = True
+                extra = self._extra_live_line(p)
+                if extra:
+                    table += f"\n{extra}"
             blocks.append(f"**{p['away_display']} @ {p['home_display']} | {p['status_str']}**\n```\n{table}\n```")
 
         color = discord.Color.orange() if any_live else discord.Color.blue()
