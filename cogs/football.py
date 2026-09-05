@@ -81,7 +81,7 @@ class FootballCog(ESPNCog):
 
     def _extra_live_line(self, p: dict) -> str:
         situation = p["comp"].get("situation", {})
-        dd = situation.get("shortDownDistanceText") or situation.get("downDistanceText")
+        dd = situation.get("downDistanceText") or situation.get("shortDownDistanceText")
         if not dd:
             return ""
         poss_id   = situation.get("possession")
