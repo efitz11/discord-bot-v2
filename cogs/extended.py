@@ -909,14 +909,28 @@ class ExtendedSlash(commands.Cog):
 
         results = await asyncio.gather(*(fetch(m) for m in outcome_markets))
 
-        series = []
-        for m, points, color in zip(outcome_markets, results, POLY_CHART_COLORS):
+        raw_series = []
+        for m, points in zip(outcome_markets, results):
             if points:
-                series.append({"label": m["label"], "color": color, "points": points, "last": points[-1][1]})
+                raw_series.append({"label": m["label"], "points": points, "last": points[-1][1]})
 
-        if len(series) < 2:
+        if len(raw_series) < 2:
             await interaction.followup.send(f"Not enough price history yet to chart **{event_title}**.")
             return
+
+        # Drop outcomes that never rise meaningfully above 0% so they don't
+        # clutter the plot as flat lines along the axis, but keep at least
+        # two series so there's still something to compare.
+        NEGLIGIBLE_THRESHOLD = 2.0
+        notable = [s for s in raw_series if max(p for _, p in s["points"]) >= NEGLIGIBLE_THRESHOLD]
+        if len(notable) >= 2:
+            raw_series = notable
+        raw_series.sort(key=lambda s: s["last"], reverse=True)
+
+        series = [
+            {**s, "color": color}
+            for s, color in zip(raw_series, POLY_CHART_COLORS)
+        ]
 
         all_ts = [ts for s in series for ts, _ in s["points"]]
         span_days = (max(all_ts) - min(all_ts)) / 86400
