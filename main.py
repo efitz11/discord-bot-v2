@@ -66,6 +66,9 @@ class ModernNatsBot(commands.Bot):
         # Load the live game monitor (no-hitters, big HRs)
         await self.load_extension('cogs.monitor')
 
+        # Load the /big image-posting command
+        await self.load_extension('cogs.images')
+
         # Load optional extended commands (weather, etc.) if enabled
         if os.getenv("EXTENDED_COMMANDS", "").lower() in ("1", "true", "yes"):
             await self.load_extension('cogs.extended')
