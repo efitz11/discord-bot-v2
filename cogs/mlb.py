@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_spray_chart, generate_game_spray_chart, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, generate_player_card_image, _team_colors
+from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_spray_chart, generate_game_spray_chart, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, generate_player_card_image, generate_game_pitch_chart, _team_colors
 import io
 import asyncio
 import dataclasses
@@ -2590,6 +2590,54 @@ class MLBSlash(commands.Cog):
 
     @pitches.autocomplete('player')
     async def pitches_player_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.player_autocomplete(interaction, current)
+
+    @savant.command(name="pitchchart", description="Plot every pitch a pitcher threw in a game on a strike zone, colored by pitch type")
+    @app_commands.describe(player="The pitcher to look up", date="A specific date (e.g. 4/7/26, yesterday, today)")
+    async def pitchchart(self, interaction: discord.Interaction, player: str, date: str = None):
+        await interaction.response.defer()
+        parsed_date = parse_date(date)
+
+        resolved = await self.bot.mlb_client.resolve_player(player)
+        if not resolved:
+            await interaction.followup.send("Could not find that player.")
+            return
+        player_id = int(resolved['id'])
+
+        session = await self.bot.mlb_client.get_session()
+        async with session.get(f"{self.bot.mlb_client.BASE_URL}/people/{player_id}?hydrate=currentTeam") as resp:
+            person = ((await resp.json()).get('people') or [{}])[0] if resp.status == 200 else {}
+        team_id = person.get('currentTeam', {}).get('id')
+        abbrevs = await self.bot.mlb_client.get_team_abbrevs()
+        team = abbrevs.get(team_id, '')
+        if not team:
+            await interaction.followup.send("Could not determine this player's team.")
+            return
+
+        feed = await self.bot.mlb_client.get_pitcher_game_feed(team_query=team, date=parsed_date, player_id=player_id)
+        if not feed or not feed.get('pitchers'):
+            await interaction.followup.send(f"No pitch data found for **{resolved['name']}** today.")
+            return
+
+        pitcher = feed['pitchers'][0]
+        pitch_data = pitcher['pitch_data']
+        matchup = f"{feed['away']} @ {feed['home']}"
+
+        loop = asyncio.get_event_loop()
+        img_buffer = await loop.run_in_executor(None, generate_game_pitch_chart, pitch_data, pitcher['name'], matchup, feed.get('game_date', ''))
+
+        safe_name = resolved['name'].replace(' ', '_').lower()
+        filename = f"pitchchart_{safe_name}_{feed['away']}_{feed['home']}.png"
+
+        embed = discord.Embed(
+            title=f"{pitcher['name']} — Game Pitch Chart ({feed['away']} @ {feed['home']})",
+            color=discord.Color.red()
+        )
+        embed.set_image(url=f"attachment://{filename}")
+        await interaction.followup.send(embed=embed, file=discord.File(fp=img_buffer, filename=filename))
+
+    @pitchchart.autocomplete('player')
+    async def pitchchart_player_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.player_autocomplete(interaction, current)
 
 

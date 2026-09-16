@@ -2696,6 +2696,7 @@ class MLBClient:
             'away': game.away.abbreviation,
             'home': game.home.abbreviation,
             'game_time': game.game_time_str,
+            'game_date': game.game_date_str,
             'status': game.abstract_state,
             'side': side,
             'inning_columns': sorted(columns_seen, key=lambda x: int(x) if x.isdigit() else 99),
