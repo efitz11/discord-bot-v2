@@ -3,9 +3,9 @@ monitor.py — Live MLB game monitoring cog.
 
 Posts to ALERT_CHANNEL_ID automatically when:
   1. A no-hitter or perfect game is in progress (updates every inning change).
-  2. A notable home run is hit (≥420 ft, favorite team HR, ≤5-park HR, xBA < .200, or a
-     batter's 2nd+ HR in the same game), once a highlight video is available (or after
-     VIDEO_WAIT_MAX_CYCLES minutes with no video, e.g. alternate broadcasts that delay
+  2. A notable home run is hit (≥420 ft, favorite team HR, ≤5-park HR, xBA < .200,
+     inside-the-park, or a batter's 2nd+ HR in the same game), once a highlight video
+     is available (or after VIDEO_WAIT_MAX_CYCLES minutes with no video, e.g. alternate broadcasts that delay
      uploads). Multi-homer alerts list every HR that batter has hit so far that game.
   3. A walkoff play ends a game (all 30 teams); alert is posted immediately then edited
      with the highlight video once MLB uploads it (up to WALKOFF_VIDEO_WAIT_MAX_CYCLES
@@ -1285,6 +1285,8 @@ class MonitorCog(commands.Cog):
             return True
         if hr.get("game_hr_num", 1) >= MULTI_HR_THRESHOLD:
             return True
+        if hr.get("itp"):
+            return True
         if hr["dist"] >= HR_DISTANCE_THRESHOLD:
             return True
         parks = hr.get("parks")
@@ -1369,6 +1371,7 @@ class MonitorCog(commands.Cog):
         video_blurb = hr.get("video_blurb", "Watch")
         xba        = hr.get("xba")
         parks      = hr.get("parks")
+        itp        = hr.get("itp", False)
 
         away    = hr.get("away", "")
         home    = hr.get("home", "")
@@ -1382,7 +1385,10 @@ class MonitorCog(commands.Cog):
         num_str = f" (#{hr_num})" if hr_num else ""
 
         # Most notable qualifier goes in the title; the others fall to the stats line
-        if parks is not None and 0 < parks <= HR_PARKS_THRESHOLD:
+        if itp:
+            title_key = "itp"
+            title_stat = "Inside-the-Park!"
+        elif parks is not None and 0 < parks <= HR_PARKS_THRESHOLD:
             title_key = "parks"
             title_stat = f"{parks}/30 parks"
         elif xba is not None and xba < HR_XBA_THRESHOLD:
@@ -1392,7 +1398,8 @@ class MonitorCog(commands.Cog):
             title_key = "dist"
             title_stat = f"{dist} ft"
 
-        title = f"💣 {matchup} — ({team}) {batter}{num_str} | {title_stat}"
+        emoji = "⚡" if itp else "💣"
+        title = f"{emoji} {matchup} — ({team}) {batter}{num_str} | {title_stat}"
 
         pitch_parts = []
         if pitch_type and pitch_spd:
@@ -2042,6 +2049,7 @@ class MonitorCog(commands.Cog):
                 "video_blurb":  "",
                 "xba":          None,
                 "parks":        None,
+                "itp":          "inside-the-park" in desc.lower(),
             }
 
             if hr_key not in self._hr_pending:
