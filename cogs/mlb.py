@@ -2622,9 +2622,11 @@ class MLBSlash(commands.Cog):
         pitcher = feed['pitchers'][0]
         pitch_data = pitcher['pitch_data']
         matchup = f"{feed['away']} @ {feed['home']}"
+        game_dt = datetime.strptime(parsed_date, "%Y-%m-%d") if parsed_date else et_now()
+        game_date_full = game_dt.strftime("%b %d, %Y").replace(" 0", " ")
 
         loop = asyncio.get_event_loop()
-        img_buffer = await loop.run_in_executor(None, generate_game_pitch_chart, pitch_data, pitcher['name'], matchup, feed.get('game_date', ''))
+        img_buffer = await loop.run_in_executor(None, generate_game_pitch_chart, pitch_data, pitcher['name'], matchup, game_date_full)
 
         safe_name = resolved['name'].replace(' ', '_').lower()
         filename = f"pitchchart_{safe_name}_{feed['away']}_{feed['home']}.png"

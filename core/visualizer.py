@@ -943,13 +943,13 @@ def generate_game_pitch_chart(pitch_data: list, pitcher_name: str, matchup: str 
     font_bold = get_font(38, bold=True)
     font_small = get_font(32)
 
-    draw.text((30, 30), pitcher_name, fill=(255, 255, 255), font=font_title)
-    subtitle = f"{len(pts)} pitches"
-    if matchup:
-        subtitle += f"  ·  {matchup}"
-    if game_date:
-        subtitle += f"  ·  {game_date}"
-    draw.text((30, 92), subtitle, fill=(180, 180, 180), font=font_small)
+    overall_strikes = sum(1 for p in pts if p['is_strike'])
+
+    draw.text((30, 25), pitcher_name, fill=(255, 255, 255), font=font_title)
+    matchup_line = "  ·  ".join(s for s in (matchup, game_date) if s)
+    if matchup_line:
+        draw.text((30, 88), matchup_line, fill=(180, 180, 180), font=font_small)
+    draw.text((30, 126), f"{len(pts)} pitches, {overall_strikes} strikes", fill=(180, 180, 180), font=font_small)
 
     # Plot every pitch as a dot colored by pitch type
     for p in pts:
@@ -966,7 +966,7 @@ def generate_game_pitch_chart(pitch_data: list, pitcher_name: str, matchup: str 
             g['strikes'] += 1
     ordered = sorted(groups.items(), key=lambda kv: -len(kv[1]['speeds']))
 
-    legend_top = 140
+    legend_top = 175
     row_h = min(150, (height - legend_top - 40) / len(ordered))
     swatch_r = 28
     lx = zone_area_width + 40
@@ -983,7 +983,7 @@ def generate_game_pitch_chart(pitch_data: list, pitcher_name: str, matchup: str 
         draw.ellipse([lx - swatch_r, cy - swatch_r, lx + swatch_r, cy + swatch_r], fill=g['color'], outline=(255, 255, 255), width=3)
 
         text_x = lx + swatch_r + 25
-        count_str = f"{count} ({g['strikes']} strikes)"
+        count_str = f"{count}P-{g['strikes']}S"
         max_name_w = (width - 40) - draw.textlength(count_str, font=font_bold) - 40 - text_x
         name = f"{g['name']} ({code})"
         while name and draw.textlength(name + "…", font=font_bold) > max_name_w:
