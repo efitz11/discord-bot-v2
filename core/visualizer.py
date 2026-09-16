@@ -808,6 +808,202 @@ def generate_pitch_plot(pitches, stand: str = "R") -> io.BytesIO:
     buffer.seek(0)
     return buffer
 
+# Standard Savant-style colors by pitch type code
+PITCH_TYPE_COLORS = {
+    'FF': (210, 45, 73),    # 4-Seam Fastball
+    'SI': (254, 157, 0),    # Sinker
+    'FC': (147, 63, 44),    # Cutter
+    'FS': (96, 219, 51),    # Splitter
+    'FO': (96, 219, 51),    # Forkball
+    'SC': (96, 219, 51),    # Screwball
+    'SL': (238, 231, 22),   # Slider
+    'ST': (221, 179, 58),   # Sweeper
+    'SV': (163, 202, 55),   # Slurve
+    'CU': (0, 209, 237),    # Curveball
+    'KC': (59, 172, 172),   # Knuckle Curve
+    'CS': (0, 209, 237),    # Slow Curve
+    'CH': (29, 190, 58),    # Changeup
+    'KN': (60, 68, 205),    # Knuckleball
+    'EP': (136, 136, 136),  # Eephus
+    'PO': (140, 140, 140),  # Pitchout
+}
+DEFAULT_PITCH_TYPE_COLOR = (150, 150, 150)
+
+def _pitch_type_color(code: str) -> tuple:
+    return PITCH_TYPE_COLORS.get((code or '').upper(), DEFAULT_PITCH_TYPE_COLOR)
+
+def generate_game_pitch_chart(pitch_data: list, pitcher_name: str, matchup: str = "", game_date: str = "") -> io.BytesIO:
+    """Plot every pitch a pitcher threw in a game on a strike zone, colored by pitch type,
+    with a legend showing count and min/max/avg velocity per type."""
+    width, height = 1550, 1350
+    zone_area_width = 850
+
+    img = Image.new('RGB', (width, height), color=(18, 25, 33))
+    draw = ImageDraw.Draw(img)
+
+    pts = []
+    for p in pitch_data:
+        px = p.get('plate_x', p.get('px'))
+        pz = p.get('plate_z', p.get('pz'))
+        speed = p.get('start_speed')
+        if px is None or pz is None or speed is None:
+            continue
+        code = (p.get('pitch_type') or 'UN').upper()
+        pts.append({
+            'px': px, 'pz': pz, 'speed': speed, 'code': code,
+            'name': p.get('pitch_name') or code,
+            'sz_top': p.get('sz_top'), 'sz_bot': p.get('sz_bot'),
+            'is_strike': p.get('call') == 'S',
+        })
+
+    if not pts:
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+        return buffer
+
+    sz_tops = [p['sz_top'] for p in pts if p['sz_top']]
+    sz_bots = [p['sz_bot'] for p in pts if p['sz_bot']]
+    sz_top = sum(sz_tops) / len(sz_tops) if sz_tops else 3.5
+    sz_bot = sum(sz_bots) / len(sz_bots) if sz_bots else 1.5
+
+    zone_px_w = 332
+    ball_r = 20
+    scale = zone_px_w / (2 * 0.708)
+    base_y = 560 + ((sz_top + sz_bot) / 2) * scale
+
+    def get_x(px):
+        return zone_area_width // 2 + (px * scale)
+
+    def get_y(pz):
+        return base_y - (pz * scale)
+
+    # Ground plane in fake perspective (catcher's view, like Gameday): depth d
+    # in feet toward the viewer maps to pixels below ground level, heavily
+    # foreshortened, with lines fanning outward slightly as they get closer
+    ground_y = get_y(0)
+    box_front_d = 0.708 + 3.0  # deepest chalk: 3 ft in front of plate center
+    depth_scale = min(48, (height - 20 - ground_y) / box_front_d)
+    spread = 0.03      # lateral spread per foot of depth
+
+    def ground_pt(x_ft, d_ft):
+        return (zone_area_width // 2 + x_ft * scale * (1 + spread * d_ft),
+                ground_y + d_ft * depth_scale)
+
+    # Home plate flat on the ground: 17" back edge at d=0, 8.5" parallel
+    # sides, point toward the catcher (17" total depth)
+    plate_w_feet = 0.708
+    draw.polygon([
+        ground_pt(-plate_w_feet, 0),
+        ground_pt(plate_w_feet, 0),
+        ground_pt(plate_w_feet, 0.708),
+        ground_pt(0, 1.417),
+        ground_pt(-plate_w_feet, 0.708),
+    ], fill=(180, 180, 185))
+
+    # Batter's boxes: inner chalk line 6" outside the plate, running from 3 ft
+    # behind to 3 ft in front of the plate's center; the front line runs
+    # outward to the edge only, so no chalk crosses in front of home plate
+    box_color = (65, 80, 95)
+    box_inner = plate_w_feet + 0.5
+    box_back_d = 0.708 - 3.0
+    for side in (-1, 1):
+        inner_back = ground_pt(side * box_inner, box_back_d)
+        inner_front = ground_pt(side * box_inner, box_front_d)
+        outer_x = 10 if side < 0 else zone_area_width - 10
+        draw.line([inner_back, inner_front], fill=box_color, width=4)
+        draw.line([inner_front, (outer_x, inner_front[1])], fill=box_color, width=4)
+
+    zx_left = get_x(-0.708)
+    zx_right = get_x(0.708)
+    zy_top = get_y(sz_top)
+    zy_bot = get_y(sz_bot)
+
+    draw.rectangle([zx_left - 4, zy_top - 4, zx_right + 4, zy_bot + 4], outline=(200, 200, 200), width=9)
+    v_step = (zx_right - zx_left) / 3
+    draw.line([zx_left + v_step, zy_top, zx_left + v_step, zy_bot], fill=(120, 120, 120), width=4)
+    draw.line([zx_left + 2*v_step, zy_top, zx_left + 2*v_step, zy_bot], fill=(120, 120, 120), width=4)
+    h_step = (zy_bot - zy_top) / 3
+    draw.line([zx_left, zy_top + h_step, zx_right, zy_top + h_step], fill=(120, 120, 120), width=4)
+    draw.line([zx_left, zy_top + 2*h_step, zx_right, zy_top + 2*h_step], fill=(120, 120, 120), width=4)
+
+    def get_font(size, bold=False):
+        if bold:
+            fonts = ["arialbd.ttf", "DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]
+        else:
+            fonts = ["arial.ttf", "DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"]
+        for f in fonts:
+            try:
+                return ImageFont.truetype(f, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    font_title = get_font(52, bold=True)
+    font_bold = get_font(38, bold=True)
+    font_small = get_font(32)
+
+    draw.text((30, 30), pitcher_name, fill=(255, 255, 255), font=font_title)
+    subtitle = f"{len(pts)} pitches"
+    if matchup:
+        subtitle += f"  ·  {matchup}"
+    if game_date:
+        subtitle += f"  ·  {game_date}"
+    draw.text((30, 92), subtitle, fill=(180, 180, 180), font=font_small)
+
+    # Plot every pitch as a dot colored by pitch type
+    for p in pts:
+        x, y = get_x(p['px']), get_y(p['pz'])
+        color = _pitch_type_color(p['code'])
+        draw.ellipse([x - ball_r, y - ball_r, x + ball_r, y + ball_r], fill=color, outline=(255, 255, 255), width=2)
+
+    # Legend: one row per pitch type, sorted by usage, with min/max/avg velocity
+    groups = {}
+    for p in pts:
+        g = groups.setdefault(p['code'], {'name': p['name'], 'speeds': [], 'strikes': 0, 'color': _pitch_type_color(p['code'])})
+        g['speeds'].append(p['speed'])
+        if p['is_strike']:
+            g['strikes'] += 1
+    ordered = sorted(groups.items(), key=lambda kv: -len(kv[1]['speeds']))
+
+    legend_top = 140
+    row_h = min(150, (height - legend_top - 40) / len(ordered))
+    swatch_r = 28
+    lx = zone_area_width + 40
+
+    for i, (code, g) in enumerate(ordered):
+        ly = legend_top + i * row_h
+        cy = ly + row_h / 2 - 20
+        speeds = g['speeds']
+        count = len(speeds)
+        avg_s = sum(speeds) / count
+        min_s = min(speeds)
+        max_s = max(speeds)
+
+        draw.ellipse([lx - swatch_r, cy - swatch_r, lx + swatch_r, cy + swatch_r], fill=g['color'], outline=(255, 255, 255), width=3)
+
+        text_x = lx + swatch_r + 25
+        count_str = f"{count} ({g['strikes']} strikes)"
+        max_name_w = (width - 40) - draw.textlength(count_str, font=font_bold) - 40 - text_x
+        name = f"{g['name']} ({code})"
+        while name and draw.textlength(name + "…", font=font_bold) > max_name_w:
+            name = name[:-1].rstrip()
+        if name != f"{g['name']} ({code})":
+            name += "…"
+
+        draw.text((text_x, cy), name, fill=(255, 255, 255), font=font_bold, anchor="lm")
+        draw.text((width - 40, cy), count_str, fill=(200, 200, 200), font=font_bold, anchor="rm")
+        draw.text(
+            (text_x, cy + 44),
+            f"{min_s:.1f}–{max_s:.1f} mph (avg {avg_s:.1f})",
+            fill=(180, 180, 180), font=font_small, anchor="lm",
+        )
+
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    buffer.seek(0)
+    return buffer
+
 
 def _zone_color(value: float, chart_type: str) -> tuple:
     """Map a stat value to a blue→white→red heatmap color."""
