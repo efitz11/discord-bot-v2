@@ -853,7 +853,7 @@ def generate_game_pitch_chart(pitch_data: list, pitcher_name: str, matchup: str 
             'px': px, 'pz': pz, 'speed': speed, 'code': code,
             'name': p.get('pitch_name') or code,
             'sz_top': p.get('sz_top'), 'sz_bot': p.get('sz_bot'),
-            'is_strike': p.get('call') == 'S',
+            'is_strike': p.get('call') in ('S', 'X'),  # 'X' = ball in play, also counts as a strike
         })
 
     if not pts:
