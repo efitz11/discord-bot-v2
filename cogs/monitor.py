@@ -861,11 +861,31 @@ class MonitorCog(commands.Cog):
         return "\n".join(lines)
 
     @staticmethod
-    def _format_owns(matchups: list, pitcher_name: str) -> str:
+    def _owns_threshold(pa: int) -> float:
+        """A larger career sample makes a moderate OPS a more meaningful signal,
+        so require less OPS to call it 'ownership' as PA climbs."""
+        if pa >= 25:
+            return 0.900
+        if pa >= 15:
+            return 1.000
+        return 1.100
+
+    @staticmethod
+    def _owned_threshold(pa: int) -> float:
+        """Mirror of _owns_threshold for the pitcher-owns-hitter direction."""
+        if pa >= 25:
+            return 0.600
+        if pa >= 15:
+            return 0.550
+        return 0.500
+
+    @classmethod
+    def _format_owns(cls, matchups: list, pitcher_name: str) -> str:
         """Build the 'hitter owns / pitcher owns' block from career matchup stats.
 
-        Mirrors the /mlb matchup buckets: OPS > 1.100 means the hitter owns the
-        pitcher, OPS < .500 means the pitcher owns the hitter (min 5 career PA).
+        Mirrors the /mlb matchup buckets, but the OPS bar scales with sample
+        size (see _owns_threshold/_owned_threshold) — a big career sample needs
+        less OPS to count as ownership than a handful of PA (min 5 career PA).
         """
         hitter_owns = []
         pitcher_owns = []
@@ -885,9 +905,9 @@ class MonitorCog(commands.Cog):
             if m.so > 0: stat_parts.append(f"{m.so} SO")
             line = f"**{m.batter_name}** {m.avg}/{m.ops} ({', '.join(stat_parts)})"
 
-            if ops_f > 1.100:
+            if ops_f >= cls._owns_threshold(m.pa):
                 hitter_owns.append(line)
-            elif ops_f < .500:
+            elif ops_f <= cls._owned_threshold(m.pa):
                 pitcher_owns.append(line)
 
         block = ""
