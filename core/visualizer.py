@@ -1234,7 +1234,7 @@ def generate_zone_plot(data: dict) -> io.BytesIO:
 
     # Canvas
     W, H = 900, 1000
-    bg = (18, 25, 33)
+    bg = _SPRAY_BG
     img = Image.new('RGB', (W, H), color=bg)
     draw = ImageDraw.Draw(img)
 
@@ -1365,16 +1365,6 @@ def generate_zone_plot(data: dict) -> io.BytesIO:
     img.save(buf, format='PNG')
     buf.seek(0)
     return buf
-
-
-# Event → (label, dot color) for spray chart legend/coloring.
-_SPRAY_EVENT_STYLE = {
-    'single':     ('1B', (70, 150, 230)),
-    'double':     ('2B', (240, 170, 40)),
-    'triple':     ('3B', (180, 90, 220)),
-    'home_run':   ('HR', (220, 50, 50)),
-}
-_SPRAY_OUT_COLOR = (120, 128, 138)
 
 
 # Angle (degrees from center field, negative = toward left field line) for each
@@ -1609,6 +1599,110 @@ def _draw_spray_field(img, draw, layout, font_distance):
             draw.text((lx - tw / 2, ly - th / 2), label, fill=(170, 178, 188), font=font_distance)
 
 
+_SPRAY_BG = (18, 25, 33)
+_SPRAY_GOLD = (255, 215, 0)
+_SPRAY_KIND_ORDER = {'out': 0, 'hit': 1, 'hr': 2}
+
+
+def _draw_dot(img, cx, cy, r, fill=None, outline=None, outline_w=1, alpha=1.0):
+    """Anti-aliased dot. fill=None with an outline makes a hollow ring; PIL's own ellipse is jagged."""
+    ss = 4
+    half = int(math.ceil(r)) + 2
+    size = half * 2
+    ix, iy = math.floor(cx), math.floor(cy)
+    ox, oy = (half + cx - ix) * ss, (half + cy - iy) * ss
+    R = r * ss
+    patch = Image.new("RGBA", (size * ss, size * ss), (0, 0, 0, 0))
+    d = ImageDraw.Draw(patch)
+    if outline is None:
+        d.ellipse([ox - R, oy - R, ox + R, oy + R], fill=fill)
+    else:
+        d.ellipse([ox - R, oy - R, ox + R, oy + R], fill=outline)
+        ir = R - outline_w * ss
+        d.ellipse([ox - ir, oy - ir, ox + ir, oy + ir], fill=fill if fill is not None else (0, 0, 0, 0))
+    patch = patch.resize((size, size), Image.LANCZOS)
+    if alpha < 1.0:
+        patch.putalpha(patch.getchannel("A").point(lambda v: int(v * alpha)))
+    img.paste(patch, (ix - half, iy - half), patch)
+
+
+def _spray_kind(outcome):
+    if outcome == 'home_run':
+        return 'hr'
+    return 'hit' if outcome in _SPRAY_HIT_EVENTS else 'out'
+
+
+def _draw_spray_markers(img, markers):
+    """markers: [(cx, cy, kind, color, ring)]. Outs are drawn first and home runs last so the
+    important dots are never buried under a pile of outs."""
+    for cx, cy, kind, color, ring in sorted(markers, key=lambda m: _SPRAY_KIND_ORDER[m[2]]):
+        if kind == 'hr':
+            _draw_dot(img, cx, cy, 9, fill=color, outline=ring, outline_w=2, alpha=0.95)
+        elif kind == 'hit':
+            _draw_dot(img, cx, cy, 6, fill=color, outline=_SPRAY_BG, outline_w=1, alpha=0.9)
+        else:
+            _draw_dot(img, cx, cy, 5, outline=color, outline_w=2)
+
+
+def _draw_spray_legend_marker(img, x, y, kind, color, ring=None):
+    """kind: 'filled', 'hollow' or 'ring' (filled with an outline). (x, y) = left edge, vertical center."""
+    if kind == 'filled':
+        _draw_dot(img, x + 6, y, 6, fill=color)
+    elif kind == 'hollow':
+        _draw_dot(img, x + 6, y, 6, outline=color, outline_w=2)
+    else:
+        _draw_dot(img, x + 6, y, 6, fill=color, outline=ring, outline_w=2)
+
+
+def _draw_spray_outcome_legend(img, draw, font, y, x=40):
+    for label, color, kind in _SPRAY_OUTCOME_LEGEND:
+        _draw_spray_legend_marker(img, x, y, kind, color, ring=(255, 255, 255))
+        draw.text((x + 20, y - 10), label, fill=(200, 200, 200), font=font)
+        bbox = draw.textbbox((0, 0), label, font=font)
+        x += 20 + (bbox[2] - bbox[0]) + 30
+
+
+def _draw_spray_number_badge(img, draw, font, cx, cy, num):
+    text = str(num)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    r = int(round(max(w, h) / 2 + 4))
+    _draw_badge(img, int(round(cx)), int(round(cy)), r, _SPRAY_BG, (230, 230, 230), ring_w=1)
+    draw.text((cx - w / 2, cy - h / 2 - bbox[1]), text, fill=(230, 230, 230), font=font)
+
+
+def _colors_distinct(a, b):
+    """True if two colors read as clearly different dots: different hue, or very different brightness."""
+    ha, sa, _ = colorsys.rgb_to_hsv(*(c / 255 for c in a))
+    hb, sb, _ = colorsys.rgb_to_hsv(*(c / 255 for c in b))
+    if (sa < 0.25) != (sb < 0.25):
+        return True
+    lum_gap = abs(_luminance(a) - _luminance(b))
+    if sa < 0.25:
+        return lum_gap >= 70
+    hue_gap = min(abs(ha - hb), 1 - abs(ha - hb)) * 360
+    return hue_gap >= 35 or lum_gap >= 70
+
+
+_SPRAY_FALLBACK_COLORS = [(100, 180, 255), (255, 200, 60), (90, 210, 140)]
+
+
+def _distinct_team_pair(away, home):
+    """Dot colors for two teams. Uses each team's primary unless they look alike (e.g. WSH vs PHI,
+    both red), then tries a still-saturated secondary, then a fixed contrasting color for the home team."""
+    a_pri, a_sec = (_readable(c) for c in _team_colors(away))
+    h_pri, h_sec = (_readable(c) for c in _team_colors(home))
+    saturated = lambda c: colorsys.rgb_to_hsv(*(x / 255 for x in c))[1] >= 0.35
+    combos = [(a_pri, h_pri)]
+    combos += [(a_pri, h_sec)] if saturated(h_sec) else []
+    combos += [(a_sec, h_pri)] if saturated(a_sec) else []
+    combos += [(a_pri, f) for f in _SPRAY_FALLBACK_COLORS]
+    for a, h in combos:
+        if _colors_distinct(a, h):
+            return a, h
+    return a_pri, h_pri
+
+
 def generate_spray_chart(data: dict) -> io.BytesIO:
     """Render a batted-ball spray chart for a batter, shaped to their home park's real wall distances."""
     events = data['events']
@@ -1633,7 +1727,7 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
     layout = _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft)
     scale, plate_x, plate_y, H = layout['scale'], layout['plate_x'], layout['plate_y'], layout['H']
 
-    bg = (18, 25, 33)
+    bg = _SPRAY_BG
     img = Image.new('RGB', (W, H), color=bg)
     draw = ImageDraw.Draw(img)
 
@@ -1657,32 +1751,18 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
 
     _draw_spray_field(img, draw, layout, font_distance)
 
-    # Plot each batted ball
+    markers = []
     for e in events:
         try:
-            x_ft = float(e['hc_x_ft'])
-            y_ft = float(e['hc_y_ft'])
+            cx, cy = to_canvas(float(e['hc_x_ft']), float(e['hc_y_ft']))
         except (KeyError, TypeError, ValueError):
             continue
-        cx, cy = to_canvas(x_ft, y_ft)
-        outcome = e.get('events') or ''
-        label, color = _SPRAY_EVENT_STYLE.get(outcome, (None, _SPRAY_OUT_COLOR))
-        r = 6 if label else 4
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color, outline=(18, 25, 33), width=1)
+        outcome = (e.get('events') or '').lower().replace(' ', '_')
+        markers.append((cx, cy, _spray_kind(outcome),
+                        _SPRAY_OUTCOME_COLORS.get(outcome, _SPRAY_OUT_COLOR), (255, 255, 255)))
+    _draw_spray_markers(img, markers)
 
-    # Legend
-    legend_items = [('1B', _SPRAY_EVENT_STYLE['single'][1]),
-                     ('2B', _SPRAY_EVENT_STYLE['double'][1]),
-                     ('3B', _SPRAY_EVENT_STYLE['triple'][1]),
-                     ('HR', _SPRAY_EVENT_STYLE['home_run'][1]),
-                     ('Out/Other', _SPRAY_OUT_COLOR)]
-    lx = 40
-    ly = H - 34
-    for label, color in legend_items:
-        draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color)
-        draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
-        bbox = draw.textbbox((0, 0), label, font=font_legend)
-        lx += 20 + (bbox[2] - bbox[0]) + 30
+    _draw_spray_outcome_legend(img, draw, font_legend, H - 34)
 
     buf = io.BytesIO()
     img.save(buf, format='PNG')
@@ -1690,20 +1770,20 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
     return buf
 
 
-_GAME_SPRAY_HIT_EVENTS = {'single', 'double', 'triple', 'home_run'}
-_GAME_SPRAY_OUT_COLOR = (150, 150, 150)
-_GAME_SPRAY_OUTCOME_COLORS = {
+_SPRAY_HIT_EVENTS = {'single', 'double', 'triple', 'home_run'}
+_SPRAY_OUT_COLOR = (150, 150, 150)
+_SPRAY_OUTCOME_COLORS = {
     'single': (57, 135, 229),    # blue
     'double': (217, 89, 38),     # orange
     'triple': (25, 158, 112),    # aqua
     'home_run': (237, 161, 0),   # gold
 }
-_GAME_SPRAY_OUTCOME_LEGEND = [
-    ('Single', _GAME_SPRAY_OUTCOME_COLORS['single'], 'filled'),
-    ('Double', _GAME_SPRAY_OUTCOME_COLORS['double'], 'filled'),
-    ('Triple', _GAME_SPRAY_OUTCOME_COLORS['triple'], 'filled'),
-    ('HR', _GAME_SPRAY_OUTCOME_COLORS['home_run'], 'ring'),
-    ('Out/Other', _GAME_SPRAY_OUT_COLOR, 'hollow'),
+_SPRAY_OUTCOME_LEGEND = [
+    ('Single', _SPRAY_OUTCOME_COLORS['single'], 'filled'),
+    ('Double', _SPRAY_OUTCOME_COLORS['double'], 'filled'),
+    ('Triple', _SPRAY_OUTCOME_COLORS['triple'], 'filled'),
+    ('HR', _SPRAY_OUTCOME_COLORS['home_run'], 'ring'),
+    ('Out/Other', _SPRAY_OUT_COLOR, 'hollow'),
 ]
 
 
@@ -1765,12 +1845,7 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
         if ordinal:
             state_str = f"{half + ' ' if half else ''}{ordinal}"
 
-    away_color = _readable(_team_colors(away)[0])
-    home_color = _readable(_team_colors(home)[0])
-    # Keep the two teams visually distinct if both primaries lightened toward the same pale shade.
-    if _luminance(away_color) > 100 and _luminance(home_color) > 100 and \
-            sum(abs(a - h) for a, h in zip(away_color, home_color)) < 60:
-        home_color = _readable(_team_colors(home)[1] or home_color, floor=110)
+    away_color, home_color = _distinct_team_pair(away, home)
 
     W = 1200
     side_margin = 50
@@ -1788,7 +1863,7 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
     layout = _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft)
     scale, plate_x, plate_y, H = layout['scale'], layout['plate_x'], layout['plate_y'], layout['H']
 
-    bg = (18, 25, 33)
+    bg = _SPRAY_BG
 
     # For a single hitter's own batted balls, add a numbered play-by-play panel on the right,
     # matching each dot on the field to its description and Statcast metrics.
@@ -1881,80 +1956,45 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
 
     font_badge = _spray_field_font(15, bold=True) if show_play_list else None
 
-    # Plot each batted ball — filled = hit, hollow = out/other, larger ring = home run.
+    # filled = hit, hollow = out/other, larger ring = home run.
+    markers = []
+    badges = []
     for i, e in enumerate(events, 1):
         try:
-            x_ft = float(e['hc_x_ft'])
-            y_ft = float(e['hc_y_ft'])
+            cx, cy = to_canvas(float(e['hc_x_ft']), float(e['hc_y_ft']))
         except (KeyError, TypeError, ValueError):
             continue
-        cx, cy = to_canvas(x_ft, y_ft)
         outcome = (e.get('events') or '').lower().replace(' ', '_')
-        is_hr = outcome == 'home_run'
-        is_hit = outcome in _GAME_SPRAY_HIT_EVENTS
-
         if color_by == 'outcome':
-            color = _GAME_SPRAY_OUTCOME_COLORS.get(outcome, _GAME_SPRAY_OUT_COLOR)
-            if is_hr:
-                draw.ellipse([cx - 9, cy - 9, cx + 9, cy + 9], fill=color, outline=(255, 255, 255), width=2)
-            elif is_hit:
-                draw.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=color, outline=(18, 25, 33), width=1)
-            else:
-                draw.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], outline=_GAME_SPRAY_OUT_COLOR, width=2)
+            color = _SPRAY_OUTCOME_COLORS.get(outcome, _SPRAY_OUT_COLOR)
+            ring = (255, 255, 255)
         else:
-            team_batting = e.get('team_batting') or ''
-            color = home_color if team_batting == home else away_color
-            if is_hr:
-                draw.ellipse([cx - 9, cy - 9, cx + 9, cy + 9], fill=color, outline=(255, 215, 0), width=2)
-            elif is_hit:
-                draw.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=color, outline=(18, 25, 33), width=1)
-            else:
-                draw.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], outline=color, width=2)
-
-        if show_play_list:
-            bx, by = cx + 13, cy - 13
-            num_str = str(i)
-            bbox = draw.textbbox((0, 0), num_str, font=font_badge)
-            r = max(bbox[2] - bbox[0], bbox[3] - bbox[1]) / 2 + 4
-            draw.ellipse([bx - r, by - r, bx + r, by + r], fill=(18, 25, 33), outline=(230, 230, 230), width=1)
-            draw.text((bx - (bbox[2] - bbox[0]) / 2, by - (bbox[3] - bbox[1]) / 2 - bbox[1]), num_str,
-                       fill=(230, 230, 230), font=font_badge)
+            color = home_color if (e.get('team_batting') or '') == home else away_color
+            ring = _SPRAY_GOLD
+        markers.append((cx, cy, _spray_kind(outcome), color, ring))
+        badges.append((cx, cy, i))
+    _draw_spray_markers(img, markers)
+    if show_play_list:
+        for cx, cy, i in badges:
+            _draw_spray_number_badge(img, draw, font_badge, cx + 13, cy - 13, i)
 
     if color_by == 'outcome':
-        # Legend — one row, colored by batted-ball result.
-        lx = 40
-        ly = H - 40
-        for label, color, kind in _GAME_SPRAY_OUTCOME_LEGEND:
-            if kind == 'filled':
-                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color)
-            elif kind == 'hollow':
-                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], outline=color, width=2)
-            else:
-                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color, outline=(255, 255, 255), width=2)
-            draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
-            bbox = draw.textbbox((0, 0), label, font=font_legend)
-            lx += 20 + (bbox[2] - bbox[0]) + 30
+        _draw_spray_outcome_legend(img, draw, font_legend, H - 40)
     else:
         # Legend — team colors, then marker meaning.
         lx = 40
         ly = H - 66
         for label, color in ((away, away_color), (home, home_color)):
-            draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=color)
+            _draw_spray_legend_marker(img, lx, ly, 'filled', color)
             draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
             bbox = draw.textbbox((0, 0), label, font=font_legend)
             lx += 20 + (bbox[2] - bbox[0]) + 40
 
         lx = 40
         ly = H - 34
-        marker_items = [('Hit', 'filled'), ('Out/Other', 'hollow'), ('HR', 'gold_ring')]
-        for label, kind in marker_items:
-            neutral = (170, 178, 188)
-            if kind == 'filled':
-                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=neutral)
-            elif kind == 'hollow':
-                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], outline=neutral, width=2)
-            else:
-                draw.ellipse([lx, ly - 6, lx + 12, ly + 6], fill=neutral, outline=(255, 215, 0), width=2)
+        neutral = (170, 178, 188)
+        for label, kind in (('Hit', 'filled'), ('Out/Other', 'hollow'), ('HR', 'ring')):
+            _draw_spray_legend_marker(img, lx, ly, kind, neutral, ring=_SPRAY_GOLD)
             draw.text((lx + 20, ly - 10), label, fill=(200, 200, 200), font=font_legend)
             bbox = draw.textbbox((0, 0), label, font=font_legend)
             lx += 20 + (bbox[2] - bbox[0]) + 30
