@@ -891,7 +891,7 @@ class MLBSlash(commands.Cog):
         if mode and mode.value == "absolute":
             embed.set_footer(text="Bars show each player's own percentile (circle) and raw stat (outer edge). Blue = better, red = worse, gray = tied.")
         else:
-            embed.set_footer(text="Bars show the relative difference in percentiles between the two players. Longer bar = larger gap.")
+            embed.set_footer(text="Circle = percentile lead of the better player; longer bar = larger gap. Raw stats sit inside the bars by the center.")
         await interaction.followup.send(embed=embed, file=discord.File(buf, filename="percentile_comparison.png"))
 
     @compare_percentiles.autocomplete('player1')
@@ -1004,7 +1004,7 @@ class MLBSlash(commands.Cog):
         if mode and mode.value == "absolute":
             embed.set_footer(text="Bars show each season's own percentile (circle) and raw stat (outer edge). Blue = better, red = worse, gray = tied.")
         else:
-            embed.set_footer(text="Bars show the relative difference in percentiles between the two seasons. Longer bar = larger gap.")
+            embed.set_footer(text="Circle = percentile lead of the better season; longer bar = larger gap. Raw stats sit inside the bars by the center.")
         await interaction.followup.send(embed=embed, file=discord.File(buf, filename="percentile_comparison.png"))
 
     @compare_years.autocomplete('player')
