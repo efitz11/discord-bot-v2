@@ -168,9 +168,20 @@ def generate_compare_percentiles_image(
     f_val   = _dv("DejaVuSans-Bold.ttf", 12)
     f_badge    = _dv("DejaVuSans-Bold.ttf", 12)
     f_badge_sm = _dv("DejaVuSans-Bold.ttf", 9)    # 3-digit "100" needs to fit the circle
-    BADGE_R    = 12
+    BADGE_R    = 12 if mode == "absolute" else 13   # relative badges hold "+NN", so need a bit more room
+    RAW_ZONE   = 46   # relative mode: center-side stretch of each bar that holds the raw stat
     BADGE_RING = (245, 245, 250)
     RAW_COL    = (190, 195, 215)
+    badge_fonts = {sz: _dv("DejaVuSans-Bold.ttf", sz) for sz in range(12, 7, -1)}
+
+    def _fit_badge(text: str) -> ImageFont.FreeTypeFont:
+        for sz in range(12, 8, -1):
+            if ImageDraw.Draw(img).textlength(text, font=badge_fonts[sz]) <= 2 * BADGE_R - 4:
+                return badge_fonts[sz]
+        return badge_fonts[8]
+
+    def _on(bg: Tuple[int, int, int]) -> Tuple[int, int, int]:
+        return (255, 255, 255) if _luminance(bg) < 150 else (20, 22, 32)
 
     img  = Image.new("RGB", (W, total_h), BG)
     draw = ImageDraw.Draw(img)
@@ -259,16 +270,36 @@ def generate_compare_percentiles_image(
                     draw.text((ccx, cy), str(v2), font=f_badge if v2 < 100 else f_badge_sm,
                               fill=(255, 255, 255), anchor="mm")
             else:
-                # Bar shows the percentile difference on the winning player's side
+                # Bar shows the percentile difference on the winning player's side, ending in a
+                # circle with "+diff". The stretch nearest the center holds each player's raw stat,
+                # so the bar is always at least RAW_ZONE + BADGE_R long.
                 diff = (v1 or 0) - (v2 or 0)
+                cy = y + ROW_H // 2
+                travel = BAR_W - RAW_ZONE - 2 * BADGE_R
                 if diff != 0:
-                    blen = max(1, round(abs(diff) / 100 * BAR_W))
+                    clen = RAW_ZONE + BADGE_R + round(abs(diff) / 100 * travel)
+                    badge_txt = f"+{abs(diff)}"
                     if diff > 0:
-                        draw.rounded_rectangle([xctr - blen, bar_top, xctr - 1, bar_bottom],
+                        ccx = xctr - clen
+                        draw.rounded_rectangle([ccx, bar_top, xctr - 1, bar_bottom],
                                                radius=3, fill=P1_COL, outline=p1_secondary, width=2)
+                        _draw_badge(img, ccx, cy, BADGE_R, P1_COL, p1_secondary)
+                        draw.text((ccx, cy), badge_txt, font=_fit_badge(badge_txt), fill=_on(P1_COL), anchor="mm")
                     else:
-                        draw.rounded_rectangle([xb2, bar_top, xb2 + blen, bar_bottom],
+                        ccx = xb2 + clen
+                        draw.rounded_rectangle([xb2, bar_top, ccx, bar_bottom],
                                                radius=3, fill=P2_COL, outline=p2_secondary, width=2)
+                        _draw_badge(img, ccx, cy, BADGE_R, P2_COL, p2_secondary)
+                        draw.text((ccx, cy), badge_txt, font=_fit_badge(badge_txt), fill=_on(P2_COL), anchor="mm")
+
+                # raw stats, nearest the center label
+                for raw, v, won, base, x, anchor in (
+                    (raw1, v1, diff > 0, P1_COL, xctr - 6, "rm"),
+                    (raw2, v2, diff < 0, P2_COL, xb2 + 6, "lm"),
+                ):
+                    has = bool(v) and raw != ""
+                    fill = (_on(base) if won else RAW_COL) if has else DIM
+                    draw.text((x, cy), str(raw) if has else "—", font=f_val, fill=fill, anchor=anchor)
 
             if mode == "absolute":
                 # raw stat value at the far end of each side, like Savant
