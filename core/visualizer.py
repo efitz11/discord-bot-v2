@@ -97,6 +97,21 @@ def _circle_headshot(img_bytes: bytes, size: int, ring: Tuple[int, int, int], ga
     return out
 
 
+def _draw_badge(img: Image.Image, cx: int, cy: int, r: int, fill: Tuple[int, int, int],
+                ring: Tuple[int, int, int], ring_w: int = 2) -> None:
+    """Paste an anti-aliased filled circle with an outline ring (PIL ellipses are jagged otherwise)."""
+    ss = 4
+    pad = 2
+    size = (r + pad) * 2
+    patch = Image.new("RGBA", (size * ss, size * ss), (0, 0, 0, 0))
+    d = ImageDraw.Draw(patch)
+    lo, hi = pad * ss, (size - pad) * ss - 1
+    d.ellipse([lo, lo, hi, hi], fill=ring)
+    d.ellipse([lo + ring_w * ss, lo + ring_w * ss, hi - ring_w * ss, hi - ring_w * ss], fill=fill)
+    patch = patch.resize((size, size), Image.LANCZOS)
+    img.paste(patch, (cx - size // 2, cy - size // 2), patch)
+
+
 def generate_compare_percentiles_image(
     p1_label: str, p2_label: str,
     year_str: str, stat_type: str,
@@ -110,7 +125,8 @@ def generate_compare_percentiles_image(
     # ── Layout ──────────────────────────────────────────────────
     W        = 760
     PAD      = 18
-    VAL_W    = 34    # fixed-width column for the percentile number
+    # Absolute mode puts the percentile inside a circle on the bar and the raw stat in the outer column
+    VAL_W    = 48 if mode == "absolute" else 34
     CTR_W    = 164   # center column for the stat label
     BAR_W    = (W - 2 * PAD - 2 * VAL_W - CTR_W) // 2   # ≈ 245 px per bar
 
@@ -150,6 +166,11 @@ def generate_compare_percentiles_image(
     f_reg   = _dv("DejaVuSans.ttf",      13)
     f_small = _dv("DejaVuSans.ttf",      11)
     f_val   = _dv("DejaVuSans-Bold.ttf", 12)
+    f_badge    = _dv("DejaVuSans-Bold.ttf", 12)
+    f_badge_sm = _dv("DejaVuSans-Bold.ttf", 9)    # 3-digit "100" needs to fit the circle
+    BADGE_R    = 12
+    BADGE_RING = (245, 245, 250)
+    RAW_COL    = (190, 195, 215)
 
     img  = Image.new("RGB", (W, total_h), BG)
     draw = ImageDraw.Draw(img)
@@ -197,7 +218,8 @@ def generate_compare_percentiles_image(
                   font=f_bold, fill=(180, 185, 215), anchor="mm")
         y += CAT_H
 
-        for j, (label, v1, v2, *_) in enumerate(rows):
+        for j, (label, v1, v2, *extra) in enumerate(rows):
+            raw1, raw2 = (list(extra) + ["", ""])[:2]
             # row tint
             if j % 2 == 0:
                 draw.rectangle([PAD, y, W - PAD, y + ROW_H], fill=ROW_ALT)
@@ -220,14 +242,22 @@ def generate_compare_percentiles_image(
                     col1, col2 = LOSE_COL, WIN_COL
                 else:
                     col1 = col2 = TIE_COL
-                len1 = max(1, round(v1n / 100 * BAR_W))
-                len2 = max(1, round(v2n / 100 * BAR_W))
+                # Savant-style: the bar ends in a circle holding the percentile. The circle's
+                # center travels BAR_W - 2*BADGE_R so a 100 sits flush with the track end.
+                cy = y + ROW_H // 2
+                travel = BAR_W - 2 * BADGE_R
                 if v1:
-                    draw.rounded_rectangle([xctr - len1, bar_top, xctr - 1, bar_bottom],
-                                           radius=3, fill=col1)
+                    ccx = xctr - BADGE_R - round(v1n / 100 * travel)
+                    draw.rounded_rectangle([ccx, bar_top, xctr - 1, bar_bottom], radius=3, fill=col1)
+                    _draw_badge(img, ccx, cy, BADGE_R, col1, BADGE_RING)
+                    draw.text((ccx, cy), str(v1), font=f_badge if v1 < 100 else f_badge_sm,
+                              fill=(255, 255, 255), anchor="mm")
                 if v2:
-                    draw.rounded_rectangle([xb2, bar_top, xb2 + len2, bar_bottom],
-                                           radius=3, fill=col2)
+                    ccx = xb2 + BADGE_R + round(v2n / 100 * travel)
+                    draw.rounded_rectangle([xb2, bar_top, ccx, bar_bottom], radius=3, fill=col2)
+                    _draw_badge(img, ccx, cy, BADGE_R, col2, BADGE_RING)
+                    draw.text((ccx, cy), str(v2), font=f_badge if v2 < 100 else f_badge_sm,
+                              fill=(255, 255, 255), anchor="mm")
             else:
                 # Bar shows the percentile difference on the winning player's side
                 diff = (v1 or 0) - (v2 or 0)
@@ -240,13 +270,19 @@ def generate_compare_percentiles_image(
                         draw.rounded_rectangle([xb2, bar_top, xb2 + blen, bar_bottom],
                                                radius=3, fill=P2_COL, outline=p2_secondary, width=2)
 
-            # percentile values
-            col1 = _pct_color(v1) if v1 else DIM
-            col2 = _pct_color(v2) if v2 else DIM
-            draw.text((xv1 + VAL_W - 3, y + ROW_H // 2), str(v1) if v1 else "—",
-                      font=f_val, fill=col1, anchor="rm")
-            draw.text((xv2 + 3, y + ROW_H // 2), str(v2) if v2 else "—",
-                      font=f_val, fill=col2, anchor="lm")
+            if mode == "absolute":
+                # raw stat value at the far end of each side, like Savant
+                draw.text((xv1 + VAL_W // 2 - 2, y + ROW_H // 2), str(raw1) if v1 and raw1 != "" else "—",
+                          font=f_val, fill=RAW_COL if v1 and raw1 != "" else DIM, anchor="mm")
+                draw.text((xv2 + VAL_W // 2 + 2, y + ROW_H // 2), str(raw2) if v2 and raw2 != "" else "—",
+                          font=f_val, fill=RAW_COL if v2 and raw2 != "" else DIM, anchor="mm")
+            else:
+                col1 = _pct_color(v1) if v1 else DIM
+                col2 = _pct_color(v2) if v2 else DIM
+                draw.text((xv1 + VAL_W - 3, y + ROW_H // 2), str(v1) if v1 else "—",
+                          font=f_val, fill=col1, anchor="rm")
+                draw.text((xv2 + 3, y + ROW_H // 2), str(v2) if v2 else "—",
+                          font=f_val, fill=col2, anchor="lm")
 
             # stat label (centered in center column)
             draw.text(((xctr + xb2) // 2, y + ROW_H // 2), label,

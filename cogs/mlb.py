@@ -828,7 +828,9 @@ class MLBSlash(commands.Cog):
                 label = display_names.get(stat, stat.replace("_", " ").title())
                 v1 = p1_lookup[stat]['value'] if stat in p1_lookup else 0
                 v2 = p2_lookup[stat]['value'] if stat in p2_lookup else 0
-                rows.append((label, v1, v2))
+                r1 = p1_lookup[stat].get('raw', "") if stat in p1_lookup else ""
+                r2 = p2_lookup[stat].get('raw', "") if stat in p2_lookup else ""
+                rows.append((label, v1, v2, r1, r2))
             return rows
 
         p1_name = p1_data.player_name.split()[-1]  # last name for brevity
@@ -887,7 +889,7 @@ class MLBSlash(commands.Cog):
         )
         embed.set_image(url="attachment://percentile_comparison.png")
         if mode and mode.value == "absolute":
-            embed.set_footer(text="Bars show each player's own percentile. Blue = better, red = worse, gray = tied.")
+            embed.set_footer(text="Bars show each player's own percentile (circle) and raw stat (outer edge). Blue = better, red = worse, gray = tied.")
         else:
             embed.set_footer(text="Bars show the relative difference in percentiles between the two players. Longer bar = larger gap.")
         await interaction.followup.send(embed=embed, file=discord.File(buf, filename="percentile_comparison.png"))
@@ -950,7 +952,9 @@ class MLBSlash(commands.Cog):
                 label = display_names.get(stat, stat.replace("_", " ").title())
                 v1 = p1_lookup[stat]['value'] if stat in p1_lookup else 0
                 v2 = p2_lookup[stat]['value'] if stat in p2_lookup else 0
-                rows.append((label, v1, v2))
+                r1 = p1_lookup[stat].get('raw', "") if stat in p1_lookup else ""
+                r2 = p2_lookup[stat].get('raw', "") if stat in p2_lookup else ""
+                rows.append((label, v1, v2, r1, r2))
             return rows
 
         assigned = set()
@@ -998,7 +1002,7 @@ class MLBSlash(commands.Cog):
         )
         embed.set_image(url="attachment://percentile_comparison.png")
         if mode and mode.value == "absolute":
-            embed.set_footer(text="Bars show each season's own percentile. Blue = better, red = worse, gray = tied.")
+            embed.set_footer(text="Bars show each season's own percentile (circle) and raw stat (outer edge). Blue = better, red = worse, gray = tied.")
         else:
             embed.set_footer(text="Bars show the relative difference in percentiles between the two seasons. Longer bar = larger gap.")
         await interaction.followup.send(embed=embed, file=discord.File(buf, filename="percentile_comparison.png"))
