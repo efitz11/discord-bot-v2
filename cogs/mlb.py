@@ -1,4 +1,4 @@
-from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_spray_chart, generate_game_spray_chart, generate_compare_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, generate_player_card_image, generate_game_pitch_chart, _team_colors
+from core.visualizer import generate_pitch_plot, generate_zone_plot, generate_spray_chart, generate_game_spray_chart, generate_compare_percentiles_image, generate_player_percentiles_image, generate_compare_stats_image, generate_rolling_xwoba_chart, generate_winprob_chart, generate_player_card_image, generate_game_pitch_chart, _team_colors
 import io
 import asyncio
 import dataclasses
@@ -753,8 +753,9 @@ class MLBSlash(commands.Cog):
 
 
     @savant.command(name="percentiles", description="Get a player's Baseball Savant percentiles")
-    @app_commands.describe(player="Player name to search for", year="Target year (e.g., 2024)")
-    async def percentiles(self, interaction: discord.Interaction, player: str, year: str = None):
+    @app_commands.describe(player="Player name to search for", year="Target year (e.g., 2024)",
+                            image="Render a Savant-style chart image instead of a text table")
+    async def percentiles(self, interaction: discord.Interaction, player: str, year: str = None, image: bool = False):
 
         await interaction.response.defer()
         try:
@@ -769,6 +770,46 @@ class MLBSlash(commands.Cog):
                 title=f"{stats_raw.year} {stats_raw.stat_type} Percentiles — {stats_raw.player_name}{team_display}",
                 color=discord.Color.red()
             )
+            if image:
+                display_names = {
+                    **PERCENTILE_DISPLAY_NAMES,
+                    "sprint_speed":     "Sprint Speed",
+                    "oaa":              "Range (OAA)",
+                    "runner_run_value": "Baserunning",
+                }
+                category_list = BATTER_PERCENTILE_CATEGORIES if stats_raw.stat_type == "Batter" else PITCHER_PERCENTILE_CATEGORIES
+                lookup = {row['stat']: row for row in stats_raw.percentiles}
+
+                def rows_for(stat_names):
+                    return [(display_names.get(s, s.replace("_", " ").title()),
+                             lookup[s]['value'], lookup[s].get('raw', ""))
+                            for s in stat_names if s in lookup]
+
+                sections = [(cat, rows) for cat, targets in category_list if (rows := rows_for(targets))]
+                assigned = {t for _, targets in category_list for t in targets}
+                if (other := rows_for([s for s in lookup if s not in assigned])):
+                    sections.append(("Other", other))
+                if not sections:
+                    await interaction.followup.send(f"No percentile data found for **{player}**.")
+                    return
+
+                headshot = None
+                if stats_raw.player_id:
+                    try:
+                        session = await self.bot.mlb_client.get_session()
+                        async with session.get(player_headshot_url(stats_raw.player_id)) as resp:
+                            if resp.status == 200:
+                                headshot = await resp.read()
+                    except Exception:
+                        pass
+
+                buf = generate_player_percentiles_image(
+                    f"{stats_raw.player_name}{team_display}", stats_raw.year, sections,
+                    team=stats_raw.team_abbrev, headshot=headshot,
+                )
+                embed.set_image(url="attachment://percentiles.png")
+                await interaction.followup.send(embed=embed, file=discord.File(buf, filename="percentiles.png"))
+                return
             stats_raw.apply_to_embed(embed)
             await interaction.followup.send(embed=embed)
         except Exception as e:

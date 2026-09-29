@@ -15,8 +15,27 @@ def _dv(name: str, size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
+_SAVANT_STOPS = [
+    (0,   (60, 90, 170)),
+    (25,  (120, 145, 195)),
+    (50,  (170, 185, 195)),
+    (75,  (205, 120, 105)),
+    (100, (198, 48, 48)),
+]
+
+
+def _savant_pct_color(pct: int) -> Tuple[int, int, int]:
+    """Baseball Savant's percentile gradient: blue (poor) through gray (average) to red (great)."""
+    pct = max(0, min(100, pct))
+    for (lo, c_lo), (hi, c_hi) in zip(_SAVANT_STOPS, _SAVANT_STOPS[1:]):
+        if pct <= hi:
+            t = (pct - lo) / (hi - lo)
+            return tuple(int(round(c_lo[i] + (c_hi[i] - c_lo[i]) * t)) for i in range(3))
+    return _SAVANT_STOPS[-1][1]
+
+
 def _pct_color(pct: int) -> Tuple[int, int, int]:
-    """Map a 0-100 percentile to a red→gray→blue color matching Savant's palette."""
+    """Map a 0-100 percentile to a blue(high)→gray→red(low) color."""
     if pct >= 70: return (29, 125, 212)
     if pct >= 55: return (100, 175, 230)
     if pct >= 45: return (150, 150, 165)
@@ -325,6 +344,105 @@ def generate_compare_percentiles_image(
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
+
+def generate_player_percentiles_image(
+    player_label: str,
+    year_str: str,
+    sections: list,
+    team: Optional[str] = None,
+    headshot: Optional[bytes] = None,
+) -> io.BytesIO:
+    """Render one player's percentile chart in the Baseball Savant style.
+
+    `sections` is [(category_name, [(label, percentile, raw), ...]), ...]. Each bar ends in a
+    circle holding the percentile, with the raw stat at the right edge.
+    """
+    W        = 520
+    PAD      = 18
+    LABEL_W  = 138
+    RAW_W    = 56
+    BAR_W    = W - 2 * PAD - LABEL_W - RAW_W
+    BADGE_R  = 12
+
+    TITLE_H  = 52
+    HEAD     = 72
+    HEAD_H   = HEAD + 6
+    NAME_H   = 38
+    CAT_H    = 34
+    ROW_H    = 31
+
+    n_rows = sum(len(rows) for _, rows in sections)
+    total_h = TITLE_H + HEAD_H + NAME_H + len(sections) * CAT_H + n_rows * ROW_H + PAD
+
+    BG       = (16, 18, 27)
+    CAT_BG   = (26, 30, 48)
+    ROW_ALT  = (20, 23, 35)
+    TRACK    = (34, 38, 56)
+    TEXT     = (224, 224, 235)
+    DIM      = (110, 115, 140)
+    RAW_COL  = (190, 195, 215)
+    RING     = (245, 245, 250)
+
+    primary, secondary = _team_colors(team)
+
+    f_title    = _dv("DejaVuSans-Bold.ttf", 17)
+    f_bold     = _dv("DejaVuSans-Bold.ttf", 13)
+    f_reg      = _dv("DejaVuSans.ttf",      13)
+    f_val      = _dv("DejaVuSans-Bold.ttf", 12)
+    f_badge    = _dv("DejaVuSans-Bold.ttf", 12)
+    f_badge_sm = _dv("DejaVuSans-Bold.ttf", 9)
+
+    img  = Image.new("RGB", (W, total_h), BG)
+    draw = ImageDraw.Draw(img)
+
+    xl  = PAD + LABEL_W        # left edge of bar track
+    cx  = W // 2
+    y = PAD // 2
+
+    draw.text((cx, y + TITLE_H // 2), f"{year_str} Percentile Rankings", font=f_title, fill=TEXT, anchor="mm")
+    y += TITLE_H
+
+    if headshot:
+        hs = _circle_headshot(headshot, HEAD, secondary)
+        if hs:
+            img.paste(hs, (cx - HEAD // 2, y), hs)
+    y += HEAD_H
+
+    draw.text((cx, y + NAME_H // 2), player_label, font=f_bold, fill=_readable(primary), anchor="mm")
+    y += NAME_H
+
+    travel = BAR_W - 2 * BADGE_R
+    for cat_name, rows in sections:
+        draw.rectangle([PAD, y, W - PAD, y + CAT_H], fill=CAT_BG)
+        draw.text((cx, y + CAT_H // 2), cat_name.upper(), font=f_bold, fill=(180, 185, 215), anchor="mm")
+        y += CAT_H
+
+        for j, (label, pct, raw) in enumerate(rows):
+            if j % 2 == 0:
+                draw.rectangle([PAD, y, W - PAD, y + ROW_H], fill=ROW_ALT)
+            cy = y + ROW_H // 2
+            bar_top, bar_bottom = y + 5, y + ROW_H - 5
+
+            draw.text((xl - 10, cy), label, font=f_reg, fill=TEXT, anchor="rm")
+            draw.rounded_rectangle([xl, bar_top, xl + BAR_W - 1, bar_bottom], radius=3, fill=TRACK)
+
+            has_raw = raw not in ("", None)
+            if pct:
+                col = _savant_pct_color(pct)
+                ccx = xl + BADGE_R + round(pct / 100 * travel)
+                draw.rounded_rectangle([xl, bar_top, ccx, bar_bottom], radius=3, fill=col)
+                _draw_badge(img, ccx, cy, BADGE_R, col, RING)
+                draw.text((ccx, cy), str(pct), font=f_badge if pct < 100 else f_badge_sm,
+                          fill=(255, 255, 255) if _luminance(col) < 150 else (20, 22, 32), anchor="mm")
+            draw.text((W - PAD - 4, cy), str(raw) if pct and has_raw else "—", font=f_val,
+                      fill=RAW_COL if pct and has_raw else DIM, anchor="rm")
+            y += ROW_H
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
 
 def _blend(fg: Tuple[int, int, int], bg: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
     return tuple(int(round(bg[i] + (fg[i] - bg[i]) * t)) for i in range(3))
