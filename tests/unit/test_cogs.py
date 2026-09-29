@@ -85,6 +85,38 @@ async def test_percentiles_command(cog, mock_bot):
 
 
 @pytest.mark.asyncio
+async def test_percentiles_command_image(cog, mock_bot):
+    mock_percentiles = MagicMock(spec=PlayerPercentiles)
+    mock_percentiles.player_name = "Juan Soto"
+    mock_percentiles.team_abbrev = "NYY"
+    mock_percentiles.stat_type = "Batter"
+    mock_percentiles.year = "2026"
+    mock_percentiles.player_id = None
+    mock_percentiles.percentiles = [
+        {"stat": "xwoba", "value": 98, "raw": ".420"},
+        {"stat": "some_new_stat", "value": 40, "raw": "1.0"},
+    ]
+    mock_bot.mlb_client.get_player_percentiles.return_value = mock_percentiles
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    mock_buf = io.BytesIO(b"FakeImageBytes")
+    with patch("cogs.mlb.generate_player_percentiles_image", return_value=mock_buf) as mock_gen:
+        await cog.percentiles.callback(cog, mock_interaction, player="Juan Soto", year="2026", image=True)
+
+    mock_gen.assert_called_once()
+    sections = mock_gen.call_args.args[2]
+    assert [name for name, _ in sections] == ["Batting", "Other"]
+    assert sections[0][1] == [("xwOBA", 98, ".420")]
+    mock_percentiles.apply_to_embed.assert_not_called()
+
+    _, kwargs = mock_interaction.followup.send.call_args
+    assert kwargs["file"].filename == "percentiles.png"
+
+
+@pytest.mark.asyncio
 async def test_compare_percentiles_command(cog, mock_bot):
     p1 = MagicMock(spec=PlayerPercentiles)
     p1.player_name = "Juan Soto"
