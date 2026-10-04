@@ -4,6 +4,7 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List, Optional, Tuple
 import os
 import math
+import json
 
 _FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 
@@ -1394,7 +1395,61 @@ def _spray_field_font(size, bold=False):
     return ImageFont.load_default()
 
 
-def _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft):
+_PARK_WALLS_PATH = os.path.join(os.path.dirname(__file__), 'data', 'park_walls.json')
+_park_walls_cache = None
+
+
+def _park_wall_outline(venue_id):
+    """Traced wall distances (ft) for a park, every half degree from the left field line
+    (-45°) to the right field line (+45°), or None if we have no outline for it.
+    Built by scripts/build_park_walls.py."""
+    global _park_walls_cache
+    if _park_walls_cache is None:
+        try:
+            with open(_PARK_WALLS_PATH) as f:
+                _park_walls_cache = json.load(f).get('parks', {})
+        except (OSError, ValueError):
+            _park_walls_cache = {}
+    park = _park_walls_cache.get(str(venue_id)) if venue_id is not None else None
+    return park['wall_ft'] if park else None
+
+
+def _spray_wall_profile(wall_points_ft, outline_ft, generic_radius_ft):
+    """The outfield wall as (angle, distance ft) every half degree across fair territory.
+
+    A park with a traced outline keeps its real shape, scaled uniformly so its foul lines
+    match the posted distances (the tracings run a few percent off at some parks). Without
+    one, the wall is interpolated between the posted measurements."""
+    angles = [a / 2 for a in range(-90, 91)]
+    posted = dict(wall_points_ft or {})
+
+    if outline_ft and len(outline_ft) == len(angles):
+        k = 1.0
+        if posted.get(-45) and posted.get(45):
+            k = (posted[-45] + posted[45]) / (outline_ft[0] + outline_ft[-1])
+        return [(a, d * k) for a, d in zip(angles, outline_ft)]
+
+    if not wall_points_ft:
+        return [(a, generic_radius_ft) for a in angles]
+
+    pts = sorted(wall_points_ft)
+
+    def interp(angle_deg):
+        if angle_deg <= pts[0][0]:
+            return pts[0][1]
+        if angle_deg >= pts[-1][0]:
+            return pts[-1][1]
+        for (a0, d0), (a1, d1) in zip(pts, pts[1:]):
+            if a0 <= angle_deg <= a1:
+                t = 0.0 if a1 == a0 else (angle_deg - a0) / (a1 - a0)
+                return d0 + t * (d1 - d0)
+        return pts[-1][1]
+
+    return [(a, interp(a)) for a in angles]
+
+
+def _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft,
+                        venue_id=None):
     """Compute canvas height and plate/scale for a spray-chart field, sized to fit both
     the real (or generic) outfield wall and every plotted point without clipping."""
     wall_points_ft = None
@@ -1405,16 +1460,12 @@ def _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_heig
             wall_points_ft = None
 
     generic_radius_ft = 400.0
-    if wall_points_ft:
-        raw_pts_ft = [(d * math.sin(math.radians(a)), d * math.cos(math.radians(a))) for a, d in wall_points_ft]
-    else:
-        raw_pts_ft = [(generic_radius_ft * math.sin(math.radians(a)), generic_radius_ft * math.cos(math.radians(a)))
-                      for a in (-45, 0, 45)]
+    wall_ft = _spray_wall_profile(wall_points_ft, _park_wall_outline(venue_id), generic_radius_ft)
+    raw_pts_ft = [(d * math.sin(math.radians(a)), d * math.cos(math.radians(a))) for a, d in wall_ft]
     raw_pts_ft.extend(event_points_ft)
 
     # The painted field extends past the wall/foul lines by the foul-ground apron; keep it in frame.
-    lines = dict(wall_points_ft or {})
-    line_ft = max(lines.get(-45) or generic_radius_ft, lines.get(45) or generic_radius_ft)
+    line_ft = max(wall_ft[0][1], wall_ft[-1][1])
     apron_edge = (line_ft + _FOUL_GROUND_FT)
     raw_pts_ft.append((apron_edge * math.sin(math.radians(_FOUL_SPREAD_DEG)),
                        apron_edge * math.cos(math.radians(_FOUL_SPREAD_DEG))))
@@ -1432,7 +1483,7 @@ def _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_heig
 
     return {
         'wall_points_ft': wall_points_ft,
-        'generic_radius_ft': generic_radius_ft,
+        'wall_ft': wall_ft,
         'scale': scale,
         'plate_x': plate_x,
         'plate_y': plate_y,
@@ -1466,24 +1517,14 @@ def _draw_spray_field(img, draw, layout, font_distance):
     """Paint the ballpark — grass, warning track, infield dirt, basepaths, mound, bases,
     foul lines and outfield wall — then label the wall distances."""
     scale, plate_x, plate_y = layout['scale'], layout['plate_x'], layout['plate_y']
-    wall_points_ft, generic_radius_ft = layout['wall_points_ft'], layout['generic_radius_ft']
-
-    max_range_ft = max(d for _, d in wall_points_ft) if wall_points_ft else generic_radius_ft
+    wall_points_ft, wall_ft = layout['wall_points_ft'], layout['wall_ft']
 
     def wall_dist_at(angle_deg):
-        """Wall distance for any angle, linearly interpolated between the park's measurements."""
-        if not wall_points_ft:
-            return generic_radius_ft
-        pts = sorted(wall_points_ft)
-        if angle_deg <= pts[0][0]:
-            return pts[0][1]
-        if angle_deg >= pts[-1][0]:
-            return pts[-1][1]
-        for (a0, d0), (a1, d1) in zip(pts, pts[1:]):
-            if a0 <= angle_deg <= a1:
-                t = 0.0 if a1 == a0 else (angle_deg - a0) / (a1 - a0)
-                return d0 + t * (d1 - d0)
-        return pts[-1][1]
+        """Wall distance for any angle, interpolated between the half-degree wall profile."""
+        i = (min(max(angle_deg, -45.0), 45.0) + 45.0) * 2
+        i0 = min(int(i), len(wall_ft) - 2)
+        t = i - i0
+        return wall_ft[i0][1] + t * (wall_ft[i0 + 1][1] - wall_ft[i0][1])
 
     # The field is painted on a supersampled layer so the curves and chalk lines come out smooth.
     SS = 2
@@ -1501,9 +1542,6 @@ def _draw_spray_field(img, draw, layout, font_distance):
         x0, y0 = pt(cx_ft - r_ft, cy_ft + r_ft)
         x1, y1 = pt(cx_ft + r_ft, cy_ft - r_ft)
         fd.ellipse([x0, y0, x1, y1], **kw)
-
-    angles = [a / 2 for a in range(-90, 91)]   # -45°..45° in half-degree steps
-    wall_ft = [(a, wall_dist_at(a)) for a in angles]
 
     # Foul ground: the fair region pushed out past the wall and widened past each foul
     # line, plus a rounded apron behind the plate.
@@ -1589,12 +1627,28 @@ def _draw_spray_field(img, draw, layout, font_distance):
     flat = layer.resize(img.size, Image.LANCZOS)
     img.paste(flat, (0, 0), flat)
 
-    # Wall distance labels, offset outward along each measurement's radial direction.
+    # Posted wall distance labels, just outside the wall. The posted angles are nominal, so on
+    # a traced wall each label slides (up to 12°) to where the wall actually is that deep —
+    # e.g. Fenway's 379' sits at the end of the Monster — and is dropped if no spot comes
+    # within 10 ft. The foul lines stay put. Lines, then center, then the alleys claim their
+    # spots first; a later label that would crowd one already placed is skipped.
     if wall_points_ft:
-        for angle, dist in wall_points_ft:
+        placed = []
+        for nominal, dist in sorted(wall_points_ft, key=lambda p: (abs(p[0]) != 45, abs(p[0]) != 0, abs(p[0]) != 22.5)):
+            if abs(nominal) == 45:
+                angle = nominal
+            else:
+                window = [a for a, _ in wall_ft if abs(a - nominal) <= 12]
+                angle = min(window, key=lambda a: (abs(wall_dist_at(a) - dist), abs(a - nominal)))
+                if abs(wall_dist_at(angle) - dist) > 10:
+                    continue
+            if any(abs(angle - p) < 7 for p in placed):
+                continue
+            placed.append(angle)
             rad = math.radians(angle)
-            lx = plate_x + (dist + 32) * math.sin(rad) * scale
-            ly = plate_y - (dist + 32) * math.cos(rad) * scale
+            r_ft = wall_dist_at(angle) + 32
+            lx = plate_x + r_ft * math.sin(rad) * scale
+            ly = plate_y - r_ft * math.cos(rad) * scale
             label = f"{dist:.0f}'"
             bbox = draw.textbbox((0, 0), label, font=font_distance)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
@@ -1726,7 +1780,8 @@ def generate_spray_chart(data: dict) -> io.BytesIO:
         except (KeyError, TypeError, ValueError):
             continue
 
-    layout = _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft)
+    layout = _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft,
+                                 venue_id=data.get('venue_id'))
     scale, plate_x, plate_y, H = layout['scale'], layout['plate_x'], layout['plate_y'], layout['H']
 
     bg = _SPRAY_BG
@@ -1862,7 +1917,8 @@ def generate_game_spray_chart(data: dict) -> io.BytesIO:
         except (KeyError, TypeError, ValueError):
             continue
 
-    layout = _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft)
+    layout = _spray_field_layout(W, field_top, side_margin, bottom_reserve, max_plot_height, field_info, event_points_ft,
+                                 venue_id=data.get('venue_id'))
     scale, plate_x, plate_y, H = layout['scale'], layout['plate_x'], layout['plate_y'], layout['H']
 
     bg = _SPRAY_BG
