@@ -132,6 +132,10 @@ RADAR_DEFAULT_LOCATION=Nationals Park
 NBA=true
 WNBA=true
 NHL=true
+
+# Optional (requires CFB=true): channel for college football upset alerts — a Top 25 team
+# trailing a lower-ranked/unranked opponent at the start of the 4th, at 2:00 left, and at the final
+CFB_UPSET_CHANNEL_ID=123456789012345678
 ```
 
 ### Run
