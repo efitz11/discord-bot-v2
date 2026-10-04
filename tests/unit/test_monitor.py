@@ -261,3 +261,37 @@ async def test_duplicate_hr_alert_prevention_logic():
     
     # Since 999999_3 is already in _hr_posted, it should immediately skip and not fetch content highlights
     cog._fetch_content.assert_not_called()
+
+
+def test_finished_game_skipped_only_after_full_final_pass(temp_state_cog):
+    cog = temp_state_cog
+    final = {"abstract_state": "Final"}
+    assert not cog._is_finished(1, {"abstract_state": "Live"})
+    assert not cog._is_finished(1, final)            # Final per schedule, but never fully processed
+
+    cog._final_processed.add(1)
+    assert cog._is_finished(1, final)
+
+    cog._hr_pending["hr"] = {"cycles_waited": 0, "data": {"game_pk": 1}}
+    assert not cog._is_finished(1, final)            # still waiting on an HR video
+    cog._hr_pending.clear()
+
+    cog._walkoff_pending[1] = {"cycles_waited": 0, "data": {}, "message": None}
+    assert not cog._is_finished(1, final)            # still waiting on the walkoff video
+    cog._walkoff_pending.clear()
+
+    assert not cog._is_finished(1, {"abstract_state": "Live"})  # e.g. a suspended game resumed
+
+
+@pytest.mark.asyncio
+async def test_milb_game_updates_cached_state(temp_state_cog):
+    cog = temp_state_cog
+    cog._milb_scheduled_games[5] = {"abstract_state": "Preview", "away": "A", "home": "B"}
+    cog._fetch_live_feed = AsyncMock(return_value={
+        "gameData": {"status": {"abstractGameState": "Final"}},
+        "liveData": {"plays": {"allPlays": []}},
+    })
+    await cog._process_milb_game(5, MagicMock())
+    assert cog._milb_scheduled_games[5]["abstract_state"] == "Final"
+    assert 5 in cog._final_processed
+    assert not cog._any_game_active_or_imminent()

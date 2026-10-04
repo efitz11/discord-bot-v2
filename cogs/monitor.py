@@ -141,6 +141,7 @@ class MonitorCog(commands.Cog):
         self._milb_summary_posted_date = None  # date string for which we've posted the MiLB affiliate summary
         self._milb_ready_since: "datetime | None" = None  # when all MLB+MiLB games first went Final
         self._game_errors_alerted: set = set()            # game_pks that have already raised error alerts today
+        self._final_processed: set = set()                # game_pks (MLB + MiLB) that had a full pass while Final
 
         # Lineup auto-post tracking
         self._lineup_posted: set = set()  # game_pks whose lineup has been posted
@@ -443,6 +444,16 @@ class MonitorCog(commands.Cog):
 
         self._milb_schedule_date = today_str
         print(f"[monitor] refreshed MiLB schedule for {today_str} — tracking {len(self._milb_scheduled_games)} affiliate game(s)")
+
+    def _is_finished(self, game_pk: int, info: dict) -> bool:
+        """True once a Final game has had a complete processing pass and has no
+        HR video or walkoff edit still waiting on it — its feed no longer needs fetching."""
+        return (
+            info.get("abstract_state") == "Final"
+            and game_pk in self._final_processed
+            and game_pk not in self._walkoff_pending
+            and not any(p["data"].get("game_pk") == game_pk for p in self._hr_pending.values())
+        )
 
     def _any_game_active_or_imminent(self) -> bool:
         """Return True if we should be in active-polling mode.
@@ -1646,6 +1657,9 @@ class MonitorCog(commands.Cog):
             return
 
         ab_state = feed.get("gameData", {}).get("status", {}).get("abstractGameState", "Preview")
+        if game_pk in self._milb_scheduled_games:
+            # Keep _any_game_active_or_imminent accurate — the schedule is only fetched once a day
+            self._milb_scheduled_games[game_pk]["abstract_state"] = ab_state
         if ab_state == "Preview":
             return
 
@@ -1735,6 +1749,9 @@ class MonitorCog(commands.Cog):
                 await self._post_milb_hr_alert(channel, hr_data)
                 self._hr_posted.add(hr_key)
                 self._save_hr_state()
+
+        if ab_state == "Final":
+            self._final_processed.add(game_pk)
 
     # ─────────────────────────────────────────────
     # Per-game processing
@@ -2294,6 +2311,9 @@ class MonitorCog(commands.Cog):
             else:
                 pending_wo["cycles_waited"] += 1
 
+        if is_final:
+            self._final_processed.add(game_pk)
+
     # ─────────────────────────────────────────────
     # Main loop
     # ─────────────────────────────────────────────
@@ -2314,6 +2334,7 @@ class MonitorCog(commands.Cog):
                     self._milb_ready_since = None
                     self._milb_scheduled_games.clear()
                     self._game_errors_alerted.clear()
+                    self._final_processed.clear()
                     print("[monitor] new calendar day — schedule merged, finished games pruned")
 
             if self._milb_schedule_date != today_str:
@@ -2415,8 +2436,8 @@ class MonitorCog(commands.Cog):
                 return
 
             # Process all games concurrently (MLB + MiLB affiliates)
-            mlb_pks = list(self._scheduled_games.keys())
-            milb_pks = list(self._milb_scheduled_games.keys())
+            mlb_pks = [pk for pk, info in self._scheduled_games.items() if not self._is_finished(pk, info)]
+            milb_pks = [pk for pk, info in self._milb_scheduled_games.items() if not self._is_finished(pk, info)]
             
             tasks = [self._process_game(pk, channel) for pk in mlb_pks] + \
                     [self._process_milb_game(pk, channel) for pk in milb_pks]
