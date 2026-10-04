@@ -1368,11 +1368,13 @@ def generate_zone_plot(data: dict) -> io.BytesIO:
 
 
 # Angle (degrees from center field, negative = toward left field line) for each
-# MLB Stats API fieldInfo measurement, used to shape the outfield wall.
+# MLB Stats API fieldInfo measurement, used to shape the outfield wall. The alleys sit
+# halfway between the foul line and center; the optional left/right points sit halfway
+# between the line and the alley.
 _WALL_POINTS = [
-    ('leftLine', -45), ('left', -30), ('leftCenter', -15),
+    ('leftLine', -45), ('left', -33.75), ('leftCenter', -22.5),
     ('center', 0),
-    ('rightCenter', 15), ('right', 30), ('rightLine', 45),
+    ('rightCenter', 22.5), ('right', 33.75), ('rightLine', 45),
 ]
 
 
