@@ -112,3 +112,34 @@ async def test_prune_keeps_live_games_on_empty_scoreboard(cog):
 
     cog._prune_upset_state({}, expire_before="20261004")
     assert cog._upset_state == {}
+
+
+def _sched(state, kickoff_utc=""):
+    return {"date": kickoff_utc, "status": {"type": {"state": state}}}
+
+
+def test_next_fetch_live_game_polls_every_tick():
+    from datetime import datetime
+    now = datetime(2026, 10, 3, 21, 0)
+    assert cfb._next_upset_fetch({"1": _sched("in"), "2": _sched("pre", "2026-10-04T03:00Z")},
+                                 now, now - cfb.timedelta(hours=6)) is None
+
+
+def test_next_fetch_waits_for_next_kickoff():
+    from datetime import datetime
+    now = datetime(2026, 10, 3, 9, 0)    # ET
+    comps = {"1": _sched("post"), "2": _sched("pre", "2026-10-03T19:30Z"), "3": _sched("pre", "2026-10-03T16:00Z")}
+    assert cfb._next_upset_fetch(comps, now, now - cfb.timedelta(hours=6)) == datetime(2026, 10, 3, 12, 0)
+
+
+def test_next_fetch_delayed_kickoff_rechecks_soon():
+    from datetime import datetime
+    now = datetime(2026, 10, 3, 12, 30)
+    comps = {"1": _sched("pre", "2026-10-03T16:00Z")}  # noon ET kickoff, still pregame
+    assert cfb._next_upset_fetch(comps, now, now - cfb.timedelta(hours=6)) == datetime(2026, 10, 3, 12, 40)
+
+
+def test_next_fetch_no_games_sleeps_until_rollover():
+    from datetime import datetime
+    for now in (datetime(2026, 10, 3, 23, 30), datetime(2026, 10, 4, 2, 0)):
+        assert cfb._next_upset_fetch({}, now, now - cfb.timedelta(hours=6)) == datetime(2026, 10, 4, 6, 0)
