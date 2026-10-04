@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord import Interaction
 from discord.ext import commands, tasks
-from cogs.espn_base import _format_linescore, _format_pregame, FINAL_STATUSES
+from cogs.espn_base import _format_linescore, _format_pregame, _utc_to_et, FINAL_STATUSES
 from cogs.football import FootballCog
 from cogs.monitor import MonitorCog
 from core.utils import et_now
@@ -22,7 +22,7 @@ TOP_RANKED_N       = 10
 UPSET_CHANNEL_ID       = int(os.getenv("CFB_UPSET_CHANNEL_ID", "0")) or None  # None disables upset alerts
 UPSET_STATE_FILE       = os.path.join(os.getenv("STATE_DIR", "."), "cfb_upset_state.json")
 UPSET_POLL_SECONDS     = 60
-UPSET_IDLE_POLL_MINUTES = 10   # Scoreboard re-check interval while no FBS game is live
+UPSET_IDLE_POLL_MINUTES = 10   # Re-check interval for a game past kickoff that hasn't started (e.g. weather delay)
 UPSET_DAY_ROLLOVER_HOURS = 6   # Scoreboard "day" runs until 6am ET
 UPSET_TWO_MIN_SECONDS  = 120
 UNRANKED               = 99
@@ -70,6 +70,24 @@ def _upset_stage(comp: dict) -> str | None:
     if period == 3 and name == "STATUS_END_PERIOD":
         return STAGE_Q4
     return None
+
+
+def _next_upset_fetch(comps: dict, now: datetime, board_day: datetime) -> datetime | None:
+    """When to next fetch the scoreboard (naive ET): every tick while a game is live,
+    otherwise at the next kickoff, or the next day's rollover if nothing is left today."""
+    if any(c["status"]["type"].get("state") == "in" for c in comps.values()):
+        return None
+    next_fetch = (board_day + timedelta(days=1)).replace(
+        hour=UPSET_DAY_ROLLOVER_HOURS, minute=0, second=0, microsecond=0)
+    for c in comps.values():
+        if c["status"]["type"].get("state") != "pre":
+            continue
+        kickoff = _utc_to_et(c.get("date", ""))
+        if kickoff is None:
+            continue
+        wake = kickoff if kickoff > now else now + timedelta(minutes=UPSET_IDLE_POLL_MINUTES)
+        next_fetch = min(next_fetch, wake)
+    return next_fetch
 
 
 class CFBCog(FootballCog):
@@ -221,13 +239,13 @@ class CFBCog(FootballCog):
     @tasks.loop(seconds=UPSET_POLL_SECONDS)
     async def upset_loop(self):
         try:
-            now = datetime.now()
+            now = et_now()
             if self._upset_next_fetch and now < self._upset_next_fetch:
                 return
 
             # Pin the scoreboard date with a 6am ET rollover so late West Coast / Hawaii
             # games stay on the board until they finish
-            board_day = et_now() - timedelta(hours=UPSET_DAY_ROLLOVER_HOURS)
+            board_day = now - timedelta(hours=UPSET_DAY_ROLLOVER_HOURS)
             board_date = board_day.strftime("%Y%m%d")
             session = await self.bot.mlb_client.get_session()
             params  = {"groups": "80", "limit": "300", "dates": board_date}
@@ -235,8 +253,9 @@ class CFBCog(FootballCog):
                 data = await resp.json()
             comps = {event["id"]: event["competitions"][0] for event in data.get("events", [])}
 
-            any_live = any(c["status"]["type"].get("state") == "in" for c in comps.values())
-            self._upset_next_fetch = None if any_live else now + timedelta(minutes=UPSET_IDLE_POLL_MINUTES)
+            self._upset_next_fetch = _next_upset_fetch(comps, now, board_day)
+            if self._upset_next_fetch:
+                print(f"[{self.SLUG}] no live games — next upset check {self._upset_next_fetch:%a %-I:%M %p} ET")
 
             channel = self.bot.get_channel(UPSET_CHANNEL_ID) or await self.bot.fetch_channel(UPSET_CHANNEL_ID)
             for event_id, comp in comps.items():
