@@ -2628,6 +2628,7 @@ class MLBClient:
             'game_label': game.status,
             'game_date': game_date_str,
             'scoreboard': data.get('scoreboard', {}),
+            'venue_id': field_info['venue_id'] if field_info else None,
             'venue_name': field_info['venue_name'] if field_info else None,
             'field_info': field_info['field_info'] if field_info else None,
             'player_name': player_name or filtered_team_name,
@@ -3118,6 +3119,7 @@ class MLBClient:
             'player_id': player_id,
             'year': target_year or 'Career',
             'events': events,
+            'venue_id': field_info['venue_id'] if field_info else None,
             'venue_name': field_info['venue_name'] if field_info else None,
             'field_info': field_info['field_info'] if field_info else None,
         }
