@@ -88,6 +88,26 @@ async def test_favorite_leading_stages_are_skipped_but_final_upset_posts(cog, cl
     assert stages == [cfb.STAGE_FINAL]
 
 
+async def test_upset_avoided_closes_out_earlier_alert(cog, clock):
+    channel = MagicMock(send=AsyncMock())
+    await cog._check_upset("1", _comp(10, 14, 4, 800), channel, "20261003")     # alert
+    await cog._check_upset("1", _comp(17, 14, 4, 100), channel, "20261003")     # fav back ahead
+    await _settle_final(cog, clock, "1", _final(17, 14), channel)
+    calls = cog._build_upset_embed.call_args_list
+    assert [(c.args[3], c.kwargs.get("avoided", False)) for c in calls] == \
+        [(cfb.STAGE_Q4, False), (cfb.STAGE_FINAL, True)]
+    clock[0] += SETTLE
+    await cog._check_upset("1", _final(17, 14), channel, "20261003")            # no repeat
+    assert channel.send.await_count == 2
+
+
+async def test_no_upset_avoided_without_earlier_alert(cog, clock):
+    channel = MagicMock(send=AsyncMock())
+    await cog._check_upset("1", _comp(17, 14, 4, 800), channel, "20261003")
+    await _settle_final(cog, clock, "1", _final(17, 14), channel)
+    channel.send.assert_not_awaited()
+
+
 async def test_final_not_seen_live_is_ignored(cog, clock):
     channel = MagicMock(send=AsyncMock())
     await _settle_final(cog, clock, "1", _final(10, 14), channel)
