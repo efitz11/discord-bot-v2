@@ -26,8 +26,9 @@ UPSET_IDLE_POLL_MINUTES = 10   # Re-check interval for a game past kickoff that 
 UPSET_DAY_ROLLOVER_HOURS = 6   # Scoreboard "day" runs until 6am ET
 UPSET_TWO_MIN_SECONDS  = 120
 # ESPN can flip a game to Final before crediting a score on the last play (e.g. a walk-off
-# FG as time expires), so the final result is only judged once it has been Final this long
-UPSET_FINAL_SETTLE_SECONDS = 180
+# FG as time expires), so the final result is only judged once it has been Final this long.
+# Just under one poll interval, so it's judged on the next tick after Final is first seen.
+UPSET_FINAL_SETTLE_SECONDS = 45
 UNRANKED              = 99
 
 # Stages in the order they occur; each is evaluated (and possibly posted) once per game
