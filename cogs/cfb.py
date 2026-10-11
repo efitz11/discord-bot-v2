@@ -294,7 +294,8 @@ class CFBCog(FootballCog):
 
     async def _check_upset(self, event_id: str, comp: dict, channel, board_date: str) -> None:
         """Evaluate one game, posting an alert if it just reached a stage with the
-        underdog ahead. State is saved immediately so restarts never re-post."""
+        underdog ahead, or an all-clear at the final if an earlier alert didn't pan out.
+        State is saved immediately so restarts never re-post."""
         sides = _upset_sides(comp)
         if not sides:
             return
@@ -318,23 +319,30 @@ class CFBCog(FootballCog):
                 return   # Re-checked each tick until the score settles
 
         fav, dog = sides
+        # Post before marking so a failed send is retried on the next tick
         if _underdog_leading(fav, dog):
-            # Post before marking so a failed send is retried on the next tick
             await channel.send(embed=self._build_upset_embed(comp, fav, dog, stage))
+            entry["alerted"] = True
+        elif stage == STAGE_FINAL and entry.get("alerted"):
+            await channel.send(embed=self._build_upset_embed(comp, fav, dog, stage, avoided=True))
 
         # Mark this stage and any earlier ones we slept through as evaluated
         order = [STAGE_Q4, STAGE_TWO_MIN, STAGE_FINAL]
         entry["stages"] += [s for s in order[:order.index(stage) + 1] if s not in entry["stages"]]
         self._save_upset_state()
 
-    def _build_upset_embed(self, comp: dict, fav: dict, dog: dict, stage: str) -> discord.Embed:
+    def _build_upset_embed(self, comp: dict, fav: dict, dog: dict, stage: str,
+                           avoided: bool = False) -> discord.Embed:
         p = self._parse_comp(comp)
 
         def name(c):
             return f"{self._rank_prefix(c)}{c['team'].get('location') or c['team']['abbreviation']}"
 
         score = f"{dog.get('score')}–{fav.get('score')}"
-        if stage == STAGE_FINAL:
+        if avoided:
+            title = f"\u2705 Upset Avoided: {name(fav)} holds off {name(dog)} {fav.get('score')}–{dog.get('score')}"
+            color = discord.Color.green()
+        elif stage == STAGE_FINAL:
             title = f"\U0001F4A5 UPSET: {name(dog)} beats {name(fav)} {score}"
             color = discord.Color.red()
         else:
@@ -357,7 +365,7 @@ class CFBCog(FootballCog):
 
     @commands.command(name="upset_test")
     async def upset_test(self, ctx):
-        """Preview the three upset alert stages with mock data. Usage: !upset_test"""
+        """Preview the upset alert stages (plus the upset-avoided final) with mock data. Usage: !upset_test"""
         def competitor(home_away, abbr, location, rank, score, qs):
             return {
                 "homeAway": home_away, "score": str(score), "curatedRank": {"current": rank},
@@ -378,13 +386,14 @@ class CFBCog(FootballCog):
             }
 
         await ctx.message.delete()
-        for stage, comp in (
-            (STAGE_Q4,      mock(3, 0.0, "0:00", "STATUS_END_PERIOD", "in", [7, 3, 7], [3, 7, 0])),
-            (STAGE_TWO_MIN, mock(4, 118.0, "1:58", "STATUS_IN_PROGRESS", "in", [7, 3, 7, 7], [3, 7, 0, 10])),
-            (STAGE_FINAL,   mock(4, 0.0, "0:00", "STATUS_FINAL", "post", [7, 3, 7, 7], [3, 7, 0, 10])),
+        for stage, avoided, comp in (
+            (STAGE_Q4,      False, mock(3, 0.0, "0:00", "STATUS_END_PERIOD", "in", [7, 3, 7], [3, 7, 0])),
+            (STAGE_TWO_MIN, False, mock(4, 118.0, "1:58", "STATUS_IN_PROGRESS", "in", [7, 3, 7, 7], [3, 7, 0, 10])),
+            (STAGE_FINAL,   False, mock(4, 0.0, "0:00", "STATUS_FINAL", "post", [7, 3, 7, 7], [3, 7, 0, 10])),
+            (STAGE_FINAL,   True,  mock(4, 0.0, "0:00", "STATUS_FINAL", "post", [7, 3, 7, 7], [3, 7, 0, 21])),
         ):
             fav, dog = _upset_sides(comp)
-            await ctx.send(embed=self._build_upset_embed(comp, fav, dog, stage))
+            await ctx.send(embed=self._build_upset_embed(comp, fav, dog, stage, avoided=avoided))
 
 
 async def setup(bot):
