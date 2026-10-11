@@ -130,7 +130,7 @@ async def test_final_waits_for_last_play_score(cog, clock):
     await cog._check_upset("1", _comp(24, 24, 4, 3), channel, "20261003")  # tied — two-minute alert
     await cog._check_upset("1", _final(24, 24), channel, "20261003")       # stale score
     assert cfb.STAGE_FINAL not in cog._upset_state["1"]["stages"]
-    clock[0] += timedelta(seconds=60)
+    clock[0] += SETTLE / 2
     await cog._check_upset("1", _final(24, 27), channel, "20261003")       # still settling
     assert channel.send.await_count == 1
     clock[0] += SETTLE
