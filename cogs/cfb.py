@@ -25,7 +25,10 @@ UPSET_POLL_SECONDS     = 60
 UPSET_IDLE_POLL_MINUTES = 10   # Re-check interval for a game past kickoff that hasn't started (e.g. weather delay)
 UPSET_DAY_ROLLOVER_HOURS = 6   # Scoreboard "day" runs until 6am ET
 UPSET_TWO_MIN_SECONDS  = 120
-UNRANKED               = 99
+# ESPN can flip a game to Final before crediting a score on the last play (e.g. a walk-off
+# FG as time expires), so the final result is only judged once it has been Final this long
+UPSET_FINAL_SETTLE_SECONDS = 180
+UNRANKED              = 99
 
 # Stages in the order they occur; each is evaluated (and possibly posted) once per game
 STAGE_Q4      = "q4"
@@ -253,10 +256,6 @@ class CFBCog(FootballCog):
                 data = await resp.json()
             comps = {event["id"]: event["competitions"][0] for event in data.get("events", [])}
 
-            self._upset_next_fetch = _next_upset_fetch(comps, now, board_day)
-            if self._upset_next_fetch:
-                print(f"[{self.SLUG}] no live games — next upset check {self._upset_next_fetch:%a %-I:%M %p} ET")
-
             channel = self.bot.get_channel(UPSET_CHANNEL_ID) or await self.bot.fetch_channel(UPSET_CHANNEL_ID)
             for event_id, comp in comps.items():
                 try:
@@ -265,6 +264,11 @@ class CFBCog(FootballCog):
                     print(f"[{self.SLUG}] upset check failed for event {event_id}: {e}")
 
             self._prune_upset_state(comps, (board_day - timedelta(days=1)).strftime("%Y%m%d"))
+
+            settling = any("final_seen" in e and STAGE_FINAL not in e["stages"] for e in self._upset_state.values())
+            self._upset_next_fetch = None if settling else _next_upset_fetch(comps, now, board_day)
+            if self._upset_next_fetch:
+                print(f"[{self.SLUG}] no live games — next upset check {self._upset_next_fetch:%a %-I:%M %p} ET")
         except Exception as e:
             print(f"[{self.SLUG}] upset loop error: {e}")
 
@@ -306,6 +310,12 @@ class CFBCog(FootballCog):
                 return
         if stage is None or stage in entry["stages"]:
             return
+        if stage == STAGE_FINAL:
+            now = et_now()
+            final_seen = entry.setdefault("final_seen", now.isoformat())
+            if now - datetime.fromisoformat(final_seen) < timedelta(seconds=UPSET_FINAL_SETTLE_SECONDS):
+                self._save_upset_state()
+                return   # Re-checked each tick until the score settles
 
         fav, dog = sides
         if _underdog_leading(fav, dog):

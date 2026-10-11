@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, AsyncMock
 
 import cogs.cfb as cfb
@@ -17,12 +18,33 @@ def _comp(fav_score, dog_score, period, clock, name="STATUS_IN_PROGRESS", state=
     }
 
 
+def _final(fav_score, dog_score):
+    return _comp(fav_score, dog_score, 4, 0, name="STATUS_FINAL", state="post")
+
+
+SETTLE = timedelta(seconds=cfb.UPSET_FINAL_SETTLE_SECONDS)
+
+
 @pytest.fixture
-def cog(tmp_path, monkeypatch):
+def clock(monkeypatch):
+    now = [datetime(2026, 10, 3, 15, 0)]
+    monkeypatch.setattr(cfb, "et_now", lambda: now[0])
+    return now
+
+
+@pytest.fixture
+def cog(tmp_path, monkeypatch, clock):
     monkeypatch.setattr(cfb, "UPSET_STATE_FILE", str(tmp_path / "cfb_upset_state.json"))
     c = cfb.CFBCog(MagicMock())
     c._build_upset_embed = MagicMock(return_value="embed")
     return c
+
+
+async def _settle_final(cog, clock, event_id, comp, channel):
+    """Check a Final snapshot, then again once the settle window has passed."""
+    await cog._check_upset(event_id, comp, channel, "20261003")
+    clock[0] += SETTLE
+    await cog._check_upset(event_id, comp, channel, "20261003")
 
 
 def test_upset_sides():
@@ -41,34 +63,50 @@ def test_upset_stage():
     assert cfb._upset_stage(_comp(0, 0, 4, 0, name="STATUS_FINAL", state="post")) == cfb.STAGE_FINAL
 
 
-async def test_full_game_posts_each_stage_once(cog):
+async def test_full_game_posts_each_stage_once(cog, clock):
     channel = MagicMock(send=AsyncMock())
     for comp in (_comp(10, 7, 2, 300),
                  _comp(10, 14, 3, 0, name="STATUS_END_PERIOD"),
                  _comp(10, 14, 4, 880),     # still Q4 stage — no repeat
                  _comp(10, 14, 4, 110),
-                 _comp(10, 14, 4, 50),      # still two-minute stage — no repeat
-                 _comp(10, 14, 4, 0, name="STATUS_FINAL", state="post"),
-                 _comp(10, 14, 4, 0, name="STATUS_FINAL", state="post")):
+                 _comp(10, 14, 4, 50)):     # still two-minute stage — no repeat
         await cog._check_upset("1", comp, channel, "20261003")
+    await _settle_final(cog, clock, "1", _final(10, 14), channel)
+    clock[0] += SETTLE
+    await cog._check_upset("1", _final(10, 14), channel, "20261003")   # final already posted
     assert channel.send.await_count == 3
     stages = [call.args[3] for call in cog._build_upset_embed.call_args_list]
     assert stages == [cfb.STAGE_Q4, cfb.STAGE_TWO_MIN, cfb.STAGE_FINAL]
 
 
-async def test_favorite_leading_stages_are_skipped_but_final_upset_posts(cog):
+async def test_favorite_leading_stages_are_skipped_but_final_upset_posts(cog, clock):
     channel = MagicMock(send=AsyncMock())
     await cog._check_upset("1", _comp(21, 7, 4, 800), channel, "20261003")
     await cog._check_upset("1", _comp(21, 14, 4, 100), channel, "20261003")
-    await cog._check_upset("1", _comp(21, 24, 4, 0, name="STATUS_FINAL", state="post"), channel, "20261003")
+    await _settle_final(cog, clock, "1", _final(21, 24), channel)
     stages = [call.args[3] for call in cog._build_upset_embed.call_args_list]
     assert stages == [cfb.STAGE_FINAL]
 
 
-async def test_final_not_seen_live_is_ignored(cog):
+async def test_final_not_seen_live_is_ignored(cog, clock):
     channel = MagicMock(send=AsyncMock())
-    await cog._check_upset("1", _comp(10, 14, 4, 0, name="STATUS_FINAL", state="post"), channel, "20261003")
+    await _settle_final(cog, clock, "1", _final(10, 14), channel)
     channel.send.assert_not_awaited()
+
+
+async def test_final_waits_for_last_play_score(cog, clock):
+    """Texas–OU 2026: ESPN went Final at 24–24 before crediting OU's FG at the gun."""
+    channel = MagicMock(send=AsyncMock())
+    await cog._check_upset("1", _comp(24, 24, 4, 3), channel, "20261003")
+    await cog._check_upset("1", _final(24, 24), channel, "20261003")       # stale score
+    assert cfb.STAGE_FINAL not in cog._upset_state["1"]["stages"]
+    clock[0] += timedelta(seconds=60)
+    await cog._check_upset("1", _final(24, 27), channel, "20261003")       # still settling
+    channel.send.assert_not_awaited()
+    clock[0] += SETTLE
+    await cog._check_upset("1", _final(24, 27), channel, "20261003")
+    stages = [call.args[3] for call in cog._build_upset_embed.call_args_list]
+    assert stages == [cfb.STAGE_FINAL]
 
 
 async def test_late_start_skips_missed_q4_alert(cog):
@@ -100,11 +138,11 @@ async def test_failed_send_is_retried(cog):
     assert channel.send.await_count == 2
 
 
-async def test_prune_keeps_live_games_on_empty_scoreboard(cog):
+async def test_prune_keeps_live_games_on_empty_scoreboard(cog, clock):
     channel = MagicMock(send=AsyncMock())
     await cog._check_upset("live", _comp(10, 14, 4, 880), channel, "20261003")
     await cog._check_upset("done", _comp(10, 7, 4, 880), channel, "20261003")
-    await cog._check_upset("done", _comp(10, 7, 4, 0, name="STATUS_FINAL", state="post"), channel, "20261003")
+    await _settle_final(cog, clock, "done", _final(10, 7), channel)
     await cog._check_upset("old", _comp(10, 14, 2, 300), channel, "20261001")
 
     cog._prune_upset_state({}, expire_before="20261002")
