@@ -101,6 +101,16 @@ async def test_upset_avoided_closes_out_earlier_alert(cog, clock):
     assert channel.send.await_count == 2
 
 
+async def test_tied_game_alerts_before_final(cog, clock):
+    channel = MagicMock(send=AsyncMock())
+    await cog._check_upset("1", _comp(14, 14, 3, 0, name="STATUS_END_PERIOD"), channel, "20261003")
+    await cog._check_upset("1", _comp(21, 21, 4, 100), channel, "20261003")
+    await _settle_final(cog, clock, "1", _final(24, 21), channel)
+    calls = cog._build_upset_embed.call_args_list
+    assert [(c.args[3], c.kwargs.get("avoided", False)) for c in calls] == \
+        [(cfb.STAGE_Q4, False), (cfb.STAGE_TWO_MIN, False), (cfb.STAGE_FINAL, True)]
+
+
 async def test_no_upset_avoided_without_earlier_alert(cog, clock):
     channel = MagicMock(send=AsyncMock())
     await cog._check_upset("1", _comp(17, 14, 4, 800), channel, "20261003")
@@ -117,16 +127,17 @@ async def test_final_not_seen_live_is_ignored(cog, clock):
 async def test_final_waits_for_last_play_score(cog, clock):
     """Texas–OU 2026: ESPN went Final at 24–24 before crediting OU's FG at the gun."""
     channel = MagicMock(send=AsyncMock())
-    await cog._check_upset("1", _comp(24, 24, 4, 3), channel, "20261003")
+    await cog._check_upset("1", _comp(24, 24, 4, 3), channel, "20261003")  # tied — two-minute alert
     await cog._check_upset("1", _final(24, 24), channel, "20261003")       # stale score
     assert cfb.STAGE_FINAL not in cog._upset_state["1"]["stages"]
     clock[0] += timedelta(seconds=60)
     await cog._check_upset("1", _final(24, 27), channel, "20261003")       # still settling
-    channel.send.assert_not_awaited()
+    assert channel.send.await_count == 1
     clock[0] += SETTLE
     await cog._check_upset("1", _final(24, 27), channel, "20261003")
-    stages = [call.args[3] for call in cog._build_upset_embed.call_args_list]
-    assert stages == [cfb.STAGE_FINAL]
+    calls = cog._build_upset_embed.call_args_list
+    assert [(c.args[3], c.kwargs.get("avoided", False)) for c in calls] == \
+        [(cfb.STAGE_TWO_MIN, False), (cfb.STAGE_FINAL, False)]
 
 
 async def test_late_start_skips_missed_q4_alert(cog):
