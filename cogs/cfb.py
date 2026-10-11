@@ -51,11 +51,12 @@ def _upset_sides(comp: dict):
     return fav, dog
 
 
-def _underdog_leading(fav: dict, dog: dict) -> bool:
+def _underdog_margin(fav: dict, dog: dict) -> int | None:
+    """Underdog's score minus the favorite's, or None if a score is unparseable."""
     try:
-        return int(dog.get("score", 0)) > int(fav.get("score", 0))
+        return int(dog.get("score", 0)) - int(fav.get("score", 0))
     except ValueError:
-        return False
+        return None
 
 
 def _upset_stage(comp: dict) -> str | None:
@@ -294,7 +295,7 @@ class CFBCog(FootballCog):
 
     async def _check_upset(self, event_id: str, comp: dict, channel, board_date: str) -> None:
         """Evaluate one game, posting an alert if it just reached a stage with the
-        underdog ahead, or an all-clear at the final if an earlier alert didn't pan out.
+        underdog ahead (or tied, before the final), or an all-clear at the final if an earlier alert didn't pan out.
         State is saved immediately so restarts never re-post."""
         sides = _upset_sides(comp)
         if not sides:
@@ -320,10 +321,11 @@ class CFBCog(FootballCog):
 
         fav, dog = sides
         # Post before marking so a failed send is retried on the next tick
-        if _underdog_leading(fav, dog):
+        margin = _underdog_margin(fav, dog)
+        if margin is not None and (margin > 0 or (margin == 0 and stage != STAGE_FINAL)):
             await channel.send(embed=self._build_upset_embed(comp, fav, dog, stage))
             entry["alerted"] = True
-        elif stage == STAGE_FINAL and entry.get("alerted"):
+        elif margin is not None and stage == STAGE_FINAL and entry.get("alerted"):
             await channel.send(embed=self._build_upset_embed(comp, fav, dog, stage, avoided=True))
 
         # Mark this stage and any earlier ones we slept through as evaluated
@@ -346,7 +348,8 @@ class CFBCog(FootballCog):
             title = f"\U0001F4A5 UPSET: {name(dog)} beats {name(fav)} {score}"
             color = discord.Color.red()
         else:
-            title = f"\U0001F6A8 Upset Alert: {name(dog)} leads {name(fav)} {score}"
+            verb  = "tied with" if dog.get("score") == fav.get("score") else "leads"
+            title = f"\U0001F6A8 Upset Alert: {name(dog)} {verb} {name(fav)} {score}"
             color = discord.Color.orange()
 
         status_str = "End of 3rd" if comp["status"].get("period") == 3 else p["status_str"]
