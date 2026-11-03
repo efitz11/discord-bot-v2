@@ -146,11 +146,12 @@ POLY_RANGES = {
 POLY_DEFAULT_RANGE = "All"
 
 
-class PolymarketRangeButton(discord.ui.Button):
-    def __init__(self, range_key: str, active: bool):
+class RangeButton(discord.ui.Button):
+    def __init__(self, range_key: str, active: bool, row: int):
         super().__init__(
             label=range_key,
             style=discord.ButtonStyle.primary if active else discord.ButtonStyle.secondary,
+            row=row,
         )
         self.range_key = range_key
 
@@ -159,27 +160,37 @@ class PolymarketRangeButton(discord.ui.Button):
         await interaction.response.defer()
         if self.range_key == view.range_key:
             return
-        result = await view.cog._build_polymarket_event_chart(view.event_option, self.range_key)
+        result = await view.render(self.range_key)
         if isinstance(result, str):
             await interaction.followup.send(result, ephemeral=True)
             return
         embed, file = result
         view.set_range(self.range_key)
-        await interaction.edit_original_response(embed=embed, attachments=[file], view=view)
+        await interaction.edit_original_response(
+            embed=embed, attachments=[file] if file else [], view=view,
+        )
 
 
-class PolymarketRangeView(discord.ui.View):
-    def __init__(self, cog, event_option: dict, range_key: str):
-        super().__init__(timeout=600)
-        self.cog = cog
-        self.event_option = event_option
+class RangeView(discord.ui.View):
+    """Buttons that re-render the chart message they're attached to.
+
+    render(range_key) must return (embed, discord.File | None), or an error
+    string, which is shown ephemerally while the message is left as-is.
+    """
+    def __init__(self, range_keys, range_key: str, render, timeout: float = 600):
+        super().__init__(timeout=timeout)
+        self.range_keys = list(range_keys)
+        self.render = render
         self.set_range(range_key)
 
     def set_range(self, range_key: str):
         self.range_key = range_key
         self.clear_items()
-        for key in POLY_RANGES:
-            self.add_item(PolymarketRangeButton(key, active=(key == range_key)))
+        # Spread evenly across the fewest rows (Discord allows 5 per row)
+        n = len(self.range_keys)
+        per_row = math.ceil(n / math.ceil(n / 5))
+        for i, key in enumerate(self.range_keys):
+            self.add_item(RangeButton(key, active=(key == range_key), row=i // per_row))
 
 
 class ExtendedSlash(commands.Cog):
@@ -338,6 +349,75 @@ class ExtendedSlash(commands.Cog):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, generate_index_chart, series, tz_off)
 
+    async def _build_stock_quote(self, session, symbol: str, range_key: str):
+        """Fetch a quote + range chart for one ticker. Returns (embed, file|None)
+        or an error message string."""
+        quotes = await self._fetch_quotes(session, [symbol])
+        if not quotes or quotes[0].get("regularMarketPrice") is None:
+            return f"Could not find a quote for **{symbol}**."
+        q = quotes[0]
+        symbol = q.get("symbol", symbol)
+        name = q.get("longName") or q.get("shortName") or symbol
+        price = q["regularMarketPrice"]
+        change = q.get("regularMarketChange", 0.0)
+        pct = q.get("regularMarketChangePercent", 0.0)
+
+        def quote_line(label: str, prefix: str) -> str | None:
+            p = q.get(f"{prefix}Price")
+            if p is None:
+                return None
+            t = q.get(f"{prefix}Time")
+            ts = datetime.fromtimestamp(t, tz=ET_ZONE).strftime("%Y-%m-%d %H:%M:%S") if t else "?"
+            return (
+                f"{label}: {p:,.2f} ({q.get(f'{prefix}Change', 0.0):+,.2f},"
+                f" {q.get(f'{prefix}ChangePercent', 0.0):+.2f}%) ({ts})"
+            )
+
+        chart, range_stats = await self._price_chart(session, symbol, range_key)
+
+        state = q.get("marketState", "")
+        lines = [quote_line("Market Hours", "regularMarket")]
+        if state.startswith("PRE"):
+            pre = quote_line("Premarket", "preMarket")
+            if pre:
+                lines.insert(0, pre)
+        elif state.startswith("POST") or state == "CLOSED":
+            post = quote_line("After Hours", "postMarket")
+            if post:
+                lines.insert(0, post)
+        # Range performance line (skip for the 1D intraday view, already shown above)
+        if range_key != "1D" and range_stats and range_stats["baseline"]:
+            base = range_stats["baseline"]
+            last_p = range_stats["last"]
+            r_chg = last_p - base
+            r_pct = r_chg / base * 100 if base else 0.0
+            label = self.RANGE_LABELS.get(range_key, range_key)
+            lines.append(f"{label}: {last_p:,.2f} ({r_chg:+,.2f}, {r_pct:+.2f}%)")
+        lines += [
+            f"Day volume: {_abbrev_number(q.get('regularMarketVolume'))}"
+            f" ({_abbrev_number(q.get('averageDailyVolume10Day'))} 10 day avg)",
+            f"Day range: {q.get('regularMarketDayLow', 0):,.2f} - {q.get('regularMarketDayHigh', 0):,.2f}",
+            f"52w range: {q.get('fiftyTwoWeekLow', 0):,.2f} - {q.get('fiftyTwoWeekHigh', 0):,.2f}",
+        ]
+        last = []
+        if q.get("marketCap") is not None:
+            last.append(f"Market Cap: {_abbrev_number(q['marketCap'])}")
+        if q.get("trailingPE") is not None:
+            last.append(f"P/E: {q['trailingPE']:.2f}")
+        if last:
+            lines.append(", ".join(last))
+
+        embed = discord.Embed(
+            title=f"{name} ({symbol})",
+            url=f"https://finance.yahoo.com/quote/{urllib.parse.quote(symbol)}",
+            description=f"```{chr(10).join(lines)}```",
+            color=discord.Color.green() if change >= 0 else discord.Color.red(),
+        )
+        if chart:
+            embed.set_image(url="attachment://chart.png")
+            return embed, discord.File(chart, filename="chart.png")
+        return embed, None
+
     @app_commands.command(name="stock", description="Stock quote for a ticker, or the major indexes if omitted")
     @app_commands.describe(
         ticker="Ticker symbol (e.g. AAPL); omit for Dow/S&P 500/Nasdaq",
@@ -359,75 +439,21 @@ class ExtendedSlash(commands.Cog):
         session = await self.bot.mlb_client.get_session()
 
         if ticker:
-            symbol = ticker.strip().upper()
-            quotes = await self._fetch_quotes(session, [symbol])
-            if not quotes or quotes[0].get("regularMarketPrice") is None:
-                await interaction.followup.send(f"Could not find a quote for **{symbol}**.")
-                return
-            q = quotes[0]
-            symbol = q.get("symbol", symbol)
-            name = q.get("longName") or q.get("shortName") or symbol
-            price = q["regularMarketPrice"]
-            change = q.get("regularMarketChange", 0.0)
-            pct = q.get("regularMarketChangePercent", 0.0)
-
-            def quote_line(label: str, prefix: str) -> str | None:
-                p = q.get(f"{prefix}Price")
-                if p is None:
-                    return None
-                t = q.get(f"{prefix}Time")
-                ts = datetime.fromtimestamp(t, tz=ET_ZONE).strftime("%Y-%m-%d %H:%M:%S") if t else "?"
-                return (
-                    f"{label}: {p:,.2f} ({q.get(f'{prefix}Change', 0.0):+,.2f},"
-                    f" {q.get(f'{prefix}ChangePercent', 0.0):+.2f}%) ({ts})"
-                )
-
             range_key = range.value if range else "1D"
-            chart, range_stats = await self._price_chart(session, symbol, range_key)
-
-            state = q.get("marketState", "")
-            lines = [quote_line("Market Hours", "regularMarket")]
-            if state.startswith("PRE"):
-                pre = quote_line("Premarket", "preMarket")
-                if pre:
-                    lines.insert(0, pre)
-            elif state.startswith("POST") or state == "CLOSED":
-                post = quote_line("After Hours", "postMarket")
-                if post:
-                    lines.insert(0, post)
-            # Range performance line (skip for the 1D intraday view, already shown above)
-            if range_key != "1D" and range_stats and range_stats["baseline"]:
-                base = range_stats["baseline"]
-                last_p = range_stats["last"]
-                r_chg = last_p - base
-                r_pct = r_chg / base * 100 if base else 0.0
-                label = self.RANGE_LABELS.get(range_key, range_key)
-                lines.append(f"{label}: {last_p:,.2f} ({r_chg:+,.2f}, {r_pct:+.2f}%)")
-            lines += [
-                f"Day volume: {_abbrev_number(q.get('regularMarketVolume'))}"
-                f" ({_abbrev_number(q.get('averageDailyVolume10Day'))} 10 day avg)",
-                f"Day range: {q.get('regularMarketDayLow', 0):,.2f} - {q.get('regularMarketDayHigh', 0):,.2f}",
-                f"52w range: {q.get('fiftyTwoWeekLow', 0):,.2f} - {q.get('fiftyTwoWeekHigh', 0):,.2f}",
-            ]
-            last = []
-            if q.get("marketCap") is not None:
-                last.append(f"Market Cap: {_abbrev_number(q['marketCap'])}")
-            if q.get("trailingPE") is not None:
-                last.append(f"P/E: {q['trailingPE']:.2f}")
-            if last:
-                lines.append(", ".join(last))
-
-            embed = discord.Embed(
-                title=f"{name} ({symbol})",
-                url=f"https://finance.yahoo.com/quote/{urllib.parse.quote(symbol)}",
-                description=f"```{chr(10).join(lines)}```",
-                color=discord.Color.green() if change >= 0 else discord.Color.red(),
+            symbol = ticker.strip().upper()
+            result = await self._build_stock_quote(session, symbol, range_key)
+            if isinstance(result, str):
+                await interaction.followup.send(result)
+                return
+            embed, file = result
+            view = RangeView(
+                self.CHART_RANGES, range_key,
+                lambda rk: self._build_stock_quote(session, symbol, rk),
             )
-            if chart:
-                embed.set_image(url="attachment://chart.png")
-                await interaction.followup.send(embed=embed, file=discord.File(chart, filename="chart.png"))
+            if file:
+                await interaction.followup.send(embed=embed, file=file, view=view)
             else:
-                await interaction.followup.send(embed=embed)
+                await interaction.followup.send(embed=embed, view=view)
             return
 
         # No ticker — major indexes during regular hours, futures when closed
@@ -939,7 +965,10 @@ class ExtendedSlash(commands.Cog):
             await interaction.followup.send(result)
             return
         embed, file = result
-        view = PolymarketRangeView(self, event_option, range_key)
+        view = RangeView(
+            POLY_RANGES, range_key,
+            lambda rk: self._build_polymarket_event_chart(event_option, rk),
+        )
         await interaction.followup.send(embed=embed, file=file, view=view)
 
     async def _build_polymarket_event_chart(self, event_option: dict, range_key: str):
