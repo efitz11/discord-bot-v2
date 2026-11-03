@@ -14,6 +14,7 @@ from PIL import Image
 
 from core.visualizer import generate_price_chart, generate_index_chart, generate_market_chart
 from core.utils import ET_ZONE
+from core.views import OptionView
 
 
 MAP_ZOOM = 8     # base map zoom — each tile ~155km
@@ -144,53 +145,6 @@ POLY_RANGES = {
     "All": ("max", 180, "Since Market Open"),
 }
 POLY_DEFAULT_RANGE = "All"
-
-
-class RangeButton(discord.ui.Button):
-    def __init__(self, range_key: str, active: bool, row: int):
-        super().__init__(
-            label=range_key,
-            style=discord.ButtonStyle.primary if active else discord.ButtonStyle.secondary,
-            row=row,
-        )
-        self.range_key = range_key
-
-    async def callback(self, interaction: discord.Interaction):
-        view = self.view
-        await interaction.response.defer()
-        if self.range_key == view.range_key:
-            return
-        result = await view.render(self.range_key)
-        if isinstance(result, str):
-            await interaction.followup.send(result, ephemeral=True)
-            return
-        embed, file = result
-        view.set_range(self.range_key)
-        await interaction.edit_original_response(
-            embed=embed, attachments=[file] if file else [], view=view,
-        )
-
-
-class RangeView(discord.ui.View):
-    """Buttons that re-render the chart message they're attached to.
-
-    render(range_key) must return (embed, discord.File | None), or an error
-    string, which is shown ephemerally while the message is left as-is.
-    """
-    def __init__(self, range_keys, range_key: str, render, timeout: float = 600):
-        super().__init__(timeout=timeout)
-        self.range_keys = list(range_keys)
-        self.render = render
-        self.set_range(range_key)
-
-    def set_range(self, range_key: str):
-        self.range_key = range_key
-        self.clear_items()
-        # Spread evenly across the fewest rows (Discord allows 5 per row)
-        n = len(self.range_keys)
-        per_row = math.ceil(n / math.ceil(n / 5))
-        for i, key in enumerate(self.range_keys):
-            self.add_item(RangeButton(key, active=(key == range_key), row=i // per_row))
 
 
 class ExtendedSlash(commands.Cog):
@@ -446,14 +400,14 @@ class ExtendedSlash(commands.Cog):
                 await interaction.followup.send(result)
                 return
             embed, file = result
-            view = RangeView(
-                self.CHART_RANGES, range_key,
+            view = OptionView(
+                list(self.CHART_RANGES), range_key,
                 lambda rk: self._build_stock_quote(session, symbol, rk),
             )
             if file:
-                await interaction.followup.send(embed=embed, file=file, view=view)
+                view.message = await interaction.followup.send(embed=embed, file=file, view=view)
             else:
-                await interaction.followup.send(embed=embed, view=view)
+                view.message = await interaction.followup.send(embed=embed, view=view)
             return
 
         # No ticker — major indexes during regular hours, futures when closed
@@ -965,11 +919,11 @@ class ExtendedSlash(commands.Cog):
             await interaction.followup.send(result)
             return
         embed, file = result
-        view = RangeView(
-            POLY_RANGES, range_key,
+        view = OptionView(
+            list(POLY_RANGES), range_key,
             lambda rk: self._build_polymarket_event_chart(event_option, rk),
         )
-        await interaction.followup.send(embed=embed, file=file, view=view)
+        view.message = await interaction.followup.send(embed=embed, file=file, view=view)
 
     async def _build_polymarket_event_chart(self, event_option: dict, range_key: str):
         """Fetch price history for every outcome in the event and render the
