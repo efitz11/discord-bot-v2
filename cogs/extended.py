@@ -136,6 +136,52 @@ class PolymarketChartView(discord.ui.View):
             self.add_item(PolymarketEventChartSelect(cog, event_options[:25]))
 
 
+# range_key -> (CLOB prices-history interval, fidelity in minutes, chart label)
+POLY_RANGES = {
+    "1D":  ("1d",  5,   "Past Day"),
+    "1W":  ("1w",  30,  "Past Week"),
+    "1M":  ("1m",  180, "Past Month"),
+    "All": ("max", 180, "Since Market Open"),
+}
+POLY_DEFAULT_RANGE = "All"
+
+
+class PolymarketRangeButton(discord.ui.Button):
+    def __init__(self, range_key: str, active: bool):
+        super().__init__(
+            label=range_key,
+            style=discord.ButtonStyle.primary if active else discord.ButtonStyle.secondary,
+        )
+        self.range_key = range_key
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        await interaction.response.defer()
+        if self.range_key == view.range_key:
+            return
+        result = await view.cog._build_polymarket_event_chart(view.event_option, self.range_key)
+        if isinstance(result, str):
+            await interaction.followup.send(result, ephemeral=True)
+            return
+        embed, file = result
+        view.set_range(self.range_key)
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=view)
+
+
+class PolymarketRangeView(discord.ui.View):
+    def __init__(self, cog, event_option: dict, range_key: str):
+        super().__init__(timeout=600)
+        self.cog = cog
+        self.event_option = event_option
+        self.set_range(range_key)
+
+    def set_range(self, range_key: str):
+        self.range_key = range_key
+        self.clear_items()
+        for key in POLY_RANGES:
+            self.add_item(PolymarketRangeButton(key, active=(key == range_key)))
+
+
 class ExtendedSlash(commands.Cog):
 
     def __init__(self, bot):
@@ -886,15 +932,28 @@ class ExtendedSlash(commands.Cog):
         view = PolymarketChartView(self, event_options) if event_options else None
         await interaction.followup.send(embed=embed, view=view)
 
-    async def _send_polymarket_event_chart(self, interaction: discord.Interaction, event_option: dict):
+    async def _send_polymarket_event_chart(self, interaction: discord.Interaction, event_option: dict,
+                                           range_key: str = POLY_DEFAULT_RANGE):
+        result = await self._build_polymarket_event_chart(event_option, range_key)
+        if isinstance(result, str):
+            await interaction.followup.send(result)
+            return
+        embed, file = result
+        view = PolymarketRangeView(self, event_option, range_key)
+        await interaction.followup.send(embed=embed, file=file, view=view)
+
+    async def _build_polymarket_event_chart(self, event_option: dict, range_key: str):
+        """Fetch price history for every outcome in the event and render the
+        overlay chart. Returns (embed, file) or an error message string."""
         session = await self.bot.mlb_client.get_session()
         event_title = event_option["event_title"]
         outcome_markets = event_option["markets"]
+        interval, fidelity, range_label = POLY_RANGES.get(range_key, POLY_RANGES[POLY_DEFAULT_RANGE])
 
         async def fetch(m):
             url = (
                 "https://clob.polymarket.com/prices-history"
-                f"?market={urllib.parse.quote(m['token_id'])}&interval=max&fidelity=180"
+                f"?market={urllib.parse.quote(m['token_id'])}&interval={interval}&fidelity={fidelity}"
             )
             try:
                 async with session.get(url, headers={"User-Agent": "discord-bot/1.0"}) as resp:
@@ -915,8 +974,7 @@ class ExtendedSlash(commands.Cog):
                 raw_series.append({"label": m["label"], "points": points, "last": points[-1][1]})
 
         if len(raw_series) < 2:
-            await interaction.followup.send(f"Not enough price history yet to chart **{event_title}**.")
-            return
+            return f"Not enough price history to chart **{event_title}** ({range_label.lower()})."
 
         # Drop outcomes that never rise meaningfully above 0% so they don't
         # clutter the plot as flat lines along the axis, but keep at least
@@ -932,19 +990,6 @@ class ExtendedSlash(commands.Cog):
             for s, color in zip(raw_series, POLY_CHART_COLORS)
         ]
 
-        all_ts = [ts for s in series for ts, _ in s["points"]]
-        span_days = (max(all_ts) - min(all_ts)) / 86400
-        if span_days <= 1.5:
-            range_label = "Past Day"
-        elif span_days <= 7:
-            range_label = "Past Week"
-        elif span_days <= 35:
-            range_label = "Past Month"
-        elif span_days <= 200:
-            range_label = "Past 6 Months"
-        else:
-            range_label = "Since Market Open"
-
         tz_offset = datetime.now(ET_ZONE).utcoffset().total_seconds()
         loop = asyncio.get_event_loop()
         chart = await loop.run_in_executor(None, generate_market_chart, series, tz_offset, range_label)
@@ -955,7 +1000,7 @@ class ExtendedSlash(commands.Cog):
             color=discord.Color.blue(),
         )
         embed.set_image(url="attachment://poly_chart.png")
-        await interaction.followup.send(embed=embed, file=discord.File(chart, filename="poly_chart.png"))
+        return embed, discord.File(chart, filename="poly_chart.png")
 
 
 async def setup(bot):
