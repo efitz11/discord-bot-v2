@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 
 from core.utils import parse_date, et_now
+from core.views import ExpiringView, OptionView, PagerView
 from core.mlb_client import (PERCENTILE_DISPLAY_NAMES, BATTER_PERCENTILE_CATEGORIES,
                              PITCHER_PERCENTILE_CATEGORIES, player_headshot_url, Leader)
 
@@ -47,7 +48,7 @@ STAT_ABBR_DISPLAY = {
     "triples": "3B", "atBats": "AB", "totalBases": "TB",
 }
 
-class PlayerAbsView(discord.ui.View):
+class PlayerAbsView(ExpiringView):
     def __init__(self, cog, player_id: str, date: str, milb: bool):
         super().__init__(timeout=600)
         self.cog = cog
@@ -60,7 +61,7 @@ class PlayerAbsView(discord.ui.View):
         await self.cog._send_player_abs(interaction, self.player_id, self.date, self.milb, edit_original=True)
         self.stop()
 
-class PitchPlotView(discord.ui.View):
+class PitchPlotView(ExpiringView):
     def __init__(self, cog, player_id: str, date: str, labels: list[str]):
         super().__init__(timeout=600)
         self.cog = cog
@@ -90,7 +91,7 @@ class PitchPlotView(discord.ui.View):
 
 
 
-class HomeRunView(discord.ui.View):
+class HomeRunView(ExpiringView):
     def __init__(self, hrs: list):
         super().__init__(timeout=600)
         for hr in hrs:
@@ -204,7 +205,7 @@ class MLBSlash(commands.Cog):
             view = PlayerAbsView(self, first.player_id, first.date, milb=milb)
 
         if view:
-            await interaction.followup.send(embed=embed, view=view)
+            view.message = await interaction.followup.send(embed=embed, view=view)
         else:
             await interaction.followup.send(embed=embed)
 
@@ -308,12 +309,26 @@ class MLBSlash(commands.Cog):
 
     async def _send_pitch_plot(self, interaction: discord.Interaction, player_id_or_name: str, ab_number: Optional[int], date: str):
         parsed_date = parse_date(date)
+        result = await self._build_pitch_plot(player_id_or_name, ab_number, parsed_date)
+        if isinstance(result, str):
+            await interaction.followup.send(result)
+            return
+        embed, file, total, ab_number, player_id = result
+
+        async def render(n):
+            r = await self._build_pitch_plot(player_id, n, parsed_date)
+            return r if isinstance(r, str) else r[:3]
+
+        view = PagerView(ab_number, total, render, label=lambda p, t: f"AB {p} of {t}")
+        view.message = await interaction.followup.send(embed=embed, file=file, view=view)
+
+    async def _build_pitch_plot(self, player_id_or_name: str, ab_number: Optional[int], parsed_date: str):
+        """Returns (embed, file, total_abs, ab_number, player_id) or an error string."""
         
         # stats_list will typically have one GameStats object
         stats_list = await self.bot.mlb_client.get_player_game_stats(player_id_or_name, date=parsed_date, include_abs=True)
         if not stats_list:
-            await interaction.followup.send("Could not find stats for that player.")
-            return
+            return "Could not find stats for that player."
 
         # Combine all at-bats from all games today (in case of double-header)
         all_abs = []
@@ -322,21 +337,18 @@ class MLBSlash(commands.Cog):
                 all_abs.extend(gs.at_bats)
         
         if not all_abs:
-            await interaction.followup.send("No at-bat data found for this player on this date.")
-            return
+            return "No at-bat data found for this player on this date."
             
         if ab_number is None:
             ab_number = len(all_abs)
             
         if ab_number < 1 or ab_number > len(all_abs):
-            await interaction.followup.send(f"Invalid at-bat number. Player had {len(all_abs)} at-bats in this game(s).")
-            return
+            return f"Invalid at-bat number. Player had {len(all_abs)} at-bats in this game(s)."
 
             
         target_ab = all_abs[ab_number - 1]
         if not target_ab.pitches:
-            await interaction.followup.send("No detailed pitch data available for this at-bat.")
-            return
+            return "No detailed pitch data available for this at-bat."
             
         # Generate the graphic
         loop = asyncio.get_event_loop()
@@ -363,8 +375,7 @@ class MLBSlash(commands.Cog):
             color=discord.Color.blue()
         )
         embed.set_image(url=f"attachment://{filename}")
-        
-        await interaction.followup.send(embed=embed, file=file)
+        return embed, file, len(all_abs), ab_number, stats_list[0].player_id
 
 
 
@@ -459,12 +470,25 @@ class MLBSlash(commands.Cog):
     async def game_plays(self, interaction: discord.Interaction, team: str, inning: int = None, date: str = None):
         await interaction.response.defer()
         parsed_date = parse_date(date)
+        result = await self._build_game_plays(team, inning, parsed_date)
+        if isinstance(result, str):
+            await interaction.followup.send(result)
+            return
+        embed, _, total, inning = result
 
+        async def render(n):
+            r = await self._build_game_plays(team, n, parsed_date)
+            return r if isinstance(r, str) else r[:3]
+
+        view = PagerView(inning, total, render, label=lambda p, t: f"Inning {p}")
+        view.message = await interaction.followup.send(embed=embed, view=view)
+
+    async def _build_game_plays(self, team: str, inning: Optional[int], parsed_date: str):
+        """Returns (embed, None, innings_so_far, inning) or an error string."""
         game, plays, team_abbrev, team_half, inning = await self.bot.mlb_client.get_game_plays_for_inning(team, inning, date=parsed_date)
 
         if game is None:
-            await interaction.followup.send("Could not find a game for that team on the specified date.")
-            return
+            return "Could not find a game for that team on the specified date."
 
         half_label = "Top" if team_half == 'top' else "Bot"
         opp_abbrev = game.home.abbreviation if team_half == 'top' else game.away.abbreviation
@@ -502,7 +526,7 @@ class MLBSlash(commands.Cog):
                 desc += line
             embed.description = desc[:4096].strip()
 
-        await interaction.followup.send(embed=embed)
+        return embed, None, max(game.inning or 1, inning), inning
 
     @game_plays.autocomplete('team')
     async def game_plays_team_ac(self, interaction: discord.Interaction, current: str):
@@ -1072,22 +1096,31 @@ class MLBSlash(commands.Cog):
                 await interaction.followup.send(f"No Savant rolling data found for **{player}**.")
                 return
 
-            points = data['windows'].get(win, [])
-            if not points:
-                await interaction.followup.send(f"Not enough plate appearances for a {win}-PA rolling window yet.")
+            def build(w: int):
+                points = data['windows'].get(w, [])
+                if not points:
+                    return f"Not enough plate appearances for a {w}-PA rolling window yet."
+                buf = generate_rolling_xwoba_chart(points, data['player_name'], data['team_abbrev'], w)
+                label = f"{data['player_name']} ({data['team_abbrev']})" if data['team_abbrev'] else data['player_name']
+                embed = discord.Embed(
+                    title=f"{label} — {w} PA Rolling xwOBA",
+                    color=discord.Color.red(),
+                )
+                embed.set_image(url="attachment://rolling_xwoba.png")
+                embed.set_footer(text=f"{points[0]['date']} → {points[-1]['date']}")
+                return embed, discord.File(buf, filename="rolling_xwoba.png")
+
+            result = build(win)
+            if isinstance(result, str):
+                await interaction.followup.send(result)
                 return
 
-            buf = generate_rolling_xwoba_chart(points, data['player_name'], data['team_abbrev'], win)
-            start = points[0]['date']
-            end   = points[-1]['date']
-            label = f"{data['player_name']} ({data['team_abbrev']})" if data['team_abbrev'] else data['player_name']
-            embed = discord.Embed(
-                title=f"{label} — {win} PA Rolling xwOBA",
-                color=discord.Color.red(),
-            )
-            embed.set_image(url="attachment://rolling_xwoba.png")
-            embed.set_footer(text=f"{start} → {end}")
-            await interaction.followup.send(embed=embed, file=discord.File(buf, filename="rolling_xwoba.png"))
+            async def render(key):
+                return build(int(key))
+
+            view = OptionView({"50": "50 PA", "100": "100 PA", "250": "250 PA"}, str(win), render)
+            embed, file = result
+            view.message = await interaction.followup.send(embed=embed, file=file, view=view)
 
     @savant_chart.autocomplete('player')
     async def savant_chart_player_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -1151,30 +1184,47 @@ class MLBSlash(commands.Cog):
     ])
     async def standings(self, interaction: discord.Interaction, query: app_commands.Choice[str]):
         await interaction.response.defer()
-        try:
-            target = query.value if query else "NL East"
-            if target == "All":
-                target = None
+        target = query.value if query else "NL East"
+        result = await self._build_standings(target)
+        if isinstance(result, str):
+            await interaction.followup.send(result)
+            return
+        embeds, _ = result
+        view = OptionView(self._standings_options(target), target, self._build_standings)
+        view.message = await interaction.followup.send(embeds=embeds, view=view)
 
-            groups = await self.bot.mlb_client.get_standings(target)
-            if not groups:
-                await interaction.followup.send("Could not find matching standings.")
-                return
-            
-            embeds = []
-            is_wc = "wc" in (target or "").lower() or "wild" in (target or "").lower()
-            
-            for grp in groups:
-                embed = discord.Embed(
-                    title=grp.title,
-                    color=discord.Color.green(),
-                    description=f"```\n{grp.format_discord_code_block(is_wc=is_wc)}\n```"
-                )
-                embeds.append(embed)
-            
-            await interaction.followup.send(embeds=embeds[:10])
+    @staticmethod
+    def _standings_options(target: str) -> dict:
+        """Buttons for the views related to the requested standings: the
+        division asked for (if any), its league's wild card, and its league."""
+        league = target[:2] if target[:2] in ("NL", "AL") else None
+        if not league:
+            return {"All": "All Divisions", "Wildcard": "All Wild Cards"}
+        opts = {}
+        if target not in (league, f"{league} Wildcard"):
+            opts[target] = target
+        opts[f"{league} Wildcard"] = f"{league} Wild Card"
+        opts[league] = f"{league} (All)"
+        return opts
+
+    async def _build_standings(self, target: str):
+        """Returns (embeds, None) or an error string."""
+        try:
+            groups = await self.bot.mlb_client.get_standings(None if target == "All" else target)
         except Exception as e:
-            await interaction.followup.send(f"Error fetching standings: {e}")
+            return f"Error fetching standings: {e}"
+        if not groups:
+            return "Could not find matching standings."
+        is_wc = "wc" in target.lower() or "wild" in target.lower()
+        embeds = [
+            discord.Embed(
+                title=grp.title,
+                color=discord.Color.green(),
+                description=f"```\n{grp.format_discord_code_block(is_wc=is_wc)}\n```",
+            )
+            for grp in groups
+        ]
+        return embeds[:10], None
 
     @mlb.command(name="matchup", description="Get career stats for a team's roster against a pitcher")
     @app_commands.describe(team="Team abbreviation or name", pitcher="Pitcher name")
@@ -1784,16 +1834,40 @@ class MLBSlash(commands.Cog):
                 vals.append(n)
         return vals
 
+    LAST_SPAN_OPTIONS = {
+        "5G": "5 games", "10G": "10 games", "20G": "20 games",
+        "7D": "7 days", "14D": "14 days", "30D": "30 days",
+    }
+
     async def _send_player_last(self, interaction: discord.Interaction, player: str, games: str, days, stat_type, milb: bool):
         await interaction.response.defer()
         s_type = stat_type.value if stat_type else None
+        result = await self._build_player_last(player, games, days, s_type, milb)
+        if isinstance(result, str):
+            await interaction.followup.send(result)
+            return
+        embed, _ = result
 
+        # Highlight the matching button when a single span was asked for
+        spans = self._parse_span_list(days, 365) if days else (self._parse_span_list(games, 50) or [10])
+        current = f"{spans[0]}{'D' if days else 'G'}" if len(spans) == 1 else ""
+
+        async def render(key):
+            n = key[:-1]
+            if key.endswith("D"):
+                return await self._build_player_last(player, "10", n, s_type, milb)
+            return await self._build_player_last(player, n, None, s_type, milb)
+
+        view = OptionView(self.LAST_SPAN_OPTIONS, current, render)
+        view.message = await interaction.followup.send(embed=embed, view=view)
+
+    async def _build_player_last(self, player: str, games: str, days, s_type, milb: bool):
+        """Returns (embed, None) or an error string."""
         is_days = bool(days)
         spans = self._parse_span_list(days, 365) if is_days else (self._parse_span_list(games, 50) or [10])
 
         if not spans:
-            await interaction.followup.send("Please provide a valid number of games or days.")
-            return
+            return "Please provide a valid number of games or days."
 
         per_span_results = await asyncio.gather(*(
             self.bot.mlb_client.get_player_last_games(
@@ -1807,8 +1881,7 @@ class MLBSlash(commands.Cog):
         ))
 
         if not any(per_span_results):
-            await interaction.followup.send("Could not find stats for that player.")
-            return
+            return "Could not find stats for that player."
 
         if len(spans) == 1:
             stats_list = per_span_results[0]
@@ -1836,8 +1909,7 @@ class MLBSlash(commands.Cog):
                     stats_list.append(dataclasses.replace(base, years=period_label))
 
         if not stats_list:
-            await interaction.followup.send("Could not find stats for that player.")
-            return
+            return "Could not find stats for that player."
 
         embed = discord.Embed(color=discord.Color.blue())
 
@@ -1858,7 +1930,7 @@ class MLBSlash(commands.Cog):
         if first_stats.headshot_url:
             embed.set_thumbnail(url=first_stats.headshot_url)
 
-        await interaction.followup.send(embed=embed)
+        return embed, None
 
     @last_games.autocomplete('player')
     async def last_games_player_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -2331,9 +2403,11 @@ class MLBSlash(commands.Cog):
         if view is not None:
             kwargs["view"] = view
         if edit_original:
-            await interaction.edit_original_response(**kwargs)
+            msg = await interaction.edit_original_response(**kwargs)
         else:
-            await interaction.followup.send(**kwargs)
+            msg = await interaction.followup.send(**kwargs)
+        if view is not None:
+            view.message = msg
 
 
 
@@ -2702,16 +2776,30 @@ class MLBSlash(commands.Cog):
     ])
     async def box_score(self, interaction: discord.Interaction, team: str, date: str = None, part: app_commands.Choice[str] = None):
         await interaction.response.defer()
-
         parsed_date = parse_date(date)
+        show_part = part.value if part else "batting"
+        result = await self._build_box_score(team, parsed_date, show_part)
+        if isinstance(result, str):
+            await interaction.followup.send(result)
+            return
+        embed, _ = result
+        view = OptionView(
+            {"batting": "Batting", "pitching": "Pitching", "bench": "Bench",
+             "notes_info": "Notes & Info", "abs": "ABS", "all": "All"},
+            show_part,
+            lambda p: self._build_box_score(team, parsed_date, p),
+        )
+        view.message = await interaction.followup.send(embed=embed, view=view)
+
+    async def _build_box_score(self, team: str, parsed_date: str, show_part: str):
+        """Returns (embed, None) or an error string. Refetches each call so
+        section switches during a live game show current numbers."""
         box = await self.bot.mlb_client.get_box_score(team_query=team, date=parsed_date)
 
         if not box:
-            await interaction.followup.send("Could not find a game for that team/date.")
-            return
+            return "Could not find a game for that team/date."
 
         embed = discord.Embed(title=box.title, color=discord.Color.blue())
-        show_part = part.value if part else "batting"
 
         desc = ""
         if show_part in ["all", "batting"]:
@@ -2761,7 +2849,7 @@ class MLBSlash(commands.Cog):
         if box.game_date:
             embed.set_footer(text=box.game_date)
 
-        await interaction.followup.send(embed=embed)
+        return embed, None
 
 
     @mlb.command(name="bullpen", description="Get a team's bullpen availability and recent pitch counts")
@@ -3279,7 +3367,7 @@ class MLBSlash(commands.Cog):
             color=discord.Color.red()
         )
         view = HomeRunView(hrs[:25])
-        await interaction.followup.send(embed=embed, view=view)
+        view.message = await interaction.followup.send(embed=embed, view=view)
 
     @mlb.command(name="next", description="Get the upcoming games for a team")
     @app_commands.describe(team="The team abbreviation or name (e.g. wsh, dodgers)")
