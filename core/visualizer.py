@@ -2193,7 +2193,7 @@ def generate_index_chart(series: list, tz_offset_secs: int = 0, range_key: str =
     All series share a single % y-axis and a 0% baseline. The x-axis is the
     union of every series' timestamps plotted by position (like
     generate_price_chart), so overnight/weekend gaps don't stretch the lines.
-    range_key: 1H/1D/5D/30D/6M/1Y/5Y — controls x-axis tick granularity.
+    range_key: 1H/1D/5D/30D/6M/YTD/1Y/5Y — controls x-axis tick granularity.
     """
     from datetime import datetime, timezone, timedelta
 
@@ -2391,6 +2391,12 @@ def _price_axis_ticks(points: list, tz, range_key: str, max_ticks: int = 9) -> l
     """
     from datetime import datetime
 
+    # YTD covers anywhere from a few days (early January) to a full year, so
+    # tick by day while it's short and by month once it's long enough.
+    if range_key == "YTD":
+        span_days = (points[-1][0] - points[0][0]) / 86400 if points else 0
+        range_key = "30D" if span_days < 60 else "1Y"
+
     def bucket(dt):
         if range_key == "1H":
             return (dt.year, dt.month, dt.day, dt.hour, dt.minute // 15)
@@ -2449,7 +2455,7 @@ def generate_price_chart(
 
     points:    chronologically ordered list of (unix_ts, price)
     baseline:  reference value (prev close for 1D, range-start price otherwise)
-    range_key: one of 1H/1D/5D/30D/6M/1Y/5Y — controls x-axis tick granularity
+    range_key: one of 1H/1D/5D/30D/6M/YTD/1Y/5Y — controls x-axis tick granularity
     symbol:    ticker shown in the table header so the image stands alone
     """
     from datetime import timezone, timedelta
