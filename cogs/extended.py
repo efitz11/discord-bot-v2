@@ -281,17 +281,23 @@ class ExtendedSlash(commands.Cog):
             print(f"[stock] price chart error for {symbol} ({range_key}): {e}")
             return None, None
 
-    async def _index_intraday_chart(self, session, specs=STOCK_INDEX_CHART) -> io.BytesIO | None:
-        """Build an intraday chart overlaying the given symbols, each normalized
-        to % change from its previous close so they share one axis."""
+    async def _index_chart(self, session, specs, range_key: str = "1D") -> io.BytesIO | None:
+        """Build a chart overlaying the given symbols, each normalized to % change
+        (from the previous close for 1D, else from the start of the range) so
+        they share one axis."""
         async def one(sym, label, color):
-            points, meta = await self._fetch_chart_points(session, sym, "1D")
+            points, meta = await self._fetch_chart_points(session, sym, range_key)
             if not points or len(points) < 2:
                 return None
-            prev = meta.get("chartPreviousClose")
-            if prev is None:
-                prev = points[0][1]
-            pct = [(ts, (p / prev - 1.0) * 100.0) for ts, p in points]
+            if range_key == "1H":
+                cutoff = points[-1][0] - 3600
+                sliced = [p for p in points if p[0] >= cutoff]
+                if len(sliced) >= 2:
+                    points = sliced
+            base = meta.get("chartPreviousClose") if range_key == "1D" else None
+            if base is None:
+                base = points[0][1]
+            pct = [(ts, (p / base - 1.0) * 100.0) for ts, p in points]
             return {"label": label, "color": color, "points": pct,
                     "last": pct[-1][1], "gmt": meta.get("gmtoffset", 0)}
 
@@ -301,7 +307,51 @@ class ExtendedSlash(commands.Cog):
             return None
         tz_off = series[0]["gmt"]
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, generate_index_chart, series, tz_off)
+        return await loop.run_in_executor(None, generate_index_chart, series, tz_off, range_key)
+
+    async def _build_market_summary(self, session, range_key: str):
+        """Major indexes during regular hours, futures when closed (mirrors the
+        Yahoo Finance homepage). Returns (embed, file|None) or an error string."""
+        index_quotes = await self._fetch_quotes(session, [sym for sym, _ in STOCK_INDEXES])
+        by_symbol = {q.get("symbol"): q for q in index_quotes}
+        market_open = any(
+            (by_symbol.get(sym) or {}).get("marketState") == "REGULAR"
+            for sym, _ in STOCK_INDEXES
+        )
+
+        if market_open:
+            groups, chart_specs = STOCK_INDEXES, STOCK_INDEX_CHART
+            quotes_by, title, chart_name = by_symbol, "📊 Market Summary", "indexes.png"
+        else:
+            fut_quotes = await self._fetch_quotes(session, [sym for sym, _ in STOCK_FUTURES])
+            quotes_by = {q.get("symbol"): q for q in fut_quotes}
+            groups, chart_specs = STOCK_FUTURES, STOCK_FUTURES_CHART
+            title, chart_name = "📊 Futures", "futures.png"
+
+        lines = []
+        for sym, label in groups:
+            q = quotes_by.get(sym)
+            if not q or q.get("regularMarketPrice") is None:
+                continue
+            lines.append(
+                f"{label:<11}{q['regularMarketPrice']:>12,.2f}"
+                f"{q.get('regularMarketChangePercent', 0.0):>+8.2f}%"
+            )
+        if not lines:
+            return "Could not fetch market data right now."
+
+        embed = discord.Embed(
+            title=title,
+            description=f"```{chr(10).join(lines)}```",
+            color=discord.Color.blurple(),
+        )
+        chart = await self._index_chart(session, chart_specs, range_key)
+        if not chart:
+            return embed, None
+        if range_key != "1D":
+            embed.set_footer(text=f"Chart: {self.RANGE_LABELS.get(range_key, range_key)} (% change over range)")
+        embed.set_image(url=f"attachment://{chart_name}")
+        return embed, discord.File(chart, filename=chart_name)
 
     async def _build_stock_quote(self, session, symbol: str, range_key: str):
         """Fetch a quote + range chart for one ticker. Returns (embed, file|None)
@@ -410,48 +460,21 @@ class ExtendedSlash(commands.Cog):
                 view.message = await interaction.followup.send(embed=embed, view=view)
             return
 
-        # No ticker — major indexes during regular hours, futures when closed
-        # (mirrors the Yahoo Finance homepage)
-        index_quotes = await self._fetch_quotes(session, [sym for sym, _ in STOCK_INDEXES])
-        by_symbol = {q.get("symbol"): q for q in index_quotes}
-        market_open = any(
-            (by_symbol.get(sym) or {}).get("marketState") == "REGULAR"
-            for sym, _ in STOCK_INDEXES
-        )
-
-        if market_open:
-            groups, chart_specs = STOCK_INDEXES, STOCK_INDEX_CHART
-            quotes_by, title, chart_name = by_symbol, "📊 Market Summary", "indexes.png"
-        else:
-            fut_quotes = await self._fetch_quotes(session, [sym for sym, _ in STOCK_FUTURES])
-            quotes_by = {q.get("symbol"): q for q in fut_quotes}
-            groups, chart_specs = STOCK_FUTURES, STOCK_FUTURES_CHART
-            title, chart_name = "📊 Futures", "futures.png"
-
-        lines = []
-        for sym, label in groups:
-            q = quotes_by.get(sym)
-            if not q or q.get("regularMarketPrice") is None:
-                continue
-            lines.append(
-                f"{label:<11}{q['regularMarketPrice']:>12,.2f}"
-                f"{q.get('regularMarketChangePercent', 0.0):>+8.2f}%"
-            )
-        if not lines:
-            await interaction.followup.send("Could not fetch market data right now.")
+        # No ticker — market summary
+        range_key = range.value if range else "1D"
+        result = await self._build_market_summary(session, range_key)
+        if isinstance(result, str):
+            await interaction.followup.send(result)
             return
-
-        embed = discord.Embed(
-            title=title,
-            description=f"```{chr(10).join(lines)}```",
-            color=discord.Color.blurple(),
+        embed, file = result
+        view = OptionView(
+            list(self.CHART_RANGES), range_key,
+            lambda rk: self._build_market_summary(session, rk),
         )
-        chart = await self._index_intraday_chart(session, chart_specs)
-        if chart:
-            embed.set_image(url=f"attachment://{chart_name}")
-            await interaction.followup.send(embed=embed, file=discord.File(chart, filename=chart_name))
+        if file:
+            view.message = await interaction.followup.send(embed=embed, file=file, view=view)
         else:
-            await interaction.followup.send(embed=embed)
+            view.message = await interaction.followup.send(embed=embed, view=view)
 
     @app_commands.command(name="weather", description="Get the current weather for a location")
     @app_commands.describe(location="City, zip code, or address (e.g. Washington DC, 20001)")

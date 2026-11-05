@@ -2186,11 +2186,14 @@ def generate_rolling_xwoba_chart(
     return buf
 
 
-def generate_index_chart(series: list, tz_offset_secs: int = 0) -> io.BytesIO:
-    """Overlay several intraday series normalized to % change from prev close.
+def generate_index_chart(series: list, tz_offset_secs: int = 0, range_key: str = "1D") -> io.BytesIO:
+    """Overlay several series normalized to % change from a common baseline.
 
     series: list of {"label": str, "color": (r,g,b), "points": [(ts, pct)], "last": pct}
-    All series share a single % y-axis and a 0% baseline.
+    All series share a single % y-axis and a 0% baseline. The x-axis is the
+    union of every series' timestamps plotted by position (like
+    generate_price_chart), so overnight/weekend gaps don't stretch the lines.
+    range_key: 1H/1D/5D/30D/6M/1Y/5Y — controls x-axis tick granularity.
     """
     from datetime import datetime, timezone, timedelta
 
@@ -2214,14 +2217,15 @@ def generate_index_chart(series: list, tz_offset_secs: int = 0) -> io.BytesIO:
     # Time span across all series; y span symmetric around 0
     all_ts  = [ts for s in series for ts, _ in s["points"]]
     all_pct = [p for s in series for _, p in s["points"]]
-    t0, t1 = min(all_ts), max(all_ts)
-    t_span = max(t1 - t0, 1)
+    union_ts = sorted(set(all_ts))
+    ts_pos = {ts: i for i, ts in enumerate(union_ts)}
+    n_pos = max(len(union_ts) - 1, 1)
     maxabs = max((abs(p) for p in all_pct), default=0.5) or 0.5
     hi = maxabs * 1.18
     lo = -hi
 
     def xp(ts):
-        return PAD_L + (ts - t0) / t_span * plot_w
+        return PAD_L + ts_pos[ts] / n_pos * plot_w
 
     def yp(v):
         return PAD_T + plot_h - (v - lo) / (hi - lo) * plot_h
@@ -2240,17 +2244,12 @@ def generate_index_chart(series: list, tz_offset_secs: int = 0) -> io.BytesIO:
         draw.text((PAD_L + plot_w + 6 * S, y), f"{gv:+.1f}%", font=f_axis, fill=DIM_COL, anchor="lm")
         gv += step
 
-    # X-axis hour labels in exchange-local time
+    # X-axis labels in exchange-local time, by calendar-bucket change
     tz = timezone(timedelta(seconds=tz_offset_secs))
-    hour_dt = datetime.fromtimestamp(t0, tz=tz).replace(minute=0, second=0, microsecond=0)
-    if hour_dt.timestamp() < t0:
-        hour_dt += timedelta(hours=1)
-    while hour_dt.timestamp() <= t1:
-        x = xp(hour_dt.timestamp())
+    for i, label in _price_axis_ticks([(ts, 0) for ts in union_ts], tz, range_key):
+        x = xp(union_ts[i])
         draw.line([(x, PAD_T), (x, PAD_T + plot_h)], fill=GRID_COL, width=S)
-        label = hour_dt.strftime("%I%p").lstrip("0").lower()
         draw.text((x, PAD_T + plot_h + 6 * S), label, font=f_axis, fill=DIM_COL, anchor="ma")
-        hour_dt += timedelta(hours=1)
 
     # 0% baseline (dashed)
     y0 = yp(0)
@@ -2421,6 +2420,17 @@ def _price_axis_ticks(points: list, tz, range_key: str, max_ticks: int = 9) -> l
         if b != prev:
             ticks.append((i, label(dt)))
             prev = b
+    # The first tick marks a partial bucket (e.g. 9:30 open labeled "9am", or
+    # a 5Y range starting in late 2021 right before "2022"); drop it when the
+    # next tick follows closely enough that it'd be misleading or overlap.
+    if len(ticks) >= 2:
+        first_dt = datetime.fromtimestamp(points[0][0], tz=tz)
+        if range_key in ("1H", "1D"):
+            misaligned = first_dt.minute % (15 if range_key == "1H" else 60) != 0
+        else:
+            misaligned = ticks[1][0] < len(points) * 0.09
+        if misaligned:
+            ticks = ticks[1:]
     if len(ticks) > max_ticks:
         stepn = math.ceil(len(ticks) / max_ticks)
         ticks = ticks[::stepn]
