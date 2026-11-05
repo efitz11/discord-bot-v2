@@ -208,6 +208,7 @@ class ExtendedSlash(commands.Cog):
         "5D":  ("15m", "5d"),
         "30D": ("60m", "1mo"),
         "6M":  ("1d",  "6mo"),
+        "YTD": ("1d",  "ytd"),
         "1Y":  ("1d",  "1y"),
         "5Y":  ("1wk", "5y"),
     }
@@ -215,7 +216,7 @@ class ExtendedSlash(commands.Cog):
     # range_key -> readable label for the text line
     RANGE_LABELS = {
         "1H": "Past Hour", "5D": "Past 5 Days", "30D": "Past 30 Days",
-        "6M": "Past 6 Months", "1Y": "Past Year", "5Y": "Past 5 Years",
+        "6M": "Past 6 Months", "YTD": "Year to Date", "1Y": "Past Year", "5Y": "Past 5 Years",
     }
 
     async def _fetch_chart_points(self, session, symbol: str, range_key: str):
@@ -265,7 +266,7 @@ class ExtendedSlash(commands.Cog):
                 return None, None
 
             # Baseline: previous close for the intraday view, else the range-start price
-            if range_key == "1D" and meta.get("chartPreviousClose") is not None:
+            if range_key in ("1D", "YTD") and meta.get("chartPreviousClose") is not None:
                 baseline = meta["chartPreviousClose"]
             else:
                 baseline = points[0][1]
@@ -283,7 +284,7 @@ class ExtendedSlash(commands.Cog):
 
     async def _index_chart(self, session, specs, range_key: str = "1D") -> io.BytesIO | None:
         """Build a chart overlaying the given symbols, each normalized to % change
-        (from the previous close for 1D, else from the start of the range) so
+        (from the previous close for 1D/YTD, else from the start of the range) so
         they share one axis."""
         async def one(sym, label, color):
             points, meta = await self._fetch_chart_points(session, sym, range_key)
@@ -294,7 +295,7 @@ class ExtendedSlash(commands.Cog):
                 sliced = [p for p in points if p[0] >= cutoff]
                 if len(sliced) >= 2:
                     points = sliced
-            base = meta.get("chartPreviousClose") if range_key == "1D" else None
+            base = meta.get("chartPreviousClose") if range_key in ("1D", "YTD") else None
             if base is None:
                 base = points[0][1]
             pct = [(ts, (p / base - 1.0) * 100.0) for ts, p in points]
@@ -433,6 +434,7 @@ class ExtendedSlash(commands.Cog):
         app_commands.Choice(name="5 Days",  value="5D"),
         app_commands.Choice(name="30 Days", value="30D"),
         app_commands.Choice(name="6 Months", value="6M"),
+        app_commands.Choice(name="Year to Date", value="YTD"),
         app_commands.Choice(name="1 Year",  value="1Y"),
         app_commands.Choice(name="5 Years", value="5Y"),
     ])
