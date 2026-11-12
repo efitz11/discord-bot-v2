@@ -107,6 +107,14 @@ Enable with `NFL=true` in `.env`.
 
 Enable with `CFB=true` in `.env`. Set `CFB_UPSET_CHANNEL_ID` to also post upset alerts when a Top 25 team is trailing or tied with a lower-ranked or unranked opponent (at the start of the 4th quarter, at 2:00 left, and at the final), plus an "Upset Avoided" follow-up when an alerted game ends with the favorite winning.
 
+### /cbb
+
+| Command | Description |
+|---|---|
+| `score <team>` | Score for a Division I men's team's game, every game in a conference, or the top 15 games involving ranked teams (`Top 25 Games`). Optional `date` argument. |
+
+Enable with `CBB=true` in `.env`.
+
 ### /worldcup
 
 | Command | Description |
@@ -203,6 +211,7 @@ WNBA=true
 NHL=true
 NFL=true
 CFB=true
+CBB=true
 WORLDCUP=true
 
 # Optional (requires CFB=true): channel for college football upset alerts — a Top 25 team

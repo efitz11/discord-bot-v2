@@ -94,6 +94,10 @@ class ModernNatsBot(commands.Bot):
             await self.load_extension('cogs.cfb')
             print("CFB commands enabled.")
 
+        if os.getenv("CBB", "").lower() in ("1", "true", "yes"):
+            await self.load_extension('cogs.cbb')
+            print("CBB commands enabled.")
+
         if os.getenv("WORLDCUP", "").lower() in ("1", "true", "yes"):
             await self.load_extension('cogs.worldcup')
             print("World Cup commands enabled.")
