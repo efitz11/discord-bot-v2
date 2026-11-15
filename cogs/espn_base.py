@@ -20,6 +20,15 @@ def _utc_to_et(iso_str: str) -> datetime | None:
     return None
 
 
+def _standings_entries(node: dict) -> list[dict]:
+    """All team entries in an ESPN standings tree. Conferences split into divisions
+    (e.g. Sun Belt East/West) nest their entries under `children` instead of `standings`."""
+    entries = list(node.get("standings", {}).get("entries", []))
+    for child in node.get("children", []):
+        entries += _standings_entries(child)
+    return entries
+
+
 def _format_linescore(away_prefix, away_abbr, away_qs, home_prefix, home_abbr, home_qs,
                        away_total, home_total, period_labels: list[str]) -> str:
     max_periods = max(len(away_qs), len(home_qs), len(period_labels))
