@@ -40,6 +40,7 @@ STAGE_FINAL   = "final"
 TEAM_SCHEDULE_URL = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/{team_id}/schedule"
 SEASONTYPE_REGULAR = "2"
 SEASONTYPE_POST    = "3"
+INDEPENDENTS_ABBR  = "ind"
 
 
 def _rank(competitor: dict) -> int:
@@ -134,6 +135,20 @@ def _schedule_rows(events: list[dict], team_id: str) -> tuple[list[list[str]], l
             result = f"{time_s} {tv}".strip()
         rows.append([wk, date, opp, result])
     return rows, notes, (wins, losses)
+
+
+def _conference_record(standings: dict, team_id: str) -> str | None:
+    """'5-2 SEC' for a team in an FBS standings tree, or None for independents / not found."""
+    for conf in standings.get("children", []):
+        if conf.get("abbreviation") == INDEPENDENTS_ABBR:
+            continue
+        for e in _standings_entries(conf):
+            if e.get("team", {}).get("id") != team_id:
+                continue
+            rec = next((st.get("summary") or st.get("displayValue") for st in e.get("stats", [])
+                        if st.get("type") == "vsconf"), None)
+            return f"{rec} {conf.get('shortName', '')}".strip() if rec else None
+    return None
 
 
 def _format_schedule_table(rows: list[list[str]]) -> str:
@@ -289,9 +304,18 @@ class CFBCog(FootballCog):
         body = f"```\n{_format_schedule_table(rows)}\n```"
         if notes:
             body += "\n" + "\n".join(f"PS: {n}" for n in notes)
+        conf_rec = None
+        try:
+            standings_url = f"{FBS_STANDINGS_URL}&season={year}" if year else FBS_STANDINGS_URL
+            async with session.get(standings_url) as resp:
+                conf_rec = _conference_record(await resp.json(), info["id"])
+        except Exception as e:
+            print(f"[{self.SLUG}] standings fetch failed for {info['abbreviation']}: {e}")
+
         title = f"{year or ''} {info['displayName']} Schedule".strip()
-        if wins or losses:
-            title += f" ({wins}-{losses})"
+        records = ([f"{wins}-{losses}"] if wins or losses else []) + ([conf_rec] if conf_rec else [])
+        if records:
+            title += f" ({', '.join(records)})"
         await interaction.followup.send(embed=discord.Embed(title=title, description=body,
                                                             color=discord.Color.blue()))
 
