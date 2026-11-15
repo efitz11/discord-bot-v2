@@ -36,6 +36,11 @@ STAGE_Q4      = "q4"
 STAGE_TWO_MIN = "two_min"
 STAGE_FINAL   = "final"
 
+# ── Team schedules ────────────────────────────────────────────────────────────
+TEAM_SCHEDULE_URL = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/{team_id}/schedule"
+SEASONTYPE_REGULAR = "2"
+SEASONTYPE_POST    = "3"
+
 
 def _rank(competitor: dict) -> int:
     rank = competitor.get("curatedRank", {}).get("current") or UNRANKED
@@ -75,6 +80,69 @@ def _upset_stage(comp: dict) -> str | None:
     if period == 3 and name == "STATUS_END_PERIOD":
         return STAGE_Q4
     return None
+
+
+def _schedule_rows(events: list[dict], team_id: str) -> tuple[list[list[str]], list[str], tuple[int, int]]:
+    """Turn ESPN team-schedule events into table rows (Wk, Date, Opp, Result), a list of
+    postseason game names (bowls / playoff), and the team's (wins, losses)."""
+    rows, notes = [], []
+    wins = losses = 0
+    for event in events:
+        comp = event["competitions"][0]
+        us   = next((c for c in comp["competitors"] if c["team"].get("id") == team_id), None)
+        them = next((c for c in comp["competitors"] if c is not us), None)
+        if us is None or them is None:
+            continue
+
+        post = event.get("seasonType", {}).get("id") == SEASONTYPE_POST
+        if post:
+            wk = "PS"
+            headline = next((n.get("headline") for n in comp.get("notes", []) if n.get("headline")), None)
+            if headline:
+                notes.append(headline)
+        else:
+            wk = str(event.get("week", {}).get("number", ""))
+
+        start   = _utc_to_et(event.get("date", ""))
+        date    = f"{start.month}/{start.day}" if start else "TBD"
+        loc     = "N" if comp.get("neutralSite") else ("vs" if us.get("homeAway") == "home" else "@")
+        rank    = _rank(them)
+        rank_s  = f"({rank}) " if rank != UNRANKED else ""
+        opp     = f"{loc} {rank_s}{them['team'].get('abbreviation', '?')}"
+
+        status = comp.get("status", {}).get("type", {})
+        if status.get("name") in FINAL_STATUSES or status.get("completed"):
+            def score(c):
+                sc = c.get("score")
+                return (sc.get("displayValue") if isinstance(sc, dict) else sc) or "0"
+            won = us.get("winner")
+            if won is True:
+                wins += 1
+            elif won is False:
+                losses += 1
+            wl = "W" if won else ("L" if won is False else "T")
+            ot = " OT" if status.get("name") == "STATUS_FINAL_OT" else ""
+            result = f"{wl} {score(us)}-{score(them)}{ot}"
+        elif status.get("name") in ("STATUS_POSTPONED", "STATUS_CANCELED"):
+            result = status.get("shortDetail") or "Postponed"
+        elif status.get("state") == "in":
+            result = "LIVE"
+        else:
+            time_s = start.strftime("%-I:%M %p") if start and comp.get("timeValid", True) else "TBD"
+            tv     = next((b.get("media", {}).get("shortName") for b in comp.get("broadcasts", [])
+                           if b.get("media", {}).get("shortName")), "")
+            result = f"{time_s} {tv}".strip()
+        rows.append([wk, date, opp, result])
+    return rows, notes, (wins, losses)
+
+
+def _format_schedule_table(rows: list[list[str]]) -> str:
+    header = ["Wk", "Date", "Opponent", "Result"]
+    widths = [max(len(r[i]) for r in rows + [header]) for i in range(4)]
+
+    def fmt(r):
+        return f"{r[0].rjust(widths[0])}  {r[1].ljust(widths[1])}  {r[2].ljust(widths[2])}  {r[3]}".rstrip()
+    return "\n".join([fmt(header)] + [fmt(r) for r in rows])
 
 
 def _next_upset_fetch(comps: dict, now: datetime, board_day: datetime) -> datetime | None:
@@ -120,7 +188,8 @@ class CFBCog(FootballCog):
             async with session.get(FBS_STANDINGS_URL) as resp:
                 data = await resp.json()
             self._teams = [
-                {"abbreviation": e["team"]["abbreviation"], "displayName": e["team"]["displayName"]}
+                {"id": e["team"]["id"], "abbreviation": e["team"]["abbreviation"],
+                 "displayName": e["team"]["displayName"]}
                 for conf in data.get("children", [])
                 for e in conf.get("standings", {}).get("entries", [])
             ]
@@ -180,6 +249,58 @@ class CFBCog(FootballCog):
     @score.autocomplete("week")
     async def week_autocomplete(self, interaction: Interaction, current: str):
         return await self._week_autocomplete(current)
+
+    @cfb.command(name="schedule", description="Get a college football team's season schedule")
+    @app_commands.describe(team="FBS team", season="Season year (defaults to the current season)")
+    async def schedule(self, interaction: Interaction, team: str,
+                       season: app_commands.Range[int, 2000, 2100] = None):
+        await interaction.response.defer()
+
+        info = next((t for t in self._teams if t["abbreviation"].upper() == team.upper()
+                     or t["displayName"].lower() == team.lower()), None)
+        if not info:
+            await interaction.followup.send(f"Couldn't find an FBS team matching **{team}**.")
+            return
+
+        session = await self.bot.mlb_client.get_session()
+        url     = TEAM_SCHEDULE_URL.format(team_id=info["id"])
+        events: list[dict] = []
+        year = season
+        for seasontype in (SEASONTYPE_REGULAR, SEASONTYPE_POST):
+            params = {"seasontype": seasontype}
+            if year:
+                params["season"] = year
+            try:
+                async with session.get(url, params=params) as resp:
+                    data = await resp.json()
+            except Exception as e:
+                print(f"[{self.SLUG}] schedule fetch failed for {info['abbreviation']}: {e}")
+                continue
+            # Pin the postseason request to whatever season the regular-season call resolved to
+            year = year or data.get("requestedSeason", {}).get("year") or data.get("season", {}).get("year")
+            events += data.get("events", [])
+
+        if not events:
+            await interaction.followup.send(f"No schedule found for **{info['displayName']}**"
+                                            f"{f' in {season}' if season else ''}.")
+            return
+
+        events.sort(key=lambda e: e.get("date", ""))
+        rows, notes, (wins, losses) = _schedule_rows(events, info["id"])
+        body = f"```\n{_format_schedule_table(rows)}\n```"
+        if notes:
+            body += "\n" + "\n".join(f"PS: {n}" for n in notes)
+        title = f"{year or ''} {info['displayName']} Schedule".strip()
+        if wins or losses:
+            title += f" ({wins}-{losses})"
+        await interaction.followup.send(embed=discord.Embed(title=title, description=body,
+                                                            color=discord.Color.blue()))
+
+    @schedule.autocomplete("team")
+    async def schedule_team_autocomplete(self, interaction: Interaction, current: str):
+        cur     = current.lower()
+        matches = [t for t in self._teams if cur in t["displayName"].lower() or cur in t["abbreviation"].lower()]
+        return [app_commands.Choice(name=t["displayName"], value=t["abbreviation"]) for t in matches[:25]]
 
     async def _ranked_games_impl(self, interaction: Interaction, extra_params: dict = None, week_label: str = None):
         await interaction.response.defer()
