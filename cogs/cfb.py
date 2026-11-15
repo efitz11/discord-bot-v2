@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord import Interaction
 from discord.ext import commands, tasks
-from cogs.espn_base import _format_linescore, _format_pregame, _utc_to_et, FINAL_STATUSES
+from cogs.espn_base import _format_linescore, _format_pregame, _standings_entries, _utc_to_et, FINAL_STATUSES
 from cogs.football import FootballCog
 from cogs.monitor import MonitorCog
 from core.utils import et_now
@@ -190,8 +190,7 @@ class CFBCog(FootballCog):
             self._teams = [
                 {"id": e["team"]["id"], "abbreviation": e["team"]["abbreviation"],
                  "displayName": e["team"]["displayName"]}
-                for conf in data.get("children", [])
-                for e in conf.get("standings", {}).get("entries", [])
+                for e in _standings_entries(data)
             ]
             print(f"[{self.SLUG}] loaded {len(self._teams)} teams")
         except Exception as e:

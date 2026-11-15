@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord import Interaction
 from cogs.basketball import BasketballCog
-from cogs.espn_base import _format_linescore, _format_pregame, FINAL_STATUSES
+from cogs.espn_base import _format_linescore, _format_pregame, _standings_entries, FINAL_STATUSES
 from core.utils import parse_date, et_now
 
 CONFERENCES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard/conferences"
@@ -63,8 +63,7 @@ class CBBCog(BasketballCog):
                 data = await resp.json()
             self._teams = [
                 {"abbreviation": e["team"]["abbreviation"], "displayName": e["team"]["displayName"]}
-                for conf in data.get("children", [])
-                for e in conf.get("standings", {}).get("entries", [])
+                for e in _standings_entries(data)
             ]
             print(f"[{self.SLUG}] loaded {len(self._teams)} teams")
         except Exception as e:
